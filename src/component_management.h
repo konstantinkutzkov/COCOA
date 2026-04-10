@@ -44,7 +44,7 @@ public:
       return ana_.clauseOfsOf(id);
   }
 
-  void setRemovedClauses(const std::unordered_set<ClauseOfs> *p) {
+  void setRemovedClauses(const std::unordered_map<ClauseOfs, unsigned> *p) {
       ana_.setRemovedClauses(p);
   }
 

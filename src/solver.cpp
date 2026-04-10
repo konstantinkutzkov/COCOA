@@ -283,6 +283,20 @@ do_bcp:
 			if (stack_.top().isClauseBranch() && stack_.top().isSecondBranch()) {
 				// BCP failed in branch 2 of clause branch:
 				// no conflict analysis, just mark UNSAT and backtrack
+				if (config_.verbose) {
+					cout << "  BCP_FAIL_CB2 dl=" << stack_.get_decision_level()
+						 << " cl=" << stack_.top().clauseBranchOfs()
+						 << " violated:";
+					for (auto l : violated_clause)
+						cout << " " << l.toInt();
+					// dump watch lists for violated clause literals
+					for (auto l : violated_clause) {
+						cout << " | wl(" << l.toInt() << "):";
+						for (auto w = literal(l).watch_list_.begin(); *w != SENTINEL_CL; w++)
+							cout << " " << *w << (isClauseRemoved(*w) ? "R" : "");
+					}
+					cout << endl;
+				}
 				stack_.top().mark_branch_unsat();
 				state = backtrack();
 				if (state == EXIT)
@@ -339,11 +353,16 @@ void Solver::decideLiteral() {
 
 void Solver::decideClause(ClauseOfs cl_ofs) {
 	if (config_.verbose) {
+		unsigned active_vars = 0;
+		for (unsigned v = 1; v < variables_.size(); v++)
+			if (isActive(LiteralID(v, true))) active_vars++;
 		cout << "CLAUSE_BRANCH dl=" << stack_.get_decision_level()
 			 << " cl_ofs=" << cl_ofs << " lits:";
 		for (auto it = beginOf(cl_ofs); *it != SENTINEL_LIT; it++)
 			cout << " " << (isActive(*it) ? "" : "!") << it->toInt();
-		cout << endl;
+		cout << " | active_vars=" << active_vars
+			 << " lit_stack=" << literal_stack_.size()
+			 << " removed=" << removed_clauses_.size() << endl;
 	}
 	stack_.push_back(
 			StackLevel(stack_.top().currentRemainingComponent(),
@@ -601,10 +620,18 @@ retStateT Solver::backtrack() {
 				ClauseOfs cl_ofs = stack_.top().clauseBranchOfs();
 				stack_.top().changeBranch();
 				reactivateTOS();
+				if (config_.verbose) {
+					cout << "  BRANCH2 cl=" << cl_ofs << " pool:";
+					for (auto it = beginOf(cl_ofs); *it != SENTINEL_LIT; it++)
+						cout << " " << it->toInt() << (isSatisfied(*it) ? "S" : isActive(*it) ? "" : "R");
+					cout << endl;
+				}
 				// Assign negation of each literal in the removed clause
 				for (auto it = beginOf(cl_ofs); *it != SENTINEL_LIT; it++) {
 					if (isSatisfied(*it)) {
 						// Literal already true at lower level — can't negate
+						if (config_.verbose)
+							cout << "  BRANCH2_UNSAT: lit " << it->toInt() << " satisfied at dl=" << var(*it).decision_level << endl;
 						stack_.top().mark_branch_unsat();
 						break;
 					}
@@ -625,13 +652,19 @@ retStateT Solver::backtrack() {
 		// If clause branch, restore the removed clause
 		if (stack_.top().isClauseBranch()) {
 			if (config_.verbose) {
+				unsigned av = 0;
+				for (unsigned v = 1; v < variables_.size(); v++)
+					if (isActive(LiteralID(v, true))) av++;
 				cout << "CLAUSE_DONE dl=" << stack_.get_decision_level()
+					 << " cl=" << stack_.top().clauseBranchOfs()
 					 << " total=" << stack_.top().getTotalModelCount()
 					 << " b0=" << stack_.top().branch_model_count_[0]
 					 << " b1=" << stack_.top().branch_model_count_[1]
 					 << " u0=" << stack_.top().branch_found_unsat_[0]
 					 << " u1=" << stack_.top().branch_found_unsat_[1]
-					 << endl;
+					 << " | active_vars=" << av
+					 << " lit_stack=" << literal_stack_.size()
+					 << " removed=" << removed_clauses_.size() << endl;
 			}
 			unmarkClauseRemoved(stack_.top().clauseBranchOfs());
 		}
@@ -742,7 +775,7 @@ bool Solver::bcp() {
 
 	bool bSucceeded = BCP(start_ofs);
 
-	if (config_.perform_failed_lit_test && bSucceeded) {
+	if (config_.perform_failed_lit_test && bSucceeded && removed_clauses_.empty()) {
 		bSucceeded = implicitBCP();
 	}
 	return bSucceeded;
@@ -767,7 +800,7 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 			auto p_watchLit = beginOf(*itcl) + 1 - isLitA;
 			auto p_otherLit = beginOf(*itcl) + isLitA;
 
-			if (isSatisfied(*p_otherLit))
+			if (isSatisfied(*p_otherLit) || isClauseRemoved(*itcl))
 				continue;
 			auto itL = beginOf(*itcl) + 2;
 			while (isResolved(*itL))
@@ -786,6 +819,10 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 					if (isLitA)
 						swap(*p_otherLit, *p_watchLit);
 				} else {
+					if (config_.verbose)
+						cout << "  CONFLICT_CL=" << *itcl
+							 << " unLit=" << unLit.toInt()
+							 << " removed=" << isClauseRemoved(*itcl) << endl;
 					setConflictState(*itcl);
 					return false;
 				}
@@ -872,7 +909,7 @@ bool Solver::implicitBCP() {
 		for (auto it = literal_stack_.begin() + stack_ofs;
 				it != literal_stack_.end(); it++) {
 			for (auto cl_ofs : occurrence_lists_[it->neg()])
-				if (!isSatisfied(cl_ofs)) {
+				if (!isSatisfied(cl_ofs) && !isClauseRemoved(cl_ofs)) {
 					for (auto lt = beginOf(cl_ofs); *lt != SENTINEL_LIT; lt++)
 						if (isActive(*lt) && !viewed_lits[lt->neg()]) {
 							test_lits.push_back(lt->neg());
@@ -924,13 +961,22 @@ bool Solver::implicitBCP() {
 
 				if (!bSucceeded) {
 					statistics_.num_failed_literals_detected_++;
+					if (config_.verbose) {
+						cout << "  IBCP_FAILED lit=" << lit.toInt()
+							 << " removed_cls=" << removed_clauses_.size()
+							 << " learned:";
+						for (auto &cl : uip_clauses_) {
+							cout << " [";
+							for (auto l : cl) cout << l.toInt() << " ";
+							cout << "]";
+						}
+						cout << endl;
+					}
 					sz = literal_stack_.size();
 					for (auto it = uip_clauses_.rbegin();
 							it != uip_clauses_.rend(); it++) {
-						// DEBUG
 						if (it->size() == 0)
 							cout << "EMPTY CLAUSE FOUND" << endl;
-						// END DEBUG
 						setLiteralIfFree(it->front(),
 								addUIPConflictClause(*it));
 					}

@@ -124,12 +124,12 @@ public:
     return archetype_;
   }
 
-  void setRemovedClauses(const std::unordered_set<ClauseOfs> *p) {
+  void setRemovedClauses(const std::unordered_map<ClauseOfs, unsigned> *p) {
     removed_clauses_ = p;
   }
 
 private:
-  const std::unordered_set<ClauseOfs> *removed_clauses_ = nullptr;
+  const std::unordered_map<ClauseOfs, unsigned> *removed_clauses_ = nullptr;
   DataAndStatistics &statistics_;
 
   // the id of the last clause

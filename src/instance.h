@@ -104,29 +104,30 @@ protected:
   vector<Variable> variables_;
   LiteralIndexedVector<TriValue> literal_values_;
 
-  // Clauses removed by clause branching (small set, typically 0-2 entries)
-  std::unordered_set<ClauseOfs> removed_clauses_;
+  // Clauses removed by clause branching — reference counted
+  // because the same clause can be branched on at multiple levels.
+  // Handled like satisfied clauses: stay in watch lists, skipped by BCP.
+  std::unordered_map<ClauseOfs, unsigned> removed_clauses_;
 
   bool isClauseRemoved(ClauseOfs cl_ofs) const {
     return removed_clauses_.count(cl_ofs) > 0;
   }
 
   void markClauseRemoved(ClauseOfs cl_ofs) {
-    removed_clauses_.insert(cl_ofs);
-    // Remove watch links so no BCP references this clause
-    LiteralID watch0 = *(beginOf(cl_ofs));
-    LiteralID watch1 = *(beginOf(cl_ofs) + 1);
-    literal(watch0).removeWatchLinkTo(cl_ofs);
-    literal(watch1).removeWatchLinkTo(cl_ofs);
+    removed_clauses_[cl_ofs]++;
+    std::cout << "    MARK_REMOVED cl=" << cl_ofs << " count=" << removed_clauses_[cl_ofs] << std::endl;
   }
 
   void unmarkClauseRemoved(ClauseOfs cl_ofs) {
-    removed_clauses_.erase(cl_ofs);
-    // Restore watch links
-    LiteralID watch0 = *(beginOf(cl_ofs));
-    LiteralID watch1 = *(beginOf(cl_ofs) + 1);
-    literal(watch0).addWatchLinkTo(cl_ofs);
-    literal(watch1).addWatchLinkTo(cl_ofs);
+    auto it = removed_clauses_.find(cl_ofs);
+    if (it != removed_clauses_.end()) {
+      if (--it->second == 0) {
+        removed_clauses_.erase(it);
+        std::cout << "    UNMARK_REMOVED cl=" << cl_ofs << " count=0" << std::endl;
+      } else {
+        std::cout << "    UNMARK_REMOVED cl=" << cl_ofs << " count=" << it->second << std::endl;
+      }
+    }
   }
 
   void decayActivities() {
