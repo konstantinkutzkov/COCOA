@@ -10,8 +10,11 @@
 
 #include <assert.h>
 #include <vector>
+#include <memory>
 
 #include "../primitive_types.h"
+
+struct CanonicalKey;  // forward declaration
 
 using namespace std;
 
@@ -107,6 +110,15 @@ private:
   // once the model count is known, a link to the packed component will be stored
   // in the hash table
   CacheEntryID id_ = 0;
+
+public:
+  // Content-based canonical key (stored via pointer to avoid circular include)
+  std::shared_ptr<CanonicalKey> canonical_key_;
+
+  void setCanonicalKey(std::shared_ptr<CanonicalKey> key) {
+    canonical_key_ = key;
+  }
+  bool hasCanonicalKey() const { return canonical_key_ != nullptr; }
 };
 
 

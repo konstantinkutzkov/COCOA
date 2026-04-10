@@ -3,18 +3,16 @@
  *
  *  Created on: Aug 23, 2012
  *      Author: Marc Thurley
+ *
+ *  Modified: content-based caching using canonical formula keys
  */
 
 #ifndef COMPONENT_MANAGEMENT_H_
 #define COMPONENT_MANAGEMENT_H_
 
-
-
 #include "component_types/component.h"
-#include "component_cache.h"
 #include "alt_component_analyzer.h"
 #include "content_cache.h"
-//#include "component_analyzer.h"
 
 #include <vector>
 #include <gmpxx.h>
@@ -30,7 +28,7 @@ class ComponentManager {
 public:
   ComponentManager(SolverConfiguration &config, DataAndStatistics &statistics,
         LiteralIndexedVector<TriValue> & lit_values) :
-        config_(config), statistics_(statistics), cache_(statistics),
+        config_(config), statistics_(statistics),
         ana_(statistics,lit_values) {
   }
 
@@ -60,12 +58,9 @@ public:
 
   void cacheModelCountOf(unsigned stack_comp_id, const mpz_class &value) {
     if (config_.perform_component_caching) {
-      cache_.storeValueOf(component_stack_[stack_comp_id]->id(), value);
-      // Also store in content cache
-      auto it = pending_content_keys_.find(stack_comp_id);
-      if (it != pending_content_keys_.end()) {
-        content_cache_.store(it->second, value);
-        pending_content_keys_.erase(it);
+      Component *comp = component_stack_[stack_comp_id];
+      if (comp->hasCanonicalKey()) {
+        content_cache_.store(*comp->canonical_key_, value);
       }
     }
   }
@@ -83,8 +78,6 @@ public:
 
   void cleanRemainingComponentsOf(StackLevel &top) {
     while (component_stack_.size() > top.remaining_components_ofs()) {
-      if (cache_.hasEntry(component_stack_.back()->id()))
-        cache_.entry(component_stack_.back()->id()).set_deletable();
       delete component_stack_.back();
       component_stack_.pop_back();
     }
@@ -107,37 +100,37 @@ public:
   inline void sortComponentStackRange(unsigned start, unsigned end);
 
   void gatherStatistics(){
-//     statistics_.cache_bytes_memory_usage_ =
-//	     cache_.recompute_bytes_memory_usage();
-    cache_.compute_byte_size_infrasture();
+    statistics_.num_cached_components_ = content_cache_.size();
+    statistics_.num_cache_hits_ = content_cache_.stats_hits;
+    statistics_.num_cache_look_ups_ = content_cache_.stats_hits + content_cache_.stats_misses;
   }
 
-  void removeAllCachePollutionsOf(StackLevel &top);
+  // No-op: content-based cache doesn't have pollution
+  void removeAllCachePollutionsOf(StackLevel &top) {
+    (void)top;
+  }
 
 private:
 
   SolverConfiguration &config_;
   DataAndStatistics &statistics_;
 
-  // Content-based cache (uses actual clause literals, not IDs)
+  // Content-based cache
   ContentCache content_cache_;
-  std::unordered_map<unsigned, ContentCacheKey> pending_content_keys_;
 
-  // References for building content cache keys
+  // References for building canonical keys
   LiteralIndexedVector<Literal> *literals_ = nullptr;
   vector<LiteralID> *lit_pool_ = nullptr;
   const std::unordered_map<ClauseOfs, unsigned> *removed_clauses_ = nullptr;
   unsigned original_lit_pool_size_ = 0;
 
   vector<Component *> component_stack_;
-  ComponentCache cache_;
   ComponentAnalyzer ana_;
 };
 
 
 void ComponentManager::sortComponentStackRange(unsigned start, unsigned end){
     assert(start <= end);
-    // sort the remaining components for processing
     for (unsigned i = start; i < end; i++)
       for (unsigned j = i + 1; j < end; j++) {
         if (component_stack_[i]->num_variables()
@@ -147,14 +140,11 @@ void ComponentManager::sortComponentStackRange(unsigned start, unsigned end){
   }
 
 bool ComponentManager::findNextRemainingComponentOf(StackLevel &top) {
-    // record Remaining Components if there are none!
     if (component_stack_.size() <= top.remaining_components_ofs())
       recordRemainingCompsFor(top);
     assert(!top.branch_found_unsat());
     if (top.hasUnprocessedComponents())
       return true;
-    // if no component remains
-    // make sure, at least that the current branch is considered SAT
     top.includeSolution(1);
     return false;
   }
@@ -166,51 +156,39 @@ void ComponentManager::recordRemainingCompsFor(StackLevel &top) {
 
    ana_.setupAnalysisContext(top, super_comp);
 
-   if (config_.verbose) {
-     cout << "  SUPER_COMP id=" << top.super_component() << " vars=";
-     for (auto v = super_comp.varsBegin(); *v != varsSENTINEL; v++)
-       cout << *v << " ";
-     cout << "cls=";
-     for (auto c = super_comp.clsBegin(); *c != clsSENTINEL; c++)
-       cout << *c << " ";
-     cout << endl;
-   }
-
-   unsigned num_trivial = 0;
-   unsigned num_nontrivial = 0;
    for (auto vt = super_comp.varsBegin(); *vt != varsSENTINEL; vt++)
      if (ana_.isUnseenAndActive(*vt)) {
          if (ana_.exploreRemainingCompOf(*vt)){
-           num_nontrivial++;
+
            Component *p_new_comp = ana_.makeComponentFromArcheType();
-           if (config_.verbose) {
-             cout << "  COMP found: vars=";
-             for (auto v = p_new_comp->varsBegin(); *v != varsSENTINEL; v++)
-               cout << *v << " ";
-             cout << "cls=";
-             for (auto c = p_new_comp->clsBegin(); *c != clsSENTINEL; c++)
-               cout << *c << " ";
-             cout << endl;
-           }
-           CacheableComponent *packed_comp = new CacheableComponent(ana_.getArchetype().current_comp_for_caching_);
-             // Skip ID-based cache when clauses are removed (keys don't capture clause content)
-             if (ana_.hasRemovedClauses() || !cache_.manageNewComponent(top, *packed_comp)){
-                component_stack_.push_back(p_new_comp);
-                p_new_comp->set_id(cache_.storeAsEntry(*packed_comp, super_comp.id()));
-             }
-             else {
-               if (config_.verbose)
-                 cout << "  CACHE HIT" << endl;
-               delete packed_comp;
+
+           // Build canonical key and try content cache
+           if (config_.perform_component_caching && literals_ && lit_pool_) {
+             static const std::unordered_map<ClauseOfs, unsigned> empty_removed;
+             const auto &rm = removed_clauses_ ? *removed_clauses_ : empty_removed;
+
+             CanonicalKey key = buildCanonicalKey(
+               *p_new_comp, *lit_pool_, *literals_, ana_.literalValues(),
+               ana_.clauseIdToOfs(), rm, original_lit_pool_size_);
+
+             mpz_class cached_count;
+             if (content_cache_.lookup(key, cached_count)) {
+               top.includeSolution(cached_count);
                delete p_new_comp;
+               if (config_.verbose)
+                 cout << "  CACHE HIT count=" << cached_count << endl;
+               continue;
              }
-         } else {
-           num_trivial++;
+             // Cache miss: store key in component for later cacheModelCountOf
+             p_new_comp->setCanonicalKey(std::make_shared<CanonicalKey>(std::move(key)));
+             component_stack_.push_back(p_new_comp);
+           } else {
+             // Caching disabled: just store component
+             component_stack_.push_back(p_new_comp);
+           }
          }
      }
 
-   if (config_.verbose)
-     cout << "  DECOMP: " << num_nontrivial << " nontrivial, " << num_trivial << " trivial(isolated)" << endl;
    top.set_unprocessed_components_end(component_stack_.size());
    sortComponentStackRange(new_comps_start_ofs, component_stack_.size());
 }

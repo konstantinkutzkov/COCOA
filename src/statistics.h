@@ -15,7 +15,7 @@
 #include <gmpxx.h>
 
 #include "structures.h"
-#include "component_types/cacheable_component.h"
+// cacheable_component.h removed — using content-based cache
 
 #include "primitive_types.h"
 
@@ -113,32 +113,7 @@ public:
              + overall_bytes_components_stored_;
     }
 
-  void incorporate_cache_store(CacheableComponent &ccomp){
-    sum_bytes_cached_components_ += ccomp.SizeInBytes();
-    sum_size_cached_components_ += ccomp.num_variables();
-    num_cached_components_++;
-    overall_bytes_components_stored_ += ccomp.SizeInBytes();
-    overall_num_cache_stores_ += ccomp.num_variables();
-    sys_overhead_sum_bytes_cached_components_ += ccomp.sys_overhead_SizeInBytes();
-    sys_overhead_overall_bytes_components_stored_ += ccomp.sys_overhead_SizeInBytes();
-
-
-    sum_bytes_pure_cached_component_data_ += ccomp.data_only_byte_size();
-    overall_bytes_pure_stored_component_data_ += ccomp.data_only_byte_size();
-  }
-  void incorporate_cache_erase(CacheableComponent &ccomp){
-      sum_bytes_cached_components_ -= ccomp.SizeInBytes();
-      sum_size_cached_components_ -= ccomp.num_variables();
-      num_cached_components_--;
-      sum_bytes_pure_cached_component_data_ -= ccomp.data_only_byte_size();
-
-      sys_overhead_sum_bytes_cached_components_ -= ccomp.sys_overhead_SizeInBytes();
-  }
-
-  void incorporate_cache_hit(CacheableComponent &ccomp){
-      num_cache_hits_++;
-      sum_cache_hit_sizes_ += ccomp.num_variables();
-  }
+  // Old cache statistics methods removed — using content-based cache
   unsigned long cache_MB_memory_usage() {
       return cache_bytes_memory_usage() / 1000000;
   }
