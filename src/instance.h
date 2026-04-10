@@ -113,10 +113,20 @@ protected:
 
   void markClauseRemoved(ClauseOfs cl_ofs) {
     removed_clauses_.insert(cl_ofs);
+    // Remove watch links so no BCP references this clause
+    LiteralID watch0 = *(beginOf(cl_ofs));
+    LiteralID watch1 = *(beginOf(cl_ofs) + 1);
+    literal(watch0).removeWatchLinkTo(cl_ofs);
+    literal(watch1).removeWatchLinkTo(cl_ofs);
   }
 
   void unmarkClauseRemoved(ClauseOfs cl_ofs) {
     removed_clauses_.erase(cl_ofs);
+    // Restore watch links
+    LiteralID watch0 = *(beginOf(cl_ofs));
+    LiteralID watch1 = *(beginOf(cl_ofs) + 1);
+    literal(watch0).addWatchLinkTo(cl_ofs);
+    literal(watch1).addWatchLinkTo(cl_ofs);
   }
 
   void decayActivities() {

@@ -29,6 +29,14 @@ struct SolverConfiguration {
   // #SAT(F) = #SAT(F\{C}) - #SAT(F\{C} ∧ ¬C)
   bool perform_clause_branching = false;
   unsigned clause_branch_min_length = 8;
+
+  // Separator branching: use minimum vertex cut in the incidence graph
+  // to select variables and clauses for branching
+  bool perform_separator_branching = false;
+  unsigned separator_min_active_vars = 15;
+  unsigned separator_max_size = 12;
+  unsigned separator_tries = 12;
+  unsigned separator_min_second_comp = 12;
 };
 
 #endif /* SOLVER_CONFIG_H_ */

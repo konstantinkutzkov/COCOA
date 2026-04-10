@@ -1,11 +1,12 @@
 add_subdirectory (component_types)
 
-SET(SOURCES alt_component_analyzer.cpp 
+SET(SOURCES alt_component_analyzer.cpp
 	component_analyzer.cpp
 	component_cache.cpp
 	component_management.cpp
 	instance.cpp
 	new_component_analyzer.cpp
+	separator.cpp
 	solver.cpp
 	statistics.cpp)
 

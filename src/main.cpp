@@ -29,6 +29,7 @@ int main(int argc, char *argv[]) {
     cout << "\t -cs [n]\t set max cache size to n MB" << endl;
     cout << "\t -noIBCP\t turn off implicit BCP" << endl;
     cout << "\t -cb [n]\t enable clause branching (min clause length n, default 8)" << endl;
+    cout << "\t -sep [n]\t enable separator branching (min active vars n, default 15)" << endl;
     cout << "\t" << endl;
 
     return -1;
@@ -55,8 +56,15 @@ int main(int argc, char *argv[]) {
         cout << "time bound set to" << theSolver.config().time_bound_seconds << "s\n";
      } else if (strcmp(argv[i], "-cb") == 0) {
       theSolver.config().perform_clause_branching = true;
-      if (i + 1 < argc && argv[i+1][0] != '-') {
+      if (i + 1 < argc && isdigit(argv[i+1][0])) {
         theSolver.config().clause_branch_min_length = atoi(argv[i + 1]);
+        i++;
+      }
+    } else if (strcmp(argv[i], "-sep") == 0) {
+      theSolver.config().perform_separator_branching = true;
+      theSolver.config().perform_clause_branching = true;  // separator uses clause branching
+      if (i + 1 < argc && isdigit(argv[i+1][0])) {
+        theSolver.config().separator_min_active_vars = atoi(argv[i + 1]);
         i++;
       }
     } else if (strcmp(argv[i], "-cs") == 0) {

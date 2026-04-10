@@ -184,15 +184,84 @@ SOLVER_StateT Solver::countSAT() {
 
 	while (true) {
 		while (comp_manager_.findNextRemainingComponentOf(stack_.top())) {
-			// Try clause branching first
-			ClauseOfs cl_branch = selectClauseForBranching();
-			if (cl_branch != NOT_A_CLAUSE) {
-				decideClause(cl_branch);
-				// Branch 1: no literal assignments, no BCP needed
-				continue;
+
+			// --- Very long clause: branch immediately without Dinic's ---
+			if (config_.perform_clause_branching) {
+				Component &curr_comp = comp_manager_.currentRemainingComponentOf(stack_.top());
+				unsigned n_vars = curr_comp.num_variables();
+				unsigned threshold = n_vars * 3 / 10;  // 30%
+				if (threshold >= config_.clause_branch_min_length) {
+					ClauseOfs best = NOT_A_CLAUSE;
+					unsigned best_active = 0;
+					for (auto it = curr_comp.clsBegin(); *it != clsSENTINEL; it++) {
+						ClauseOfs ofs = comp_manager_.clauseOfsOf(*it);
+						if (isClauseRemoved(ofs) || isSatisfied(ofs) || ofs >= original_lit_pool_size_)
+							continue;
+						unsigned active = 0;
+						for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++)
+							if (isActive(*lt))
+								active++;
+						if (active >= threshold && active > best_active) {
+							best_active = active;
+							best = ofs;
+						}
+					}
+					if (best != NOT_A_CLAUSE) {
+						decideClause(best);
+						continue;
+					}
+				}
+			}
+
+			// --- Separator branching ---
+			if (config_.perform_separator_branching) {
+				Component &curr_comp = comp_manager_.currentRemainingComponentOf(stack_.top());
+
+				// Try to use an active separator element
+				if (separator_base_dl_ >= 0) {
+					int idx = findMatchingSeparatorElement(curr_comp);
+					if (idx >= 0) {
+						separator_used_[idx] = true;
+						if (separator_elements_[idx].kind == CutNode::CLAUSE) {
+							decideClause(separator_elements_[idx].id);
+							continue;
+						} else {
+							decideSeparatorVariable(separator_elements_[idx].id);
+							goto do_bcp;
+						}
+					}
+				}
+
+				// Try to find a new separator for this component
+				if (separator_base_dl_ < 0) {
+					if (tryInstallSeparator(curr_comp)) {
+						int idx = findMatchingSeparatorElement(curr_comp);
+						if (idx >= 0) {
+							separator_used_[idx] = true;
+							if (separator_elements_[idx].kind == CutNode::CLAUSE) {
+								decideClause(separator_elements_[idx].id);
+								continue;
+							} else {
+								decideSeparatorVariable(separator_elements_[idx].id);
+								goto do_bcp;
+							}
+						}
+						clearSeparator();
+					}
+				}
+			}
+
+			// Try clause branching
+			{
+				ClauseOfs cl_branch = selectClauseForBranching();
+				if (cl_branch != NOT_A_CLAUSE) {
+					decideClause(cl_branch);
+					continue;
+				}
 			}
 
 			decideLiteral();
+do_bcp:
 			if (stopwatch_.timeBoundBroken())
 				return TIMEOUT;
 			if (stopwatch_.interval_tick())
@@ -318,10 +387,208 @@ ClauseOfs Solver::selectClauseForBranching() {
 	return best;
 }
 
+FormulaInfo Solver::buildFormulaInfo(Component &comp) {
+	FormulaInfo info;
+
+	for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
+		if (isActive(LiteralID(*it, true)))
+			info.active_vars.push_back(*it);
+	}
+
+	for (auto it = comp.clsBegin(); *it != clsSENTINEL; it++) {
+		ClauseOfs ofs = comp_manager_.clauseOfsOf(*it);
+		if (isClauseRemoved(ofs))
+			continue;
+		if (isSatisfied(ofs))
+			continue;
+		if (ofs >= original_lit_pool_size_)
+			continue;
+
+		std::vector<unsigned> vars_in_clause;
+		for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+			if (isActive(*lt))
+				vars_in_clause.push_back(lt->var());
+		}
+		if (vars_in_clause.size() < 2)
+			continue;
+
+		info.active_clause_ids.push_back(ofs);
+		info.clause_variables.push_back(std::move(vars_in_clause));
+	}
+
+	info.buildIndex();
+	return info;
+}
+
+std::vector<CutNode> Solver::sortSeparatorElements(const std::vector<CutNode> &sep) {
+	std::vector<CutNode> clause_nodes, var_nodes;
+	for (const auto &node : sep) {
+		if (node.kind == CutNode::CLAUSE)
+			clause_nodes.push_back(node);
+		else
+			var_nodes.push_back(node);
+	}
+	std::sort(var_nodes.begin(), var_nodes.end(),
+		[this](const CutNode &a, const CutNode &b) {
+			return scoreOf(a.id) > scoreOf(b.id);
+		});
+	std::vector<CutNode> result;
+	for (const auto &n : clause_nodes) result.push_back(n);
+	for (const auto &n : var_nodes) result.push_back(n);
+	return result;
+}
+
+bool Solver::tryInstallSeparator(Component &comp) {
+	if (comp.num_variables() < config_.separator_min_active_vars)
+		return false;
+
+	separator_cache_.verbose = config_.verbose;
+
+	FormulaInfo info = buildFormulaInfo(comp);
+
+	if (info.active_vars.size() < config_.separator_min_active_vars)
+		return false;
+
+	KMVSketch sketch = separator_cache_.computeSketch(info);
+
+	// Stage 1: Check negative cache
+	if (separator_cache_.isLikelyNegative(sketch)) {
+		if (config_.verbose)
+			cout << "SEP_NEG_HIT" << endl;
+		return false;
+	}
+
+	// Stage 2: Try to transfer/repair a cached separator
+	std::vector<CutNode> cached_sep;
+	std::vector<int> cached_sizes;
+	if (separator_cache_.findAndTransfer(info, sketch, cached_sep, cached_sizes)) {
+		separator_elements_ = sortSeparatorElements(cached_sep);
+		separator_used_.assign(separator_elements_.size(), false);
+		separator_base_dl_ = stack_.get_decision_level();
+		if (config_.verbose) {
+			cout << "SEPARATOR_CACHED dl=" << separator_base_dl_
+				 << " size=" << separator_elements_.size() << endl;
+		}
+		return true;
+	}
+
+	// Stage 3: Full mincut discovery
+	SeparatorCandidate candidate;
+	bool found = find_best_separator(
+		info, candidate,
+		config_.separator_tries,
+		statistics_.num_decisions_,
+		config_.separator_min_second_comp,
+		config_.separator_max_size);
+
+	if (!found) {
+		separator_cache_.insertNegative(sketch);
+		return false;
+	}
+
+	// Compute partition for cache storage (for future repair)
+	std::set<CutNode> removed_set(candidate.separator.begin(), candidate.separator.end());
+	auto comps = components_after_removing(info, removed_set);
+
+	// Partition A = largest component vars, B = union of rest
+	std::set<unsigned> partition_a, partition_b;
+	if (!comps.empty()) {
+		// Sort by variable count descending
+		std::sort(comps.begin(), comps.end(),
+			[](const std::vector<CutNode> &a, const std::vector<CutNode> &b) {
+				return component_variable_count(a) > component_variable_count(b);
+			});
+		for (const auto &nd : comps[0])
+			if (nd.kind == CutNode::VAR)
+				partition_a.insert(nd.id);
+		for (size_t i = 1; i < comps.size(); i++)
+			for (const auto &nd : comps[i])
+				if (nd.kind == CutNode::VAR)
+					partition_b.insert(nd.id);
+	}
+
+	// Insert into cache
+	separator_cache_.insert(info, candidate.separator, partition_a, partition_b,
+		candidate.component_var_sizes, sketch);
+
+	// Install separator
+	separator_elements_ = sortSeparatorElements(candidate.separator);
+	separator_used_.assign(separator_elements_.size(), false);
+	separator_base_dl_ = stack_.get_decision_level();
+
+	if (config_.verbose) {
+		cout << "SEPARATOR dl=" << separator_base_dl_
+			 << " size=" << separator_elements_.size() << " elems:";
+		for (const auto &e : separator_elements_)
+			cout << " " << (e.kind == CutNode::CLAUSE ? "C" : "V") << e.id;
+		cout << " (cache: " << separator_cache_.entries.size() << " entries)" << endl;
+	}
+
+	return true;
+}
+
+int Solver::findMatchingSeparatorElement(Component &comp) {
+	for (int i = 0; i < (int)separator_elements_.size(); i++) {
+		if (separator_used_[i])
+			continue;
+
+		const CutNode &node = separator_elements_[i];
+
+		if (node.kind == CutNode::VAR) {
+			if (!isActive(LiteralID(node.id, true)))
+				continue;
+			bool found = false;
+			for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
+				if (*it == node.id) { found = true; break; }
+			}
+			if (!found) continue;
+			return i;
+		} else {
+			ClauseOfs ofs = node.id;
+			if (isClauseRemoved(ofs) || isSatisfied(ofs))
+				continue;
+			bool found = false;
+			for (auto it = comp.clsBegin(); *it != clsSENTINEL; it++) {
+				if (comp_manager_.clauseOfsOf(*it) == ofs) { found = true; break; }
+			}
+			if (!found) continue;
+			return i;
+		}
+	}
+	return -1;
+}
+
+void Solver::decideSeparatorVariable(VariableIndex var) {
+	stack_.push_back(
+		StackLevel(stack_.top().currentRemainingComponent(),
+				literal_stack_.size(),
+				comp_manager_.component_stack_size()));
+
+	LiteralID theLit(var,
+		literal(LiteralID(var, true)).activity_score_
+			> literal(LiteralID(var, false)).activity_score_);
+
+	setLiteralIfFree(theLit);
+	statistics_.num_decisions_++;
+
+	if (statistics_.num_decisions_ % 128 == 0)
+		decayActivities();
+}
+
+void Solver::clearSeparator() {
+	separator_elements_.clear();
+	separator_used_.clear();
+	separator_base_dl_ = -1;
+}
+
 retStateT Solver::backtrack() {
 	assert(
 			stack_.top().remaining_components_ofs() <= comp_manager_.component_stack_size());
 	do {
+		// Clear separator if backtracking past the level where it was found
+		if (separator_base_dl_ >= 0 && stack_.get_decision_level() <= separator_base_dl_)
+			clearSeparator();
+
 		if (stack_.top().branch_found_unsat())
 			comp_manager_.removeAllCachePollutionsOf(stack_.top());
 		else if (stack_.top().anotherCompProcessible())
@@ -496,8 +763,6 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 		//END Propagate Bin Clauses
 		for (auto itcl = literal(unLit).watch_list_.rbegin();
 				*itcl != SENTINEL_CL; itcl++) {
-			if (isClauseRemoved(*itcl))
-				continue;
 			bool isLitA = (*beginOf(*itcl) == unLit);
 			auto p_watchLit = beginOf(*itcl) + 1 - isLitA;
 			auto p_otherLit = beginOf(*itcl) + isLitA;

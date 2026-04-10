@@ -12,6 +12,8 @@
 #include "statistics.h"
 #include "instance.h"
 #include "component_management.h"
+#include "separator.h"
+#include "separator_cache.h"
 
 
 
@@ -133,7 +135,19 @@ private:
 	ClauseOfs selectClauseForBranching();
 	bool bcp();
 
+	// Separator branching
+	std::vector<CutNode> separator_elements_;
+	std::vector<bool> separator_used_;
+	int separator_base_dl_ = -1;
 
+	// Separator cache with sketch-based similarity lookup
+	SeparatorCache separator_cache_;
+	FormulaInfo buildFormulaInfo(Component &comp);
+	std::vector<CutNode> sortSeparatorElements(const std::vector<CutNode> &sep);
+	bool tryInstallSeparator(Component &comp);
+	int findMatchingSeparatorElement(Component &comp);
+	void decideSeparatorVariable(VariableIndex var);
+	void clearSeparator();
 
 	 void decayActivitiesOf(Component & comp) {
 	   for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
