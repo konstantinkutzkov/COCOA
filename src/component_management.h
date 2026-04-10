@@ -13,6 +13,7 @@
 #include "component_types/component.h"
 #include "component_cache.h"
 #include "alt_component_analyzer.h"
+#include "content_cache.h"
 //#include "component_analyzer.h"
 
 #include <vector>
@@ -46,12 +47,30 @@ public:
 
   void setRemovedClauses(const std::unordered_map<ClauseOfs, unsigned> *p) {
       ana_.setRemovedClauses(p);
+      removed_clauses_ = p;
+  }
+
+  void setFormulaRefs(LiteralIndexedVector<Literal> *literals,
+                      vector<LiteralID> *lit_pool,
+                      unsigned original_lit_pool_size) {
+      literals_ = literals;
+      lit_pool_ = lit_pool;
+      original_lit_pool_size_ = original_lit_pool_size;
   }
 
   void cacheModelCountOf(unsigned stack_comp_id, const mpz_class &value) {
-    if (config_.perform_component_caching)
+    if (config_.perform_component_caching) {
       cache_.storeValueOf(component_stack_[stack_comp_id]->id(), value);
+      // Also store in content cache
+      auto it = pending_content_keys_.find(stack_comp_id);
+      if (it != pending_content_keys_.end()) {
+        content_cache_.store(it->second, value);
+        pending_content_keys_.erase(it);
+      }
+    }
   }
+
+  ContentCache &contentCache() { return content_cache_; }
 
   Component & superComponentOf(StackLevel &lev) {
     assert(component_stack_.size() > lev.super_component());
@@ -99,6 +118,16 @@ private:
 
   SolverConfiguration &config_;
   DataAndStatistics &statistics_;
+
+  // Content-based cache (uses actual clause literals, not IDs)
+  ContentCache content_cache_;
+  std::unordered_map<unsigned, ContentCacheKey> pending_content_keys_;
+
+  // References for building content cache keys
+  LiteralIndexedVector<Literal> *literals_ = nullptr;
+  vector<LiteralID> *lit_pool_ = nullptr;
+  const std::unordered_map<ClauseOfs, unsigned> *removed_clauses_ = nullptr;
+  unsigned original_lit_pool_size_ = 0;
 
   vector<Component *> component_stack_;
   ComponentCache cache_;
@@ -164,7 +193,8 @@ void ComponentManager::recordRemainingCompsFor(StackLevel &top) {
              cout << endl;
            }
            CacheableComponent *packed_comp = new CacheableComponent(ana_.getArchetype().current_comp_for_caching_);
-             if (!cache_.manageNewComponent(top, *packed_comp)){
+             // Skip ID-based cache when clauses are removed (keys don't capture clause content)
+             if (ana_.hasRemovedClauses() || !cache_.manageNewComponent(top, *packed_comp)){
                 component_stack_.push_back(p_new_comp);
                 p_new_comp->set_id(cache_.storeAsEntry(*packed_comp, super_comp.id()));
              }

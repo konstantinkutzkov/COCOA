@@ -158,6 +158,7 @@ void Solver::solve(const string &file_name) {
 
 		comp_manager_.initialize(literals_, literal_pool_);
 		comp_manager_.setRemovedClauses(&removed_clauses_);
+		comp_manager_.setFormulaRefs(&literals_, &literal_pool_, original_lit_pool_size_);
 
 		statistics_.exit_state_ = countSAT();
 

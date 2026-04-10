@@ -128,6 +128,18 @@ public:
     removed_clauses_ = p;
   }
 
+  bool hasRemovedClauses() const {
+    return removed_clauses_ && !removed_clauses_->empty();
+  }
+
+  const LiteralIndexedVector<TriValue> &literalValues() const {
+    return literal_values_;
+  }
+
+  const vector<ClauseOfs> &clauseIdToOfs() const {
+    return clause_id_to_ofs_;
+  }
+
 private:
   const std::unordered_map<ClauseOfs, unsigned> *removed_clauses_ = nullptr;
   DataAndStatistics &statistics_;

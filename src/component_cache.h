@@ -71,7 +71,8 @@ public:
   // check quickly if the model count of the component is cached
   // if so, incorporate it into the model count of top
   // if not, store the packed version of it in the entry_base of the cache
-  bool manageNewComponent(StackLevel &top, CacheableComponent &packed_comp) {
+  bool manageNewComponent(StackLevel &top, CacheableComponent &packed_comp,
+                          bool has_removed_clauses = false, bool verbose = false) {
        statistics_.num_cache_look_ups_++;
        unsigned table_ofs =  packed_comp.hashkey() & table_size_mask_;
 
@@ -79,6 +80,10 @@ public:
        while(act_id){
          if (entry(act_id).equals(packed_comp)) {
            statistics_.incorporate_cache_hit(packed_comp);
+           if (verbose && has_removed_clauses)
+             std::cout << "  CACHE_HIT hash=" << packed_comp.hashkey()
+                       << " count=" << entry(act_id).model_count()
+                       << " removed_active=YES" << std::endl;
            top.includeSolution(entry(act_id).model_count());
            return true;
          }
