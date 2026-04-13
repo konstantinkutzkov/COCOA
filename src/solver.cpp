@@ -853,7 +853,8 @@ bool Solver::bcp() {
 
 	bool bSucceeded = BCP(start_ofs);
 
-	if (config_.perform_failed_lit_test && bSucceeded && removed_clauses_.empty()) {
+	if (config_.perform_failed_lit_test && bSucceeded && removed_clauses_.empty()
+	    && !config_.perform_separator_branching) {
 		bSucceeded = implicitBCP();
 	}
 	return bSucceeded;
