@@ -15,6 +15,7 @@
 #include "content_cache.h"
 
 #include <vector>
+#include <set>
 #include <gmpxx.h>
 #include "containers.h"
 #include "stack.h"
@@ -194,6 +195,37 @@ void ComponentManager::recordRemainingCompsFor(StackLevel &top) {
      }
 
 done_recording:
+   // Debug: check component overlap and coverage
+   if (config_.verbose && component_stack_.size() > new_comps_start_ofs + 1) {
+     std::set<unsigned> all_comp_vars;
+     bool overlap = false;
+     unsigned total_vars = 0;
+     for (unsigned ci = new_comps_start_ofs; ci < component_stack_.size(); ci++) {
+       for (auto v = component_stack_[ci]->varsBegin(); *v != varsSENTINEL; v++) {
+         total_vars++;
+         if (all_comp_vars.count(*v)) {
+           cout << "  OVERLAP var=" << *v << " in component " << ci << endl;
+           overlap = true;
+         }
+         all_comp_vars.insert(*v);
+       }
+     }
+     if (overlap)
+       cout << "  WARNING: component overlap detected!" << endl;
+
+     // Count active vars in super component
+     unsigned super_active = 0;
+     for (auto v = super_comp.varsBegin(); *v != varsSENTINEL; v++)
+       if (ana_.isUnseenAndActive(*v) || all_comp_vars.count(*v))
+         super_active++;
+
+     cout << "  DECOMP: " << (component_stack_.size() - new_comps_start_ofs)
+          << " comps, total_comp_vars=" << total_vars
+          << " super_vars=" << super_active
+          << " removed_cls=" << (removed_clauses_ ? removed_clauses_->size() : 0)
+          << endl;
+   }
+
    top.set_unprocessed_components_end(component_stack_.size());
    sortComponentStackRange(new_comps_start_ofs, component_stack_.size());
 }
