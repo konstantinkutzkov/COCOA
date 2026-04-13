@@ -3,20 +3,21 @@
  *
  * Implementation of buildCanonicalKey.
  *
- * Phase B Steps 1-4:
+ * Phase B Steps 1-5:
  *   1. Singleton anonymization
  *   2. Polarity normalization
  *   3. Variable list removed (implied by clauses)
- *   4. WL iteration 0: structural variable labeling and canonical renaming
+ *   4. WL iteration 0: structural variable labeling
+ *   5. WL iteration 1: neighbor-label refinement (collision blocks only)
  */
 
 #include "canonical_key.h"
 #include "component_types/component.h"
 #include <functional>
+#include <set>
 
 // A clause descriptor from the perspective of a variable:
 // (clause_length, num_pos_nonsingleton, num_neg_nonsingleton, num_singletons, my_polarity)
-// where my_polarity is +1 or -1 after normalization
 using ClauseDescriptor = std::vector<int>;
 
 // A variable's structural signature: sorted list of clause descriptors
@@ -31,7 +32,9 @@ CanonicalKey buildCanonicalKey(
     const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
     unsigned original_lit_pool_size) {
 
+  // ---------------------------------------------------------------
   // Step 1: Collect active variables
+  // ---------------------------------------------------------------
   std::vector<unsigned> active_vars;
   for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
     if (literal_values[LiteralID(*it, true)] == X_TRI)
@@ -43,7 +46,9 @@ CanonicalKey buildCanonicalKey(
   for (unsigned v : active_vars)
     var_in_comp[v] = true;
 
+  // ---------------------------------------------------------------
   // Step 2: Collect all clauses as raw literal lists
+  // ---------------------------------------------------------------
   std::vector<std::vector<int>> raw_clauses;
 
   for (auto it = comp.clsBegin(); *it != clsSENTINEL; it++) {
@@ -83,7 +88,9 @@ CanonicalKey buildCanonicalKey(
     }
   }
 
-  // Step 3: Count occurrences for singleton detection and polarity
+  // ---------------------------------------------------------------
+  // Step 3: Singleton detection and polarity normalization
+  // ---------------------------------------------------------------
   std::unordered_map<unsigned, int> pos_count, neg_count;
   for (unsigned v : active_vars) {
     pos_count[v] = 0;
@@ -108,9 +115,7 @@ CanonicalKey buildCanonicalKey(
     if (!is_singleton[v] && neg_count[v] > pos_count[v])
       flip[v] = true;
 
-  // Step 4: WL iteration 0 — compute structural signatures
-  // First, build normalized clauses (singletons replaced, polarity flipped)
-  // so we can compute clause descriptors
+  // Build normalized clauses (singletons replaced, polarity flipped)
   std::vector<std::vector<int>> norm_clauses;
   for (const auto &cl : raw_clauses) {
     std::vector<int> norm;
@@ -130,8 +135,9 @@ CanonicalKey buildCanonicalKey(
     if (!is_singleton[v])
       nonsingleton_vars.push_back(v);
 
-  // For each non-singleton variable, compute its signature:
-  // sorted list of clause descriptors
+  // ---------------------------------------------------------------
+  // Step 4: WL iteration 0 — compute structural signatures
+  // ---------------------------------------------------------------
   std::unordered_map<unsigned, VarSignature> var_signatures;
   for (unsigned v : nonsingleton_vars)
     var_signatures[v] = VarSignature();
@@ -139,7 +145,6 @@ CanonicalKey buildCanonicalKey(
   for (size_t ci = 0; ci < norm_clauses.size(); ci++) {
     const auto &nc = norm_clauses[ci];
 
-    // Compute clause-level stats
     int clause_len = nc.size();
     int num_pos = 0, num_neg = 0, num_sing = 0;
     for (int lit : nc) {
@@ -148,14 +153,12 @@ CanonicalKey buildCanonicalKey(
       else num_neg++;
     }
 
-    // For each non-singleton variable in this clause, record descriptor
     const auto &raw = raw_clauses[ci];
     for (size_t li = 0; li < raw.size(); li++) {
       int orig_lit = raw[li];
       unsigned v = orig_lit > 0 ? (unsigned)orig_lit : (unsigned)(-orig_lit);
       if (is_singleton[v]) continue;
 
-      // Polarity of v in this clause after normalization
       int norm_lit = flip[v] ? -orig_lit : orig_lit;
       int my_polarity = norm_lit > 0 ? 1 : -1;
 
@@ -164,11 +167,10 @@ CanonicalKey buildCanonicalKey(
     }
   }
 
-  // Sort each variable's signature (multiset of descriptors)
   for (auto &vs : var_signatures)
     std::sort(vs.second.begin(), vs.second.end());
 
-  // Assign canonical IDs: sort variables by signature, assign 1, 2, 3...
+  // Sort variables by signature, assign initial canonical IDs
   std::vector<std::pair<VarSignature, unsigned>> sig_var_pairs;
   for (unsigned v : nonsingleton_vars)
     sig_var_pairs.push_back({var_signatures[v], v});
@@ -179,13 +181,113 @@ CanonicalKey buildCanonicalKey(
       return a.first < b.first;
     });
 
-  // Map original variable ID -> canonical ID
+  // Assign initial canonical IDs and identify collision blocks
   std::unordered_map<unsigned, int> canonical_id;
-  int next_id = 1;
-  for (const auto &sv : sig_var_pairs)
-    canonical_id[sv.second] = next_id++;
+  std::vector<std::vector<unsigned>> collision_blocks;
+  {
+    int next_id = 1;
+    size_t i = 0;
+    while (i < sig_var_pairs.size()) {
+      size_t j = i + 1;
+      while (j < sig_var_pairs.size() && sig_var_pairs[j].first == sig_var_pairs[i].first)
+        j++;
 
-  // Step 5: Build final canonical key with renamed variables
+      if (j - i > 1) {
+        // Collision block: multiple variables with same signature
+        std::vector<unsigned> block;
+        for (size_t k = i; k < j; k++)
+          block.push_back(sig_var_pairs[k].second);
+        collision_blocks.push_back(block);
+      }
+
+      for (size_t k = i; k < j; k++)
+        canonical_id[sig_var_pairs[k].second] = next_id++;
+      i = j;
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Step 5: WL iteration 1 — refine collision block variables only
+  // ---------------------------------------------------------------
+  if (!collision_blocks.empty()) {
+    // Collect which variables need refinement
+    std::set<unsigned> needs_refinement;
+    for (const auto &block : collision_blocks)
+      for (unsigned v : block)
+        needs_refinement.insert(v);
+
+    // For each variable in a collision block, compute a refined signature:
+    // (original_signature, sorted multiset of neighbor canonical IDs with edge polarity)
+    // A neighbor is a non-singleton variable that co-occurs in at least one clause.
+    using RefinedSig = std::pair<VarSignature, std::vector<std::pair<int, int>>>;
+    // The second element: sorted list of (neighbor_canonical_id, my_polarity_in_shared_clause)
+
+    std::unordered_map<unsigned, RefinedSig> refined_signatures;
+
+    for (unsigned v : needs_refinement) {
+      std::vector<std::pair<int, int>> neighbor_labels;
+
+      // Scan all clauses to find neighbors of v
+      for (size_t ci = 0; ci < raw_clauses.size(); ci++) {
+        const auto &raw = raw_clauses[ci];
+
+        // Check if v is in this clause
+        bool v_in_clause = false;
+        int v_polarity = 0;
+        for (int lit : raw) {
+          unsigned lv = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
+          if (lv == v) {
+            v_in_clause = true;
+            int norm_lit = flip[v] ? -lit : lit;
+            v_polarity = norm_lit > 0 ? 1 : -1;
+            break;
+          }
+        }
+        if (!v_in_clause) continue;
+
+        // Collect canonical IDs of non-singleton neighbors in this clause
+        for (int lit : raw) {
+          unsigned lv = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
+          if (lv == v || is_singleton[lv]) continue;
+          int neighbor_cid = canonical_id[lv];
+          neighbor_labels.push_back({neighbor_cid, v_polarity});
+        }
+      }
+
+      std::sort(neighbor_labels.begin(), neighbor_labels.end());
+      refined_signatures[v] = {var_signatures[v], neighbor_labels};
+    }
+
+    // Re-sort within each collision block using refined signatures
+    // and re-assign canonical IDs
+    for (const auto &block : collision_blocks) {
+      // Build (refined_sig, original_var) pairs for this block
+      std::vector<std::pair<RefinedSig, unsigned>> block_pairs;
+      for (unsigned v : block)
+        block_pairs.push_back({refined_signatures[v], v});
+
+      std::sort(block_pairs.begin(), block_pairs.end(),
+        [](const std::pair<RefinedSig, unsigned> &a,
+           const std::pair<RefinedSig, unsigned> &b) {
+          return a.first < b.first;
+        });
+
+      // Re-assign canonical IDs for this block, starting from the
+      // lowest ID in the block
+      int base_id = canonical_id[block[0]];
+      for (const auto &bp : block_pairs) {
+        // Find the minimum current ID in the block
+        if (canonical_id[bp.second] < base_id)
+          base_id = canonical_id[bp.second];
+      }
+      for (size_t k = 0; k < block_pairs.size(); k++)
+        canonical_id[block_pairs[k].second] = base_id + (int)k;
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Step 6: Build final canonical key with renamed variables
+  // ---------------------------------------------------------------
   CanonicalKey key;
 
   for (const auto &nc : norm_clauses) {
