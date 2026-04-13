@@ -248,9 +248,7 @@ hundreds of variables, and 5-10 iterations suffice.
 
 ---
 
-## Future Optimizations
-
-### Binary Clause Replacement
+## Binary Clause Replacement
 
 Binary clauses (length 2) should never appear in the separator because
 branching on a binary clause is strictly worse than branching on
@@ -258,6 +256,14 @@ either of its variables. As a post-processing step, every binary
 clause in the separator is replaced by the higher-degree variable
 from that clause. If the variable is already in the separator, the
 binary clause is simply removed (redundant).
+
+On a 1652-variable instance, this post-processing reduced the
+separator from 108V+30C (score 129.4) to 113V+23C (score 123.9)
+by replacing 7 binary clauses with 5 variables.
+
+---
+
+## Future Optimizations
 
 ### SAT Check for Clause Branch 2
 
@@ -285,16 +291,16 @@ saved computation more significant.
 
 ### Adaptive Cost Model
 
-The clause weight `log(3)/log(k) * (1 - k/n)` is a heuristic.
-The optimal cost model depends on the formula structure and could
-be learned from solver performance on similar instances. Key
-factors to consider:
+The clause weight `log(3)/log(k) * (1 - k/n)` used in the separator
+algorithm is a heuristic. Further optimization of this cost model
+could be achieved by learning from solver performance on similar
+instances. Additional factors to consider:
 
-- **Branching depth reduction**: a length-k clause branch replaces
-  roughly `log(k)/log(2)` variable branches in the best case.
 - **BCP amplification**: longer clauses in branch 2 trigger more
-  unit propagations, potentially resolving many additional variables.
+  unit propagations, potentially resolving many additional variables
+  beyond the clause's own literals.
 - **UNSAT probability**: longer clauses are more likely to produce
   UNSAT in branch 2, effectively halving the branching cost.
-- **Coverage**: clauses covering a large fraction of the component's
-  variables provide more decomposition benefit per branching decision.
+- **Instance-specific tuning**: the optimal balance between variable
+  and clause branching may depend on the formula's structure (density,
+  clause length distribution, connectivity).
