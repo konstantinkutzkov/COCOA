@@ -447,6 +447,29 @@ FormulaInfo Solver::buildFormulaInfo(Component &comp) {
 		info.clause_variables.push_back(std::move(vars_in_clause));
 	}
 
+	// Add binary clauses between active variables in the component
+	unsigned max_var = info.active_vars.empty() ? 0 : info.active_vars.back();
+	std::vector<bool> var_in_comp(max_var + 1, false);
+	for (unsigned v : info.active_vars)
+		var_in_comp[v] = true;
+
+	for (unsigned v : info.active_vars) {
+		for (int sign = 0; sign <= 1; sign++) {
+			LiteralID lit(v, sign == 0);
+			for (auto bt = literal(lit).binary_links_.begin();
+				 *bt != SENTINEL_LIT; bt++) {
+				unsigned other_var = bt->var();
+				if (other_var <= v) continue;
+				if (other_var > max_var || !var_in_comp[other_var]) continue;
+				if (isSatisfied(*bt)) continue;
+				if (isSatisfied(lit)) continue;
+
+				info.active_clause_ids.push_back(0);  // dummy ID for binary
+				info.clause_variables.push_back({v, other_var});
+			}
+		}
+	}
+
 	info.buildIndex();
 	return info;
 }
