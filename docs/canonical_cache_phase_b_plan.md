@@ -288,6 +288,29 @@ At each step, measure on competition instances:
 
 ---
 
+## Future Optimization: Hash-Only Cache (No Equality Check)
+
+Currently each cache entry stores the full canonical clause multiset
+for exact equality comparison on hash collisions. This consumes
+significant memory and comparison time.
+
+**Optimization:** Replace the full key storage with a 128-bit hash
+(e.g., MurmurHash3 128-bit, or two independent 64-bit hashes with
+different seeds). Store only the 128-bit hash + model count per entry.
+Drop the equality check entirely.
+
+With 128-bit hashes and 10^6 cache entries, collision probability is
+~10^6 / 2^64 ≈ 5 × 10^{-14} — practically zero. This would reduce
+per-entry memory from hundreds of bytes (clause vectors) to ~16 bytes
+(hash) + mpz_class (count).
+
+**When to implement:** After Phase B normalization is stable and
+debugged. The explicit equality check is valuable during development
+because hash collisions produce silent wrong answers that are hard
+to diagnose.
+
+---
+
 ## Files to Modify
 
 All changes are in `src/canonical_key.cpp`. The cache infrastructure
