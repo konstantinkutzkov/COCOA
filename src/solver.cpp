@@ -186,6 +186,8 @@ SOLVER_StateT Solver::countSAT() {
 
 	while (true) {
 		while (comp_manager_.findNextRemainingComponentOf(stack_.top())) {
+			if (stopwatch_.timeBoundBroken())
+				return TIMEOUT;
 
 			// --- Very long clause: branch immediately without Dinic's ---
 			if (config_.perform_clause_branching) {
@@ -214,10 +216,6 @@ SOLVER_StateT Solver::countSAT() {
 					}
 				}
 			}
-
-			// Time check (covers all branching paths)
-			if (stopwatch_.timeBoundBroken())
-				return TIMEOUT;
 
 			// --- Separator branching ---
 			if (config_.perform_separator_branching) {

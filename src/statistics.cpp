@@ -36,6 +36,10 @@ void DataAndStatistics::writeToFile(const string & file_name) {
 void DataAndStatistics::printShort() {
   if (exit_state_ == TIMEOUT) {
     cout << endl << " TIMEOUT !" << endl;
+    cout << "decisions \t\t\t\t" << num_decisions_ << endl;
+    cout << "cache (stores / hits) \t\t\t" << num_cached_components_ << "/"
+         << num_cache_hits_ << endl;
+    cout << "time: " << time_elapsed_ << "s" << endl;
     return;
   }
   cout << endl << endl;
