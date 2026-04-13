@@ -235,13 +235,17 @@ SOLVER_StateT Solver::countSAT() {
 						}
 					}
 					// No matching element for this component —
-					// if all elements are used, clear separator
-					// so sub-components can find their own
+					// if all elements are used, push separator onto
+					// stack and allow finding a new one for sub-components
 					bool all_used = true;
 					for (size_t i = 0; i < separator_used_.size(); i++)
 						if (!separator_used_[i]) { all_used = false; break; }
-					if (all_used)
+					if (all_used) {
+						// Push exhausted separator onto stack
+						separator_stack_.push_back({
+							separator_elements_, separator_used_, separator_base_dl_});
 						clearSeparator();
+					}
 				}
 
 				// Try to find a new separator for this component
@@ -658,8 +662,22 @@ retStateT Solver::backtrack() {
 			stack_.top().remaining_components_ofs() <= comp_manager_.component_stack_size());
 	do {
 		// Clear separator if backtracking past the level where it was found
-		if (separator_base_dl_ >= 0 && stack_.get_decision_level() <= separator_base_dl_)
+		if (separator_base_dl_ >= 0 && stack_.get_decision_level() <= separator_base_dl_) {
 			clearSeparator();
+			// Restore parent separator from stack if available
+			while (!separator_stack_.empty() &&
+				   stack_.get_decision_level() <= separator_stack_.back().base_dl) {
+				// This stacked separator is also past — pop it too
+				separator_stack_.pop_back();
+			}
+			if (!separator_stack_.empty()) {
+				auto &parent = separator_stack_.back();
+				separator_elements_ = parent.elements;
+				separator_used_ = parent.used;
+				separator_base_dl_ = parent.base_dl;
+				separator_stack_.pop_back();
+			}
+		}
 
 		if (stack_.top().branch_found_unsat())
 			comp_manager_.removeAllCachePollutionsOf(stack_.top());

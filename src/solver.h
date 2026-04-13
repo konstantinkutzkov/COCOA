@@ -140,6 +140,14 @@ private:
 	std::vector<bool> separator_used_;
 	int separator_base_dl_ = -1;
 
+	// Stack of exhausted separators (for restoration on backtrack)
+	struct SavedSeparator {
+		std::vector<CutNode> elements;
+		std::vector<bool> used;
+		int base_dl;
+	};
+	std::vector<SavedSeparator> separator_stack_;
+
 	// Separator cache with sketch-based similarity lookup
 	SeparatorCache separator_cache_;
 	FormulaInfo buildFormulaInfo(Component &comp);
