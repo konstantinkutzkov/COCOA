@@ -628,6 +628,9 @@ int Solver::findMatchingSeparatorElement(Component &comp) {
 }
 
 void Solver::decideSeparatorVariable(VariableIndex var) {
+	if (config_.verbose)
+		cout << "SEP_VAR_BRANCH dl=" << stack_.get_decision_level()
+			 << " var=" << var << endl;
 	stack_.push_back(
 		StackLevel(stack_.top().currentRemainingComponent(),
 				literal_stack_.size(),
