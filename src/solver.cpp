@@ -235,13 +235,15 @@ SOLVER_StateT Solver::countSAT() {
 						}
 					}
 					// No matching element for this component —
-					// if all elements are used, push separator onto
-					// stack and allow finding a new one for sub-components
+					// if all elements are used AND we're past the
+					// separator's decision levels, allow finding new
+					// separators for sub-components.
+					// Do NOT clear if we're still within the separator's
+					// branching levels (backtracking could revisit them).
 					bool all_used = true;
 					for (size_t i = 0; i < separator_used_.size(); i++)
 						if (!separator_used_[i]) { all_used = false; break; }
 					if (all_used) {
-						// Push exhausted separator onto stack
 						separator_stack_.push_back({
 							separator_elements_, separator_used_, separator_base_dl_});
 						clearSeparator();
@@ -249,7 +251,10 @@ SOLVER_StateT Solver::countSAT() {
 				}
 
 				// Try to find a new separator for this component
-				if (separator_base_dl_ < 0) {
+				// Only allow if no stacked separator's elements are
+				// still on the decision stack (prevents premature
+				// inner separators during outer separator's branch 2)
+				if (separator_base_dl_ < 0 && separator_stack_.empty()) {
 					if (tryInstallSeparator(curr_comp)) {
 						int idx = findMatchingSeparatorElement(curr_comp);
 						if (idx >= 0) {
@@ -673,7 +678,9 @@ retStateT Solver::backtrack() {
 			if (!separator_stack_.empty()) {
 				auto &parent = separator_stack_.back();
 				separator_elements_ = parent.elements;
-				separator_used_ = parent.used;
+				// Reset used flags — we're in a different branch now,
+				// elements need to be re-evaluated for the new formula state
+				separator_used_.assign(separator_elements_.size(), false);
 				separator_base_dl_ = parent.base_dl;
 				separator_stack_.pop_back();
 			}
