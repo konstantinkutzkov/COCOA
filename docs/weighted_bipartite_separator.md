@@ -245,3 +245,56 @@ Let `n = |V|` and `m = |C|` with total literal count `L = Σ len(c)`.
 
 In practice, each Dinic's call takes < 1ms on instances with
 hundreds of variables, and 5-10 iterations suffice.
+
+---
+
+## Future Optimizations
+
+### Binary Clause Replacement
+
+Binary clauses (length 2) should never appear in the separator because
+branching on a binary clause is strictly worse than branching on
+either of its variables. As a post-processing step, every binary
+clause in the separator is replaced by the higher-degree variable
+from that clause. If the variable is already in the separator, the
+binary clause is simply removed (redundant).
+
+### SAT Check for Clause Branch 2
+
+When branching on a long clause `C` of length `k`:
+
+- Branch 1 removes `C` (free, no assignments).
+- Branch 2 negates all `k` literals, assigning `k` variables at once.
+
+For long clauses, branch 2 often produces an UNSATISFIABLE
+sub-formula because negating many variables simultaneously creates
+many conflicts. If branch 2 is UNSAT, then
+`#SAT(F) = #SAT(F \ {C})` — the clause was implied by the rest of
+the formula, and we skip the entire branch 2 subtree.
+
+Currently, BCP detects some of these conflicts. A lightweight SAT
+check (e.g., failed literal testing or bounded look-ahead) after the
+branch 2 assignments could detect UNSAT faster and more reliably,
+especially for very long clauses where the cascade of assignments
+is likely to produce a conflict that BCP alone does not immediately
+find.
+
+The expected benefit scales with clause length: longer clauses
+assign more variables in branch 2, making UNSAT more likely and the
+saved computation more significant.
+
+### Adaptive Cost Model
+
+The clause weight `log(3)/log(k) * (1 - k/n)` is a heuristic.
+The optimal cost model depends on the formula structure and could
+be learned from solver performance on similar instances. Key
+factors to consider:
+
+- **Branching depth reduction**: a length-k clause branch replaces
+  roughly `log(k)/log(2)` variable branches in the best case.
+- **BCP amplification**: longer clauses in branch 2 trigger more
+  unit propagations, potentially resolving many additional variables.
+- **UNSAT probability**: longer clauses are more likely to produce
+  UNSAT in branch 2, effectively halving the branching cost.
+- **Coverage**: clauses covering a large fraction of the component's
+  variables provide more decomposition benefit per branching decision.
