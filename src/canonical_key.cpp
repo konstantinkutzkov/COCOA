@@ -64,12 +64,16 @@ CanonicalKey buildCanonicalKey(
     key.clauses.push_back(std::move(lits));
   }
 
-  // Collect binary clauses between active variables
+  // Collect original binary clauses between active variables
+  // (learned binary clauses are excluded — they're implied by originals)
   for (unsigned v : active_vars) {
     for (int sign = 0; sign <= 1; sign++) {
       LiteralID lit(v, sign == 0);
+      unsigned orig_count = literals[lit].original_binary_link_count_;
+      unsigned idx = 0;
       for (auto bt = literals[lit].binary_links_.begin();
-           *bt != SENTINEL_LIT; bt++) {
+           *bt != SENTINEL_LIT; bt++, idx++) {
+        if (idx >= orig_count) break;  // skip learned binary clauses
         unsigned other_var = bt->var();
         if (other_var <= v) continue;
         if (other_var > max_var || !var_in_comp[other_var]) continue;

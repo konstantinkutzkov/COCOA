@@ -253,6 +253,38 @@ If several variables still share the same refined label, then WL has
 not fully distinguished them. At this point there are two options:
 
 1. **Exact route**
+   - for **small collision blocks**, an exact and space-efficient option is:
+     - keep all WL-unique variables fixed (anchored);
+     - for each remaining collision block `B` (variables with the same final WL label),
+       enumerate all **within-block permutations** of `B`;
+     - additionally, if the caching equivalence `~` allows *global complementation* of
+       non-singleton variables (as defined above), then for variables in `B` whose
+       orientation cannot be fixed deterministically (e.g., equal positive/negative
+       profile), also enumerate both **flip** choices;
+       - in the worst case this is all flip masks on `B` (a factor `2^{|B|}`);
+       - in practice, deterministic orientation rules can often fix most variables,
+         and only *orientation-ambiguous* variables require enumeration;
+     - for each choice of within-block permutations and (when needed) flip masks,
+       build the normalized clause multiset;
+     - take the **lexicographically minimum** normalized multiset as the canonical key;
+     - store only this minimum key (e.g., hashed), not all candidates.
+     
+     The number of candidates is
+     
+     \[
+     |T(F)| \;=\; \prod_{i} |B_i|! \cdot 2^{|A_i|}
+     \]
+     
+     where `B_i` are the WL collision blocks and `A_i ⊆ B_i` are the variables in block `i`
+     whose orientation remains ambiguous after deterministic rules (worst case `A_i = B_i`).
+     
+     which can be much smaller than `k!` if WL splits `k` unresolved variables into several
+     smaller collision blocks.
+     
+     This is exact for the fixed refinement procedure because WL labels are
+     isomorphism-invariant: isomorphic formulas induce the same multiset of collision
+     blocks (up to renaming), and enumerating all within-block permutations and allowed
+     flip choices enumerates all bijections consistent with these labels and with `~`.
    - run an additional canonical labeling search
      (individualization/refinement, nauty/bliss-style, etc.);
    - this can produce a true canonical form.
@@ -262,6 +294,54 @@ not fully distinguished them. At this point there are two options:
      block; or
    - enumerate a bounded set of candidate tie-breakings if multi-key
      lookup is desired.
+
+#### Example: exact minimum over WL collision blocks
+
+Let
+
+\[
+F = (u\vee x)\wedge(u\vee y)\wedge(\neg u\vee p)\wedge(\neg u\vee q)\wedge(x\vee p)\wedge(y\vee q),
+\]
+
+and let `G` be the same structure with renamed variables (an isomorphic copy):
+
+\[
+G = (u'\vee y')\wedge(u'\vee x')\wedge(\neg u'\vee q')\wedge(\neg u'\vee p')\wedge(y'\vee q')\wedge(x'\vee p').
+\]
+
+WL refinement (on the incidence graph with polarity labels) typically:
+
+- uniquely identifies `u` (and `u'`) as *anchored*;
+- leaves two collision blocks of size 2: `{x,y}` and `{p,q}` (and similarly `{x',y'}` and `{p',q'}`).
+
+So the exact enumeration has only `2! * 2! = 4` candidates, rather than `4! = 24`.
+If we rename `u -> 1` and enumerate the two swaps inside each block, two distinct normalized
+clause multisets appear (after sorting literals inside clauses and sorting clauses):
+
+- `R1 = [(-1,4), (-1,5), (1,2), (1,3), (2,4), (3,5)]`
+- `R2 = [(-1,4), (-1,5), (1,2), (1,3), (2,5), (3,4)]`
+
+For `F`, these arise from different within-block permutations (e.g., swapping `{p,q}` changes which
+of `(2,4)`/`(3,5)` vs `(2,5)`/`(3,4)` appears). For `G`, enumerating its collision-block permutations
+produces the **same candidate set** `{R1, R2}`. Therefore:
+
+- `T(F) = T(G) = {R1, R2}`
+- and thus `min(T(F)) = min(T(G))`
+
+This is the sense in which “taking the minimum over all within-block permutations” yields a
+guaranteed cache hit for isomorphic formulas, as long as the candidate set `T(·)` is fully enumerated.
+
+#### Example: why sign flips may be required
+
+The counting equivalence `~` allows complementing non-singleton variables globally. For example:
+
+- `F_xor  = (x1 v x2) ∧ (!x1 v !x2)`
+- `F_xnor = (x1 v !x2) ∧ (!x1 v x2)`
+
+These are equivalent under the flip `x2 -> !x2`. WL refinement typically leaves `{x1, x2}` in a
+single collision block and both variables are orientation-ambiguous. Enumerating only permutations
+may not merge these formulas, but enumerating the relevant flip choices ensures the candidate sets
+match and therefore `min(T(F_xor)) = min(T(F_xnor))`.
 
 The heuristic route is still correct if used carefully:
 
@@ -309,6 +389,12 @@ For ties, a stronger deterministic rule is preferable, for example:
 
 The key requirement is not that the rule be perfect, but that it be
 deterministic and count-preserving.
+
+However, for **fully symmetric / orientation-ambiguous** variables (e.g., equal positive and
+negative profiles, and tied refined labels), no deterministic local rule can reliably merge all
+equivalent formulas that differ by complementing such variables. In the **exact route**, this is
+handled by enumerating the remaining flip choices inside WL collision blocks. In the **heuristic
+route**, one may try a bounded number of flip masks / tie-breakings and accept false negatives.
 
 The resulting representation may be serialized directly or hashed.
 

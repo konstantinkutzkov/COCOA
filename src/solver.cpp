@@ -117,6 +117,7 @@ void Solver::HardWireAndCompact() {
 	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
 		literal(l).activity_score_ = literal(l).binary_links_.size() - 1;
 		literal(l).activity_score_ += occurrence_lists_[l].size();
+		literal(l).recordOriginalBinaryLinks();
 	}
 
 	statistics_.num_unit_clauses_ = unit_clauses_.size();

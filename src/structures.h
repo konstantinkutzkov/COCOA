@@ -87,6 +87,15 @@ public:
   vector<ClauseOfs> watch_list_ = vector<ClauseOfs>(1,SENTINEL_CL);
   float activity_score_ = 0.0f;
 
+  // Number of original (non-learned) binary links.
+  // Set after preprocessing; learned links are appended after this.
+  unsigned original_binary_link_count_ = 0;
+
+  void recordOriginalBinaryLinks() {
+    // binary_links_ has SENTINEL_LIT at the end, so count = size - 1
+    original_binary_link_count_ = binary_links_.size() - 1;
+  }
+
   void increaseActivity(unsigned u = 1){
     activity_score_+= u;
   }
