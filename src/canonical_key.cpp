@@ -3,12 +3,24 @@
  *
  * Implementation of buildCanonicalKey.
  *
- * Phase A: content-based key with clause content and binary clauses.
- * Phase B Step 1: singleton anonymization.
+ * Phase B Steps 1-4:
+ *   1. Singleton anonymization
+ *   2. Polarity normalization
+ *   3. Variable list removed (implied by clauses)
+ *   4. WL iteration 0: structural variable labeling and canonical renaming
  */
 
 #include "canonical_key.h"
 #include "component_types/component.h"
+#include <functional>
+
+// A clause descriptor from the perspective of a variable:
+// (clause_length, num_pos_nonsingleton, num_neg_nonsingleton, num_singletons, my_polarity)
+// where my_polarity is +1 or -1 after normalization
+using ClauseDescriptor = std::vector<int>;
+
+// A variable's structural signature: sorted list of clause descriptors
+using VarSignature = std::vector<ClauseDescriptor>;
 
 CanonicalKey buildCanonicalKey(
     Component &comp,
@@ -34,7 +46,6 @@ CanonicalKey buildCanonicalKey(
   // Step 2: Collect all clauses as raw literal lists
   std::vector<std::vector<int>> raw_clauses;
 
-  // Long clauses (original only, not removed, not satisfied)
   for (auto it = comp.clsBegin(); *it != clsSENTINEL; it++) {
     ClauseOfs ofs = clause_id_to_ofs[*it];
     if (removed_clauses.count(ofs))
@@ -53,7 +64,6 @@ CanonicalKey buildCanonicalKey(
     raw_clauses.push_back(std::move(lits));
   }
 
-  // Original binary clauses between active variables
   for (unsigned v : active_vars) {
     for (int sign = 0; sign <= 1; sign++) {
       LiteralID lit(v, sign == 0);
@@ -73,8 +83,7 @@ CanonicalKey buildCanonicalKey(
     }
   }
 
-  // Step 3: Count occurrences per variable for singleton detection
-  // and polarity normalization
+  // Step 3: Count occurrences for singleton detection and polarity
   std::unordered_map<unsigned, int> pos_count, neg_count;
   for (unsigned v : active_vars) {
     pos_count[v] = 0;
@@ -89,45 +98,112 @@ CanonicalKey buildCanonicalKey(
     }
   }
 
-  // Singletons: variables with exactly 1 total occurrence
   std::vector<bool> is_singleton(max_var + 1, false);
   for (unsigned v : active_vars)
     if (pos_count[v] + neg_count[v] == 1)
       is_singleton[v] = true;
 
-  // Polarity normalization: flip non-singleton variables where
-  // negative occurrences > positive occurrences
   std::vector<bool> flip(max_var + 1, false);
   for (unsigned v : active_vars)
     if (!is_singleton[v] && neg_count[v] > pos_count[v])
       flip[v] = true;
 
-  // Step 4: Build canonical key
-  CanonicalKey key;
-
-  // No variable list needed: every non-singleton variable appears in
-  // at least 2 clauses (by definition), so the clause content fully
-  // determines the variable set. Singletons are anonymized.
-
-  // Build clauses with singletons replaced and polarity normalized
+  // Step 4: WL iteration 0 — compute structural signatures
+  // First, build normalized clauses (singletons replaced, polarity flipped)
+  // so we can compute clause descriptors
+  std::vector<std::vector<int>> norm_clauses;
   for (const auto &cl : raw_clauses) {
-    std::vector<int> canonical_lits;
+    std::vector<int> norm;
     for (int lit : cl) {
       unsigned v = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
-      if (is_singleton[v]) {
+      if (is_singleton[v])
+        norm.push_back(SINGLETON_MARKER);
+      else
+        norm.push_back(flip[v] ? -lit : lit);
+    }
+    norm_clauses.push_back(std::move(norm));
+  }
+
+  // Collect non-singleton variables
+  std::vector<unsigned> nonsingleton_vars;
+  for (unsigned v : active_vars)
+    if (!is_singleton[v])
+      nonsingleton_vars.push_back(v);
+
+  // For each non-singleton variable, compute its signature:
+  // sorted list of clause descriptors
+  std::unordered_map<unsigned, VarSignature> var_signatures;
+  for (unsigned v : nonsingleton_vars)
+    var_signatures[v] = VarSignature();
+
+  for (size_t ci = 0; ci < norm_clauses.size(); ci++) {
+    const auto &nc = norm_clauses[ci];
+
+    // Compute clause-level stats
+    int clause_len = nc.size();
+    int num_pos = 0, num_neg = 0, num_sing = 0;
+    for (int lit : nc) {
+      if (lit == SINGLETON_MARKER) num_sing++;
+      else if (lit > 0) num_pos++;
+      else num_neg++;
+    }
+
+    // For each non-singleton variable in this clause, record descriptor
+    const auto &raw = raw_clauses[ci];
+    for (size_t li = 0; li < raw.size(); li++) {
+      int orig_lit = raw[li];
+      unsigned v = orig_lit > 0 ? (unsigned)orig_lit : (unsigned)(-orig_lit);
+      if (is_singleton[v]) continue;
+
+      // Polarity of v in this clause after normalization
+      int norm_lit = flip[v] ? -orig_lit : orig_lit;
+      int my_polarity = norm_lit > 0 ? 1 : -1;
+
+      ClauseDescriptor desc = {clause_len, num_pos, num_neg, num_sing, my_polarity};
+      var_signatures[v].push_back(desc);
+    }
+  }
+
+  // Sort each variable's signature (multiset of descriptors)
+  for (auto &vs : var_signatures)
+    std::sort(vs.second.begin(), vs.second.end());
+
+  // Assign canonical IDs: sort variables by signature, assign 1, 2, 3...
+  std::vector<std::pair<VarSignature, unsigned>> sig_var_pairs;
+  for (unsigned v : nonsingleton_vars)
+    sig_var_pairs.push_back({var_signatures[v], v});
+
+  std::sort(sig_var_pairs.begin(), sig_var_pairs.end(),
+    [](const std::pair<VarSignature, unsigned> &a,
+       const std::pair<VarSignature, unsigned> &b) {
+      return a.first < b.first;
+    });
+
+  // Map original variable ID -> canonical ID
+  std::unordered_map<unsigned, int> canonical_id;
+  int next_id = 1;
+  for (const auto &sv : sig_var_pairs)
+    canonical_id[sv.second] = next_id++;
+
+  // Step 5: Build final canonical key with renamed variables
+  CanonicalKey key;
+
+  for (const auto &nc : norm_clauses) {
+    std::vector<int> canonical_lits;
+    for (int lit : nc) {
+      if (lit == SINGLETON_MARKER) {
         canonical_lits.push_back(SINGLETON_MARKER);
       } else {
-        canonical_lits.push_back(flip[v] ? -lit : lit);
+        unsigned v = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
+        int cid = canonical_id[v];
+        canonical_lits.push_back(lit > 0 ? cid : -cid);
       }
     }
     std::sort(canonical_lits.begin(), canonical_lits.end(), litLess);
     key.clauses.push_back(std::move(canonical_lits));
   }
 
-  // Sort all clauses lexicographically
   std::sort(key.clauses.begin(), key.clauses.end());
-
-  // Compute hash
   key.computeHash();
 
   return key;
