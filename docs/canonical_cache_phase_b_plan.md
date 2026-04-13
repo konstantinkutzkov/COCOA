@@ -164,24 +164,81 @@ isomorphisms are captured by iteration 0.
 **Goal:** Handle variables that remain structurally indistinguishable
 after WL refinement.
 
-**Options (in order of complexity):**
+The equivalence relation `~` allows both variable renaming AND global
+complementation (polarity flip). After Steps 2 and 4-5, most
+variables have a unique label and a deterministic orientation. But
+some variables may remain in "collision blocks" (same WL label) and
+be "orientation-ambiguous" (equal positive/negative profiles, so the
+polarity rule from Step 2 can't decide).
 
-A. **Deterministic tie-breaking:** Within each collision block, order
-   variables by some arbitrary but fixed rule. This gives one canonical
-   form per formula. May miss some isomorphisms but never produces
-   false positives.
+**Approach: Lexicographic minimum over within-block candidates.**
 
-B. **Multiple candidate keys:** For each collision block of size k,
-   store up to k! / (symmetry) candidate keys. On lookup, check all
-   candidates. Increases cache hits but multiplies storage and lookup
-   cost. Only practical for very small collision blocks (2-3 variables).
+This is space-efficient (one key per formula) and exact within the
+WL equivalence classes. See `docs/canonical_caching.md` for the full
+description and examples.
 
-C. **Exact canonicalization (nauty/bliss):** Use a graph isomorphism
-   tool to compute a true canonical form. Guarantees maximum cache
-   reuse but adds a dependency and significant computational cost.
+1. After WL refinement, identify collision blocks B_1, ..., B_r
+   (groups of variables sharing the same final WL label).
+2. All variables NOT in any collision block are "anchored" — their
+   canonical IDs and orientations are fixed.
+3. For each collision block B_i:
+   a. Enumerate all permutations of B_i (|B_i|! choices).
+   b. For orientation-ambiguous variables in B_i (those where
+      positive occurrences == negative occurrences after Step 2's
+      rule), enumerate flip choices (2^|A_i| where A_i is the set
+      of ambiguous variables in B_i).
+4. For each combination of within-block permutations and flip masks,
+   build the normalized clause multiset.
+5. Take the lexicographically minimum result as THE canonical key.
+6. Store only this minimum key.
 
-**Recommendation:** Start with option A. Measure collision frequency
-on real instances to determine if B or C is worthwhile.
+The total number of candidates is:
+
+    |T(F)| = ∏_i |B_i|! · 2^|A_i|
+
+This is manageable when collision blocks are small (typical: 2-3
+variables). For larger blocks, fall back to a bounded random sample
+or deterministic tie-breaking (heuristic route).
+
+**Example: permutations only.**
+
+    F = (u ∨ x)(u ∨ y)(¬u ∨ p)(¬u ∨ q)(x ∨ p)(y ∨ q)
+
+WL anchors u, leaves blocks {x,y} and {p,q}. Candidates: 2!·2! = 4.
+Two distinct normalized forms arise; take the lex minimum.
+
+**Example: flips needed.**
+
+    F_xor  = (x1 ∨ x2)(¬x1 ∨ ¬x2)
+    F_xnor = (x1 ∨ ¬x2)(¬x1 ∨ x2)
+
+These are equivalent under x2 → ¬x2. WL gives one collision block
+{x1, x2}, both orientation-ambiguous. Permutations alone produce
+different minimums for F_xor and F_xnor. Including flip masks
+(2^2 = 4 flip choices × 2! permutations = 8 candidates) ensures
+both produce the same minimum.
+
+**Implementation:**
+
+1. After WL refinement, group variables by final label.
+2. For blocks of size 1: anchored, no enumeration.
+3. For blocks of size ≤ MAX_ENUM (e.g., 4):
+   enumerate all permutations × flip masks, take lex minimum.
+4. For blocks of size > MAX_ENUM:
+   apply deterministic tie-breaking (arbitrary but fixed ordering
+   within the block). This is the heuristic fallback — may miss
+   some isomorphisms but never produces false positives.
+
+**Testing:**
+
+- Construct isomorphic formulas that require permutation to match.
+- Construct isomorphic formulas that require flips to match (xor/xnor).
+- Verify same canonical key in both cases.
+- Run 200 stress tests.
+- Measure collision block sizes on real instances.
+
+**Expected impact:** Depends on collision block frequency and size.
+Must measure empirically before investing in larger block handling.
 
 ---
 
@@ -202,7 +259,14 @@ Step 1 (singletons) ──→ Step 2 (polarity) ──→ Step 3 (remove var lis
 
 Each step can be tested and deployed independently. Steps 1-3 are
 simple and low-risk. Steps 4-5 are the core isomorphism detection.
-Step 6 is an optimization that depends on empirical data.
+Step 6 combines permutation enumeration with flip enumeration for
+orientation-ambiguous variables — its value depends on empirical
+collision block sizes.
+
+Note: Step 2 (polarity normalization) and Step 6 (flip enumeration)
+are related but distinct. Step 2 fixes orientation deterministically
+for MOST variables (those with unequal positive/negative counts).
+Step 6 handles the remaining ambiguous variables by enumeration.
 
 ---
 
@@ -214,8 +278,13 @@ At each step, measure on competition instances:
 2. **Cache hit rate:** Compare content_cache hits/misses/stores.
 3. **Solve time:** Compare with Phase A baseline on test_cb_perf,
    test183, and larger instances.
-4. **Collision frequency:** After Steps 4-5, count how many variables
-   remain in collision blocks and their sizes.
+4. **Collision frequency (Steps 4-6):** Count how many variables
+   remain in collision blocks and their sizes. Also count how many
+   are orientation-ambiguous (equal pos/neg counts).
+5. **Enumeration cost (Step 6):** Measure time spent enumerating
+   within-block candidates. If blocks are typically size 2-3, cost
+   is negligible. If larger blocks appear, measure the fallback
+   frequency.
 
 ---
 
