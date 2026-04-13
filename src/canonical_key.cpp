@@ -3,11 +3,8 @@
  *
  * Implementation of buildCanonicalKey.
  *
- * Phase A: content-based key with variable list, clause content,
- * and binary clauses. No WL-based canonicalization yet.
- *
- * TODO Phase B: add singleton anonymization, polarity normalization,
- * and WL-based variable renaming.
+ * Phase A: content-based key with clause content and binary clauses.
+ * Phase B Step 1: singleton anonymization.
  */
 
 #include "canonical_key.h"
@@ -22,7 +19,7 @@ CanonicalKey buildCanonicalKey(
     const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
     unsigned original_lit_pool_size) {
 
-  // Collect active variables
+  // Step 1: Collect active variables
   std::vector<unsigned> active_vars;
   for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
     if (literal_values[LiteralID(*it, true)] == X_TRI)
@@ -34,17 +31,10 @@ CanonicalKey buildCanonicalKey(
   for (unsigned v : active_vars)
     var_in_comp[v] = true;
 
-  CanonicalKey key;
+  // Step 2: Collect all clauses as raw literal lists
+  std::vector<std::vector<int>> raw_clauses;
 
-  // Include variable list in the key (distinguishes components with
-  // same clauses but different free variables)
-  std::vector<int> var_entry;
-  var_entry.push_back(-999999);  // marker to separate from clauses
-  for (unsigned v : active_vars)
-    var_entry.push_back((int)v);
-  key.clauses.push_back(std::move(var_entry));
-
-  // Collect long clauses (not removed, not satisfied)
+  // Long clauses (original only, not removed, not satisfied)
   for (auto it = comp.clsBegin(); *it != clsSENTINEL; it++) {
     ClauseOfs ofs = clause_id_to_ofs[*it];
     if (removed_clauses.count(ofs))
@@ -60,12 +50,10 @@ CanonicalKey buildCanonicalKey(
     if (satisfied || lits.size() < 2)
       continue;
 
-    std::sort(lits.begin(), lits.end(), litLess);
-    key.clauses.push_back(std::move(lits));
+    raw_clauses.push_back(std::move(lits));
   }
 
-  // Collect original binary clauses between active variables
-  // (learned binary clauses are excluded — they're implied by originals)
+  // Original binary clauses between active variables
   for (unsigned v : active_vars) {
     for (int sign = 0; sign <= 1; sign++) {
       LiteralID lit(v, sign == 0);
@@ -73,18 +61,60 @@ CanonicalKey buildCanonicalKey(
       unsigned idx = 0;
       for (auto bt = literals[lit].binary_links_.begin();
            *bt != SENTINEL_LIT; bt++, idx++) {
-        if (idx >= orig_count) break;  // skip learned binary clauses
+        if (idx >= orig_count) break;
         unsigned other_var = bt->var();
         if (other_var <= v) continue;
         if (other_var > max_var || !var_in_comp[other_var]) continue;
         if (literal_values[*bt] == T_TRI) continue;
         if (literal_values[lit] == T_TRI) continue;
 
-        std::vector<int> bin_cl = {lit.toInt(), bt->toInt()};
-        std::sort(bin_cl.begin(), bin_cl.end(), litLess);
-        key.clauses.push_back(std::move(bin_cl));
+        raw_clauses.push_back({lit.toInt(), bt->toInt()});
       }
     }
+  }
+
+  // Step 3: Count occurrences per variable for singleton detection
+  std::unordered_map<unsigned, int> occurrence_count;
+  for (unsigned v : active_vars)
+    occurrence_count[v] = 0;
+
+  for (const auto &cl : raw_clauses) {
+    for (int lit : cl) {
+      unsigned v = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
+      occurrence_count[v]++;
+    }
+  }
+
+  // Singletons: variables with exactly 1 total occurrence
+  std::vector<bool> is_singleton(max_var + 1, false);
+  for (const auto &oc : occurrence_count)
+    if (oc.second == 1)
+      is_singleton[oc.first] = true;
+
+  // Step 4: Build canonical key
+  CanonicalKey key;
+
+  // Variable list: only non-singleton variables
+  // (singletons are captured by SINGLETON_MARKER in their clause)
+  std::vector<int> var_entry;
+  var_entry.push_back(-999999);  // marker
+  for (unsigned v : active_vars)
+    if (!is_singleton[v])
+      var_entry.push_back((int)v);
+  key.clauses.push_back(std::move(var_entry));
+
+  // Build clauses with singletons replaced
+  for (const auto &cl : raw_clauses) {
+    std::vector<int> canonical_lits;
+    for (int lit : cl) {
+      unsigned v = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
+      if (is_singleton[v])
+        canonical_lits.push_back(SINGLETON_MARKER);
+      else
+        canonical_lits.push_back(lit);
+    }
+    std::sort(canonical_lits.begin(), canonical_lits.end(), litLess);
+    key.clauses.push_back(std::move(canonical_lits));
   }
 
   // Sort all clauses lexicographically
