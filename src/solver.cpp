@@ -503,6 +503,20 @@ bool Solver::tryInstallSeparator(Component &comp) {
 		30,  // max_iterations
 		30); // walks_per_iteration
 
+	if (found && config_.verbose) {
+		int nv = 0, nc = 0;
+		for (const auto &nd : candidate.separator)
+			if (nd.kind == CutNode::VAR) nv++; else nc++;
+		cout << "SEPARATOR_FOUND vars=" << info.active_vars.size()
+			 << " clauses=" << info.active_clause_ids.size()
+			 << " sep=" << candidate.separator.size()
+			 << " (" << nv << "V+" << nc << "C)"
+			 << " sides=";
+		for (int s : candidate.component_var_sizes)
+			cout << s << "/";
+		cout << endl;
+	}
+
 	if (!found) {
 		separator_cache_.insertNegative(sketch);
 		return false;

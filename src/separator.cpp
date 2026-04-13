@@ -551,7 +551,7 @@ bool find_weighted_separator(
 
       int balance = min(source_vars, sink_vars);
 
-      if (balance >= min_balance / 2 && sep_score < try_best_score) {
+      if (balance >= min_balance && sep_score < try_best_score) {
         try_best_score = sep_score;
         try_best_sep = separator;
         try_best_balance = balance;

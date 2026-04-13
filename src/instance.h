@@ -115,18 +115,13 @@ protected:
 
   void markClauseRemoved(ClauseOfs cl_ofs) {
     removed_clauses_[cl_ofs]++;
-    std::cout << "    MARK_REMOVED cl=" << cl_ofs << " count=" << removed_clauses_[cl_ofs] << std::endl;
   }
 
   void unmarkClauseRemoved(ClauseOfs cl_ofs) {
     auto it = removed_clauses_.find(cl_ofs);
     if (it != removed_clauses_.end()) {
-      if (--it->second == 0) {
+      if (--it->second == 0)
         removed_clauses_.erase(it);
-        std::cout << "    UNMARK_REMOVED cl=" << cl_ofs << " count=0" << std::endl;
-      } else {
-        std::cout << "    UNMARK_REMOVED cl=" << cl_ofs << " count=" << it->second << std::endl;
-      }
     }
   }
 
