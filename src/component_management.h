@@ -60,7 +60,7 @@ public:
     if (config_.perform_component_caching) {
       Component *comp = component_stack_[stack_comp_id];
       if (comp->hasCanonicalKey()) {
-        content_cache_.store(*comp->canonical_key_, value);
+        content_cache_.store(comp->canonicalKey(), value);
       }
     }
   }
@@ -184,7 +184,7 @@ void ComponentManager::recordRemainingCompsFor(StackLevel &top) {
                continue;
              }
              // Cache miss: store key in component for later cacheModelCountOf
-             p_new_comp->setCanonicalKey(std::make_shared<CanonicalKey>(std::move(key)));
+             p_new_comp->setCanonicalKey(key);
              component_stack_.push_back(p_new_comp);
            } else {
              // Caching disabled: just store component

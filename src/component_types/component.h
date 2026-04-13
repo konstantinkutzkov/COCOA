@@ -10,11 +10,9 @@
 
 #include <assert.h>
 #include <vector>
-#include <memory>
 
 #include "../primitive_types.h"
-
-struct CanonicalKey;  // forward declaration
+#include "../canonical_key.h"
 
 using namespace std;
 
@@ -112,13 +110,16 @@ private:
   CacheEntryID id_ = 0;
 
 public:
-  // Content-based canonical key (stored via pointer to avoid circular include)
-  std::shared_ptr<CanonicalKey> canonical_key_;
+  // Content-based canonical key
+  CanonicalKey canonical_key_;
+  bool has_canonical_key_ = false;
 
-  void setCanonicalKey(std::shared_ptr<CanonicalKey> key) {
+  void setCanonicalKey(CanonicalKey key) {
     canonical_key_ = key;
+    has_canonical_key_ = true;
   }
-  bool hasCanonicalKey() const { return canonical_key_ != nullptr; }
+  bool hasCanonicalKey() const { return has_canonical_key_; }
+  const CanonicalKey &canonicalKey() const { return canonical_key_; }
 };
 
 
