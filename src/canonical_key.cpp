@@ -3,12 +3,14 @@
  *
  * Implementation of buildCanonicalKey.
  *
- * Phase B Steps 1-5:
+ * Phase B Steps 1-6:
  *   1. Singleton anonymization
  *   2. Polarity normalization
  *   3. Variable list removed (implied by clauses)
  *   4. WL iteration 0: structural variable labeling
  *   5. WL iteration 1: neighbor-label refinement (collision blocks only)
+ *   6. Collision block handling: lexicographic minimum over
+ *      within-block permutations and flip masks
  */
 
 #include "canonical_key.h"
@@ -16,12 +18,42 @@
 #include <functional>
 #include <set>
 
-// A clause descriptor from the perspective of a variable:
-// (clause_length, num_pos_nonsingleton, num_neg_nonsingleton, num_singletons, my_polarity)
 using ClauseDescriptor = std::vector<int>;
-
-// A variable's structural signature: sorted list of clause descriptors
 using VarSignature = std::vector<ClauseDescriptor>;
+
+// Maximum collision block size for exact enumeration
+// Blocks larger than this fall back to deterministic tie-breaking
+static const unsigned MAX_ENUM_BLOCK = 4;
+
+// Build a canonical clause multiset from norm_clauses using the given
+// canonical_id and flip maps. Returns a sorted vector of sorted clauses.
+static std::vector<std::vector<int>> buildClauseMultiset(
+    const std::vector<std::vector<int>> &norm_clauses,
+    const std::unordered_map<unsigned, int> &canonical_id,
+    const std::vector<bool> &extra_flip,
+    unsigned max_var) {
+
+  std::vector<std::vector<int>> result;
+  for (const auto &nc : norm_clauses) {
+    std::vector<int> canonical_lits;
+    for (int lit : nc) {
+      if (lit == SINGLETON_MARKER) {
+        canonical_lits.push_back(SINGLETON_MARKER);
+      } else {
+        unsigned v = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
+        int cid = canonical_id.at(v);
+        int canon_lit = lit > 0 ? cid : -cid;
+        if (v < extra_flip.size() && extra_flip[v])
+          canon_lit = -canon_lit;
+        canonical_lits.push_back(canon_lit);
+      }
+    }
+    std::sort(canonical_lits.begin(), canonical_lits.end(), litLess);
+    result.push_back(std::move(canonical_lits));
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
 
 CanonicalKey buildCanonicalKey(
     Component &comp,
@@ -115,7 +147,7 @@ CanonicalKey buildCanonicalKey(
     if (!is_singleton[v] && neg_count[v] > pos_count[v])
       flip[v] = true;
 
-  // Build normalized clauses (singletons replaced, polarity flipped)
+  // Build normalized clauses
   std::vector<std::vector<int>> norm_clauses;
   for (const auto &cl : raw_clauses) {
     std::vector<int> norm;
@@ -129,14 +161,13 @@ CanonicalKey buildCanonicalKey(
     norm_clauses.push_back(std::move(norm));
   }
 
-  // Collect non-singleton variables
   std::vector<unsigned> nonsingleton_vars;
   for (unsigned v : active_vars)
     if (!is_singleton[v])
       nonsingleton_vars.push_back(v);
 
   // ---------------------------------------------------------------
-  // Step 4: WL iteration 0 — compute structural signatures
+  // Step 4: WL iteration 0 — structural signatures
   // ---------------------------------------------------------------
   std::unordered_map<unsigned, VarSignature> var_signatures;
   for (unsigned v : nonsingleton_vars)
@@ -193,7 +224,6 @@ CanonicalKey buildCanonicalKey(
         j++;
 
       if (j - i > 1) {
-        // Collision block: multiple variables with same signature
         std::vector<unsigned> block;
         for (size_t k = i; k < j; k++)
           block.push_back(sig_var_pairs[k].second);
@@ -207,31 +237,23 @@ CanonicalKey buildCanonicalKey(
   }
 
   // ---------------------------------------------------------------
-  // Step 5: WL iteration 1 — refine collision block variables only
+  // Step 5: WL iteration 1 — refine collision blocks
   // ---------------------------------------------------------------
   if (!collision_blocks.empty()) {
-    // Collect which variables need refinement
     std::set<unsigned> needs_refinement;
     for (const auto &block : collision_blocks)
       for (unsigned v : block)
         needs_refinement.insert(v);
 
-    // For each variable in a collision block, compute a refined signature:
-    // (original_signature, sorted multiset of neighbor canonical IDs with edge polarity)
-    // A neighbor is a non-singleton variable that co-occurs in at least one clause.
     using RefinedSig = std::pair<VarSignature, std::vector<std::pair<int, int>>>;
-    // The second element: sorted list of (neighbor_canonical_id, my_polarity_in_shared_clause)
-
     std::unordered_map<unsigned, RefinedSig> refined_signatures;
 
     for (unsigned v : needs_refinement) {
       std::vector<std::pair<int, int>> neighbor_labels;
 
-      // Scan all clauses to find neighbors of v
       for (size_t ci = 0; ci < raw_clauses.size(); ci++) {
         const auto &raw = raw_clauses[ci];
 
-        // Check if v is in this clause
         bool v_in_clause = false;
         int v_polarity = 0;
         for (int lit : raw) {
@@ -245,12 +267,10 @@ CanonicalKey buildCanonicalKey(
         }
         if (!v_in_clause) continue;
 
-        // Collect canonical IDs of non-singleton neighbors in this clause
         for (int lit : raw) {
           unsigned lv = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
           if (lv == v || is_singleton[lv]) continue;
-          int neighbor_cid = canonical_id[lv];
-          neighbor_labels.push_back({neighbor_cid, v_polarity});
+          neighbor_labels.push_back({canonical_id[lv], v_polarity});
         }
       }
 
@@ -258,35 +278,172 @@ CanonicalKey buildCanonicalKey(
       refined_signatures[v] = {var_signatures[v], neighbor_labels};
     }
 
-    // Re-sort within each collision block using refined signatures
-    // and re-assign canonical IDs
-    for (const auto &block : collision_blocks) {
-      // Build (refined_sig, original_var) pairs for this block
-      std::vector<std::pair<RefinedSig, unsigned>> block_pairs;
-      for (unsigned v : block)
-        block_pairs.push_back({refined_signatures[v], v});
+    // Re-identify collision blocks after refinement
+    collision_blocks.clear();
+    for (const auto &block_orig : collision_blocks) { /* already cleared */ }
 
-      std::sort(block_pairs.begin(), block_pairs.end(),
-        [](const std::pair<RefinedSig, unsigned> &a,
-           const std::pair<RefinedSig, unsigned> &b) {
-          return a.first < b.first;
-        });
+    // Rebuild collision blocks from scratch using refined signatures
+    // Group all refined variables by their refined signature
+    std::vector<std::pair<RefinedSig, unsigned>> refined_pairs;
+    for (unsigned v : needs_refinement)
+      refined_pairs.push_back({refined_signatures[v], v});
 
-      // Re-assign canonical IDs for this block, starting from the
-      // lowest ID in the block
-      int base_id = canonical_id[block[0]];
-      for (const auto &bp : block_pairs) {
-        // Find the minimum current ID in the block
-        if (canonical_id[bp.second] < base_id)
-          base_id = canonical_id[bp.second];
+    std::sort(refined_pairs.begin(), refined_pairs.end(),
+      [](const std::pair<RefinedSig, unsigned> &a,
+         const std::pair<RefinedSig, unsigned> &b) {
+        return a.first < b.first;
+      });
+
+    // Re-assign IDs and find remaining collision blocks
+    {
+      size_t i = 0;
+      while (i < refined_pairs.size()) {
+        size_t j = i + 1;
+        while (j < refined_pairs.size() && refined_pairs[j].first == refined_pairs[i].first)
+          j++;
+
+        // Find base ID for this group
+        int base_id = canonical_id[refined_pairs[i].second];
+        for (size_t k = i; k < j; k++)
+          if (canonical_id[refined_pairs[k].second] < base_id)
+            base_id = canonical_id[refined_pairs[k].second];
+
+        if (j - i > 1) {
+          std::vector<unsigned> block;
+          for (size_t k = i; k < j; k++)
+            block.push_back(refined_pairs[k].second);
+          collision_blocks.push_back(block);
+        }
+
+        for (size_t k = i; k < j; k++)
+          canonical_id[refined_pairs[k].second] = base_id + (int)(k - i);
+        i = j;
       }
-      for (size_t k = 0; k < block_pairs.size(); k++)
-        canonical_id[block_pairs[k].second] = base_id + (int)k;
     }
   }
 
   // ---------------------------------------------------------------
-  // Step 6: Build final canonical key with renamed variables
+  // Step 6: Collision block enumeration
+  // ---------------------------------------------------------------
+  // For small collision blocks, enumerate all within-block permutations
+  // and flip masks for orientation-ambiguous variables.
+  // Take the lexicographic minimum clause multiset as the canonical key.
+
+  // Check if any collision blocks remain and are small enough to enumerate
+  bool need_enumeration = false;
+  for (const auto &block : collision_blocks)
+    if (block.size() >= 2 && block.size() <= MAX_ENUM_BLOCK)
+      need_enumeration = true;
+
+  if (need_enumeration) {
+    // Identify orientation-ambiguous variables in collision blocks
+    // (pos_count == neg_count after initial normalization flip)
+    std::vector<bool> is_ambiguous(max_var + 1, false);
+    for (const auto &block : collision_blocks) {
+      for (unsigned v : block) {
+        // After flip, the effective counts are swapped if flip[v]
+        int eff_pos = flip[v] ? neg_count[v] : pos_count[v];
+        int eff_neg = flip[v] ? pos_count[v] : neg_count[v];
+        if (eff_pos == eff_neg)
+          is_ambiguous[v] = true;
+      }
+    }
+
+    // Build the baseline clause multiset (no extra flips)
+    std::vector<bool> no_extra_flip(max_var + 1, false);
+    std::vector<std::vector<int>> best = buildClauseMultiset(
+        norm_clauses, canonical_id, no_extra_flip, max_var);
+
+    // For each collision block, enumerate permutations and flips
+    // We process all blocks jointly: enumerate the Cartesian product
+    // of all block permutations × flip masks
+
+    // Collect all enumerable blocks
+    struct EnumBlock {
+      std::vector<unsigned> vars;    // original var IDs in this block
+      std::vector<int> base_ids;     // their current canonical IDs
+      std::vector<bool> ambiguous;   // which are orientation-ambiguous
+    };
+    std::vector<EnumBlock> enum_blocks;
+    for (const auto &block : collision_blocks) {
+      if (block.size() < 2 || block.size() > MAX_ENUM_BLOCK) continue;
+      EnumBlock eb;
+      eb.vars = block;
+      for (unsigned v : block) {
+        eb.base_ids.push_back(canonical_id[v]);
+        eb.ambiguous.push_back(is_ambiguous[v]);
+      }
+      std::sort(eb.base_ids.begin(), eb.base_ids.end());
+      enum_blocks.push_back(std::move(eb));
+    }
+
+    // Generate all permutations for each block and try them
+    // For simplicity, enumerate one block at a time (independent blocks)
+    for (const auto &eb : enum_blocks) {
+      unsigned n = eb.vars.size();
+      unsigned n_ambiguous = 0;
+      for (bool a : eb.ambiguous) if (a) n_ambiguous++;
+
+      // Generate all permutations of the block
+      std::vector<unsigned> perm_indices(n);
+      for (unsigned i = 0; i < n; i++) perm_indices[i] = i;
+
+      do {
+        // For each permutation, try all flip masks on ambiguous vars
+        unsigned n_flip_combos = 1u << n_ambiguous;
+        for (unsigned flip_mask = 0; flip_mask < n_flip_combos; flip_mask++) {
+
+          // Apply this permutation + flip combination
+          std::unordered_map<unsigned, int> trial_id = canonical_id;
+          std::vector<bool> trial_flip(max_var + 1, false);
+
+          unsigned ambig_idx = 0;
+          for (unsigned i = 0; i < n; i++) {
+            unsigned var = eb.vars[i];
+            trial_id[var] = eb.base_ids[perm_indices[i]];
+            if (eb.ambiguous[i]) {
+              if (flip_mask & (1u << ambig_idx))
+                trial_flip[var] = true;
+              ambig_idx++;
+            }
+          }
+
+          auto candidate = buildClauseMultiset(
+              norm_clauses, trial_id, trial_flip, max_var);
+
+          if (candidate < best) {
+            best = candidate;
+            // Update canonical_id and remember flips for the best
+            for (unsigned i = 0; i < n; i++)
+              canonical_id[eb.vars[i]] = trial_id[eb.vars[i]];
+            // Store the flip in norm_clauses for final output
+            for (unsigned i = 0; i < n; i++) {
+              if (trial_flip[eb.vars[i]]) {
+                // Apply additional flip to norm_clauses
+                for (auto &nc : norm_clauses) {
+                  for (int &lit : nc) {
+                    if (lit == SINGLETON_MARKER) continue;
+                    unsigned v = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
+                    if (v == eb.vars[i])
+                      lit = -lit;
+                  }
+                }
+              }
+            }
+          }
+        }
+      } while (std::next_permutation(perm_indices.begin(), perm_indices.end()));
+    }
+
+    // Use the best clause multiset directly as the key
+    CanonicalKey key;
+    key.clauses = std::move(best);
+    key.computeHash();
+    return key;
+  }
+
+  // ---------------------------------------------------------------
+  // No enumeration needed: build key directly
   // ---------------------------------------------------------------
   CanonicalKey key;
 

@@ -309,6 +309,10 @@ debugged. The explicit equality check is valuable during development
 because hash collisions produce silent wrong answers that are hard
 to diagnose.
 
+## Future Optimization: WL iterations 
+Consider using a single WL iteration by default, i.e., only the initial labeling as it appears to be discriminative enough. 
+
+
 ---
 
 ## Files to Modify
