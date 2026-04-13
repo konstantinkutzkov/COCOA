@@ -105,13 +105,9 @@ CanonicalKey buildCanonicalKey(
   // Step 4: Build canonical key
   CanonicalKey key;
 
-  // Variable list: only non-singleton variables
-  std::vector<int> var_entry;
-  var_entry.push_back(-999999);  // marker
-  for (unsigned v : active_vars)
-    if (!is_singleton[v])
-      var_entry.push_back((int)v);
-  key.clauses.push_back(std::move(var_entry));
+  // No variable list needed: every non-singleton variable appears in
+  // at least 2 clauses (by definition), so the clause content fully
+  // determines the variable set. Singletons are anonymized.
 
   // Build clauses with singletons replaced and polarity normalized
   for (const auto &cl : raw_clauses) {
