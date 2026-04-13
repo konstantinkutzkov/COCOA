@@ -216,12 +216,6 @@ SOLVER_StateT Solver::countSAT() {
 			}
 
 			// Time check (covers all branching paths)
-			{
-				static unsigned long loop_count = 0;
-				loop_count++;
-				if (loop_count % 1000 == 0)
-					std::cerr << "[loop] " << loop_count << " dl=" << stack_.get_decision_level() << " decisions=" << statistics_.num_decisions_ << std::endl;
-			}
 			if (stopwatch_.timeBoundBroken())
 				return TIMEOUT;
 
