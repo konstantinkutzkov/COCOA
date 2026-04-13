@@ -142,7 +142,8 @@ void ComponentManager::sortComponentStackRange(unsigned start, unsigned end){
 bool ComponentManager::findNextRemainingComponentOf(StackLevel &top) {
     if (component_stack_.size() <= top.remaining_components_ofs())
       recordRemainingCompsFor(top);
-    assert(!top.branch_found_unsat());
+    if (top.branch_found_unsat())
+      return false;
     if (top.hasUnprocessedComponents())
       return true;
     top.includeSolution(1);
@@ -177,6 +178,8 @@ void ComponentManager::recordRemainingCompsFor(StackLevel &top) {
                delete p_new_comp;
                if (config_.verbose)
                  cout << "  CACHE HIT count=" << cached_count << endl;
+               if (top.branch_found_unsat())
+                 goto done_recording;  // 0-count hit → stop processing
                continue;
              }
              // Cache miss: store key in component for later cacheModelCountOf
@@ -189,6 +192,7 @@ void ComponentManager::recordRemainingCompsFor(StackLevel &top) {
          }
      }
 
+done_recording:
    top.set_unprocessed_components_end(component_stack_.size());
    sortComponentStackRange(new_comps_start_ofs, component_stack_.size());
 }
