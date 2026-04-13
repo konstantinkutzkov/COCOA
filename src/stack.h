@@ -19,11 +19,10 @@ class StackLevel {
   // offset in the literal stack where to store set lits
   const unsigned literal_stack_ofs_ = 0;
 
-public:
   //  Solutioncount
   mpz_class branch_model_count_[2] = {0,0};
   bool branch_found_unsat_[2] = {false,false};
-private:
+
 
   /// remaining Components
 
@@ -143,12 +142,10 @@ public:
     branch_found_unsat_[active_branch_] = true;
   }
 
-//  void set_both_branches_unsat(){
-//	  branch_found_unsat_[0] =
-//			  branch_found_unsat_[1] = true;
-//	  branch_model_count_[0] = branch_model_count_[1] = 0;
-//	  active_branch_ = 1;
-//  }
+  // Accessors for verbose output
+  const mpz_class &branchModelCount(int b) const { return branch_model_count_[b]; }
+  bool branchFoundUnsat(int b) const { return branch_found_unsat_[b]; }
+
   const mpz_class getTotalModelCount() const {
     if (clause_branch_) {
       // #SAT(F) = #SAT(F\{C}) - #SAT(F\{C} ∧ ¬C)
@@ -165,7 +162,7 @@ public:
 };
 
 class DecisionStack: public vector<StackLevel> {
-  unsigned int failed_literal_test_active = 0;
+  bool failed_literal_test_active = false;
 public:
 
   //begin for implicit BCP

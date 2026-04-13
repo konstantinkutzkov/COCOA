@@ -36,18 +36,6 @@ timeval StopWatch::getElapsedTime() {
 
 
 
-void Solver::print(vector<LiteralID> &vec) {
-	for (auto l : vec)
-		cout << l.toInt() << " ";
-	cout << endl;
-}
-
-void Solver::print(vector<unsigned> &vec) {
-	for (auto l : vec)
-		cout << l << " ";
-	cout << endl;
-}
-
 bool Solver::simplePreProcess() {
 
 	if (!config_.perform_pre_processing)
@@ -736,10 +724,10 @@ retStateT Solver::backtrack() {
 				cout << "CLAUSE_DONE dl=" << stack_.get_decision_level()
 					 << " cl=" << stack_.top().clauseBranchOfs()
 					 << " total=" << stack_.top().getTotalModelCount()
-					 << " b0=" << stack_.top().branch_model_count_[0]
-					 << " b1=" << stack_.top().branch_model_count_[1]
-					 << " u0=" << stack_.top().branch_found_unsat_[0]
-					 << " u1=" << stack_.top().branch_found_unsat_[1]
+					 << " b0=" << stack_.top().branchModelCount(0)
+					 << " b1=" << stack_.top().branchModelCount(1)
+					 << " u0=" << stack_.top().branchFoundUnsat(0)
+					 << " u1=" << stack_.top().branchFoundUnsat(1)
 					 << " | active_vars=" << av
 					 << " lit_stack=" << literal_stack_.size()
 					 << " removed=" << removed_clauses_.size() << endl;
@@ -788,11 +776,6 @@ retStateT Solver::resolveConflict() {
 
 	assert(uip_clauses_.size() == 1);
 
-	// DEBUG
-	if (uip_clauses_.back().size() == 0)
-		cout << " EMPTY CLAUSE FOUND" << endl;
-	// END DEBUG
-
 	stack_.top().mark_branch_unsat();
 	//BEGIN Backtracking
 	// maybe the other branch had some solutions
@@ -813,16 +796,6 @@ retStateT Solver::resolveConflict() {
 				uip_clauses_.back());
 		ant = var(TOS_decLit()).ante;
 	}
-//	// RRR
-//	else if(var(uip_clauses_.back().front()).decision_level
-//			< stack_.get_decision_level()
-//			&& assertion_level_ <  stack_.get_decision_level()){
-//         stack_.top().set_both_branches_unsat();
-//         return BACKTRACK;
-//	}
-//
-//
-//	// RRR
 	assert(stack_.get_decision_level() > 0);
 	assert(stack_.top().branch_found_unsat());
 
@@ -911,71 +884,9 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 	return true;
 }
 
-//bool Solver::implicitBCP() {
-//  static vector<LiteralID> test_lits(num_variables());
-//  static LiteralIndexedVector<unsigned char> viewed_lits(num_variables() + 1,
-//      0);
-//
-//  unsigned stack_ofs = stack_.top().literal_stack_ofs();
-//  while (stack_ofs < literal_stack_.size()) {
-//    test_lits.clear();
-//    for (auto it = literal_stack_.begin() + stack_ofs;
-//        it != literal_stack_.end(); it++) {
-//      for (auto cl_ofs : occurrence_lists_[it->neg()])
-//        if (!isSatisfied(cl_ofs)) {
-//          for (auto lt = beginOf(cl_ofs); *lt != SENTINEL_LIT; lt++)
-//            if (isActive(*lt) && !viewed_lits[lt->neg()]) {
-//              test_lits.push_back(lt->neg());
-//              viewed_lits[lt->neg()] = true;
-//
-//            }
-//        }
-//    }
-//
-//    stack_ofs = literal_stack_.size();
-//    for (auto jt = test_lits.begin(); jt != test_lits.end(); jt++)
-//      viewed_lits[*jt] = false;
-//
-//    statistics_.num_failed_literal_tests_ += test_lits.size();
-//
-//    for (auto lit : test_lits)
-//      if (isActive(lit)) {
-//        unsigned sz = literal_stack_.size();
-//        // we increase the decLev artificially
-//        // s.t. after the tentative BCP call, we can learn a conflict clause
-//        // relative to the assignment of *jt
-//        stack_.startFailedLitTest();
-//        setLiteralIfFree(lit);
-//
-//        assert(!hasAntecedent(lit));
-//
-//        bool bSucceeded = BCP(sz);
-//        if (!bSucceeded)
-//          recordAllUIPCauses();
-//
-//        stack_.stopFailedLitTest();
-//
-//        while (literal_stack_.size() > sz) {
-//          unSet(literal_stack_.back());
-//          literal_stack_.pop_back();
-//        }
-//
-//        if (!bSucceeded) {
-//        	statistics_.num_failed_literals_detected_++;
-//          sz = literal_stack_.size();
-//          for (auto it = uip_clauses_.rbegin(); it != uip_clauses_.rend();
-//              it++) {
-//            setLiteralIfFree(it->front(), addUIPConflictClause(*it));
-//          }
-//          if (!BCP(sz))
-//            return false;
-//        }
-//      }
-//  }
-//  return true;
-//}
-
-// this is IBCP 30.08
+// IBCP (implicit BCP / failed literal testing)
+// Disabled when separator branching is active — learned clauses can
+// create cross-component connections that invalidate the decomposition.
 bool Solver::implicitBCP() {
 	static vector<LiteralID> test_lits(num_variables());
 	static LiteralIndexedVector<unsigned char> viewed_lits(num_variables() + 1,
@@ -1054,8 +965,6 @@ bool Solver::implicitBCP() {
 					sz = literal_stack_.size();
 					for (auto it = uip_clauses_.rbegin();
 							it != uip_clauses_.rend(); it++) {
-						if (it->size() == 0)
-							cout << "EMPTY CLAUSE FOUND" << endl;
 						setLiteralIfFree(it->front(),
 								addUIPConflictClause(*it));
 					}
@@ -1065,36 +974,6 @@ bool Solver::implicitBCP() {
 			}
 	}
 
-	// BEGIN TEST
-//	float max_score = -1;
-//	float score;
-//	unsigned max_score_var = 0;
-//	for (auto it =
-//			component_analyzer_.superComponentOf(stack_.top()).varsBegin();
-//			*it != varsSENTINEL; it++)
-//		if (isActive(*it)) {
-//			score = scoreOf(*it);
-//			if (score > max_score) {
-//				max_score = score;
-//				max_score_var = *it;
-//			}
-//		}
-//	LiteralID theLit(max_score_var,
-//			literal(LiteralID(max_score_var, true)).activity_score_
-//					> literal(LiteralID(max_score_var, false)).activity_score_);
-//	if (!fail_test(theLit.neg())) {
-//		cout << ".";
-//
-//		statistics_.num_failed_literals_detected_++;
-//		unsigned sz = literal_stack_.size();
-//		for (auto it = uip_clauses_.rbegin(); it != uip_clauses_.rend(); it++) {
-//			setLiteralIfFree(it->front(), addUIPConflictClause(*it));
-//		}
-//		if (!BCP(sz))
-//			return false;
-//
-//	}
-	// END
 	return true;
 }
 
@@ -1188,9 +1067,6 @@ void Solver::recordLastUIPCauses() {
 			if (!hasAntecedent(curr_lit)) {
 				// this should be the decision literal when in first branch
 				// or it is a literal decided to explore in failed literal testing
-				//assert(stack_.TOS_decLit() == curr_lit);
-//				cout << "R" << curr_lit.toInt() << "S"
-//				     << var(curr_lit).ante.isAnt() << " "  << endl;
 				break;
 			}
 		}
@@ -1229,13 +1105,7 @@ void Solver::recordLastUIPCauses() {
 		curr_lit = NOT_A_LIT;
 	}
 
-//	cout << "T" << curr_lit.toInt() << "U "
-//     << var(curr_lit).decision_level << ", " << stack_.get_decision_level() << endl;
-//	cout << "V"  << var(curr_lit).ante.isAnt() << " "  << endl;
 	minimizeAndStoreUIPClause(curr_lit.neg(), tmp_clause, seen);
-
-//	if (var(curr_lit).decision_level > assertion_level_)
-//		assertion_level_ = var(curr_lit).decision_level;
 }
 
 void Solver::recordAllUIPCauses() {

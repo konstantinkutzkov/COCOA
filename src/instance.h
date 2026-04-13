@@ -133,7 +133,6 @@ protected:
         getHeaderOf(clause_ofs).decayScore();
 
   }
-//  void decayActivities();
 
   void updateActivities(ClauseOfs clause_ofs) {
     getHeaderOf(clause_ofs).increaseScore();

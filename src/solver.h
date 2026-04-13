@@ -208,9 +208,6 @@ private:
 
 	void printOnlineStats();
 
-	void print(vector<LiteralID> &vec);
-	void print(vector<unsigned> &vec);
-
 
 	void setConflictState(LiteralID litA, LiteralID litB) {
 		violated_clause.clear();
