@@ -232,6 +232,14 @@ SOLVER_StateT Solver::countSAT() {
 							goto do_bcp;
 						}
 					}
+					// No matching element for this component —
+					// if all elements are used, clear separator
+					// so sub-components can find their own
+					bool all_used = true;
+					for (size_t i = 0; i < separator_used_.size(); i++)
+						if (!separator_used_[i]) { all_used = false; break; }
+					if (all_used)
+						clearSeparator();
 				}
 
 				// Try to find a new separator for this component
