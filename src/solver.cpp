@@ -493,14 +493,15 @@ bool Solver::tryInstallSeparator(Component &comp) {
 		return true;
 	}
 
-	// Stage 3: Full mincut discovery
+	// Stage 3: Weighted bipartite separator discovery
 	SeparatorCandidate candidate;
-	bool found = find_best_separator(
+	bool found = find_weighted_separator(
 		info, candidate,
 		config_.separator_tries,
 		statistics_.num_decisions_,
-		config_.separator_min_second_comp,
-		config_.separator_max_size);
+		0,   // min_balance (auto: n_vars/4)
+		30,  // max_iterations
+		30); // walks_per_iteration
 
 	if (!found) {
 		separator_cache_.insertNegative(sketch);

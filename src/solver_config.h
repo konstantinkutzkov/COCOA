@@ -34,7 +34,7 @@ struct SolverConfiguration {
   // to select variables and clauses for branching
   bool perform_separator_branching = false;
   unsigned separator_min_active_vars = 15;
-  unsigned separator_max_size = 12;
+  unsigned separator_max_size = 30;
   unsigned separator_tries = 12;
   unsigned separator_min_second_comp = 12;
 };

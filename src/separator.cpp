@@ -8,6 +8,7 @@
 
 #include <unordered_map>
 #include <cmath>
+#include <random>
 
 using namespace std;
 
@@ -396,4 +397,242 @@ bool find_best_separator(
   }
 
   return found;
+}
+
+
+// ---------- Weighted bipartite separator ----------
+
+bool find_weighted_separator(
+    const FormulaInfo &info,
+    SeparatorCandidate &result,
+    int tries,
+    int seed,
+    int min_balance,
+    int max_iterations,
+    int walks_per_iteration)
+{
+  int n_vars = info.active_vars.size();
+  int n_cls = info.active_clause_ids.size();
+  int n_nodes = n_vars + n_cls;
+
+  if (n_vars < 4 || n_cls == 0)
+    return false;
+
+  if (min_balance <= 0)
+    min_balance = max(2, n_vars / 4);
+
+  // Build adjacency for random walks
+  vector<vector<int>> adj(n_nodes);
+  for (int ci = 0; ci < n_cls; ci++) {
+    int c_node = n_vars + ci;
+    for (unsigned vid : info.clause_variables[ci]) {
+      auto it = info.var_id_to_idx.find(vid);
+      if (it == info.var_id_to_idx.end()) continue;
+      adj[it->second].push_back(c_node);
+      adj[c_node].push_back(it->second);
+    }
+  }
+
+  // Variable degrees (for binary clause replacement)
+  vector<int> var_degree(n_vars, 0);
+  for (int ci = 0; ci < n_cls; ci++)
+    for (unsigned vid : info.clause_variables[ci]) {
+      auto it = info.var_id_to_idx.find(vid);
+      if (it != info.var_id_to_idx.end())
+        var_degree[it->second]++;
+    }
+
+  auto n_in = [](int i) { return 2 * i; };
+  auto n_out = [](int i) { return 2 * i + 1; };
+
+  int var_cap = 100;
+
+  // Compute clause capacities based on length
+  vector<int> clause_cap(n_cls);
+  for (int ci = 0; ci < n_cls; ci++) {
+    int cl_len = info.clause_variables[ci].size();
+    if (cl_len <= 2) {
+      clause_cap[ci] = var_cap * 3 / 2;  // binary: more expensive than variable
+    } else {
+      double cost = (log(3.0) / log((double)cl_len))
+                  * (1.0 - (double)cl_len / n_vars);
+      clause_cap[ci] = max(1, (int)(var_cap * cost));
+    }
+  }
+
+  bool found = false;
+  float best_score = 1e9;
+
+  for (int tri = 0; tri < tries; tri++) {
+    auto terminals = pick_terminals_two_sweep(info, seed + tri);
+    int s_idx = info.var_id_to_idx.at(terminals.first.id);
+    int t_idx = info.var_id_to_idx.at(terminals.second.id);
+
+    vector<bool> source_set(n_nodes, false);
+    vector<bool> sink_set(n_nodes, false);
+    source_set[s_idx] = true;
+    sink_set[t_idx] = true;
+
+    mt19937 rng(seed + tri * 1000 + 42);
+
+    float try_best_score = 1e9;
+    vector<CutNode> try_best_sep;
+    int try_best_balance = 0;
+    vector<int> try_best_sizes;
+
+    for (int iter = 0; iter < max_iterations; iter++) {
+      Dinic dinic(2 * n_nodes);
+
+      // Node capacities
+      for (int i = 0; i < n_vars; i++) {
+        int cap = (source_set[i] || sink_set[i]) ? INF_CAP : var_cap;
+        dinic.add_edge(n_in(i), n_out(i), cap);
+      }
+      for (int j = 0; j < n_cls; j++) {
+        int nj = n_vars + j;
+        int cap = (source_set[nj] || sink_set[nj]) ? INF_CAP : clause_cap[j];
+        dinic.add_edge(n_in(nj), n_out(nj), cap);
+      }
+
+      // Incidence edges
+      for (int ci = 0; ci < n_cls; ci++) {
+        int c_node = n_vars + ci;
+        for (unsigned vid : info.clause_variables[ci]) {
+          auto it = info.var_id_to_idx.find(vid);
+          if (it == info.var_id_to_idx.end()) continue;
+          dinic.add_edge(n_out(it->second), n_in(c_node), INF_CAP);
+          dinic.add_edge(n_out(c_node), n_in(it->second), INF_CAP);
+        }
+      }
+
+      // Random walk virtual edges
+      int walk_len = 4 + (iter % 4) * 2;
+      for (int w = 0; w < walks_per_iteration; w++) {
+        int start = rng() % n_nodes;
+        int current = start;
+        for (int step = 0; step < walk_len; step++) {
+          if (adj[current].empty()) break;
+          current = adj[current][rng() % adj[current].size()];
+        }
+        if (current != start) {
+          dinic.add_edge(n_out(start), n_in(current), 1);
+          dinic.add_edge(n_out(current), n_in(start), 1);
+        }
+      }
+
+      int flow = dinic.max_flow(n_out(s_idx), n_in(t_idx), n_nodes * var_cap);
+      auto reach = dinic.reachable_from(n_out(s_idx));
+
+      // Extract separator and count variable balance
+      vector<CutNode> separator;
+      int source_vars = 0, sink_vars = 0;
+      float sep_score = 0;
+
+      for (int i = 0; i < n_vars; i++) {
+        if (reach[n_in(i)] && !reach[n_out(i)]) {
+          separator.push_back(CutNode(CutNode::VAR, info.active_vars[i]));
+          sep_score += 1.0f;
+        }
+        else if (reach[n_out(i)]) source_vars++;
+        else sink_vars++;
+      }
+      for (int j = 0; j < n_cls; j++) {
+        int nj = n_vars + j;
+        if (reach[n_in(nj)] && !reach[n_out(nj)]) {
+          separator.push_back(CutNode(CutNode::CLAUSE, info.active_clause_ids[j]));
+          int cl_len = info.clause_variables[j].size();
+          if (cl_len <= 2)
+            sep_score += 1.5f;
+          else
+            sep_score += (float)(log(3.0) / log((double)cl_len)
+                        * (1.0 - (double)cl_len / n_vars));
+        }
+      }
+
+      int balance = min(source_vars, sink_vars);
+
+      if (balance >= min_balance / 2 && sep_score < try_best_score) {
+        try_best_score = sep_score;
+        try_best_sep = separator;
+        try_best_balance = balance;
+        try_best_sizes = {max(source_vars, sink_vars), balance};
+      }
+
+      if (balance >= min_balance) break;
+
+      // Absorb small side + separator into smaller terminal set
+      bool source_is_small = (source_vars <= sink_vars);
+      for (int i = 0; i < n_vars; i++) {
+        bool in_sep = reach[n_in(i)] && !reach[n_out(i)];
+        bool in_source = reach[n_out(i)];
+        if (source_is_small) {
+          if (in_source || in_sep) source_set[i] = true;
+        } else {
+          if (!in_source && !in_sep) sink_set[i] = true;
+          if (in_sep) sink_set[i] = true;
+        }
+      }
+      for (int j = 0; j < n_cls; j++) {
+        int nj = n_vars + j;
+        if (reach[n_in(nj)] && !reach[n_out(nj)]) {
+          if (source_is_small) source_set[nj] = true;
+          else sink_set[nj] = true;
+        }
+      }
+    }
+
+    if (try_best_balance > 0 && try_best_score < best_score) {
+      best_score = try_best_score;
+      result.separator = try_best_sep;
+      result.component_var_sizes = try_best_sizes;
+      result.flow_value = (int)try_best_score;
+      result.s = terminals.first;
+      result.t = terminals.second;
+      result.tries_used = tri + 1;
+      found = true;
+    }
+  }
+
+  if (!found) return false;
+
+  // Post-processing: replace binary clauses with variables
+  set<unsigned> sep_var_ids;
+  for (const auto &nd : result.separator)
+    if (nd.kind == CutNode::VAR)
+      sep_var_ids.insert(nd.id);
+
+  vector<CutNode> cleaned;
+  for (const auto &nd : result.separator) {
+    if (nd.kind == CutNode::CLAUSE) {
+      int ci = info.cls_id_to_idx.at(nd.id);
+      if (info.clause_variables[ci].size() <= 2) {
+        // Replace binary clause with higher-degree variable
+        unsigned best_var = 0;
+        int best_deg = -1;
+        for (unsigned vid : info.clause_variables[ci]) {
+          auto it = info.var_id_to_idx.find(vid);
+          if (it == info.var_id_to_idx.end()) continue;
+          if (!sep_var_ids.count(vid) && var_degree[it->second] > best_deg) {
+            best_deg = var_degree[it->second];
+            best_var = vid;
+          }
+        }
+        if (best_var > 0 && !sep_var_ids.count(best_var)) {
+          cleaned.push_back(CutNode(CutNode::VAR, best_var));
+          sep_var_ids.insert(best_var);
+        }
+        // else: both vars already in separator, clause is redundant
+        continue;
+      }
+    }
+    cleaned.push_back(nd);
+  }
+  result.separator = cleaned;
+
+  // Update component sizes
+  auto sizes = verify_separator(info, result.separator, 1);
+  if (!sizes.empty())
+    result.component_var_sizes = sizes;
+
+  return true;
 }

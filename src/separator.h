@@ -120,7 +120,7 @@ std::vector<int> verify_separator(
     const std::vector<CutNode> &candidate,
     int min_second_component_vars = 5);
 
-// ---- Main entry point ----
+// ---- Main entry point (original) ----
 
 // Find the best separator by probing multiple terminal pairs.
 // Returns true and fills result if a good separator is found.
@@ -133,5 +133,20 @@ bool find_best_separator(
     int max_separator_size = 12,
     int early_stop_size = 2,
     int flow_cap_nodes = 12);
+
+// ---- Weighted bipartite separator (improved) ----
+
+// Find a balanced separator on the incidence graph with weighted
+// node capacities. Clause nodes have lower capacity based on length:
+// cost = log(3)/log(k) * (1 - k/n_vars). Binary clauses in the
+// result are post-processed into variable branches.
+bool find_weighted_separator(
+    const FormulaInfo &info,
+    SeparatorCandidate &result,
+    int tries = 10,
+    int seed = 0,
+    int min_balance = 0,         // 0 = auto (n_vars/4)
+    int max_iterations = 30,
+    int walks_per_iteration = 30);
 
 #endif /* SEPARATOR_H_ */
