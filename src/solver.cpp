@@ -361,6 +361,8 @@ void Solver::decideLiteral() {
 }
 
 void Solver::decideClause(ClauseOfs cl_ofs) {
+	assert(!isClauseRemoved(cl_ofs) && "Cannot branch on already removed clause");
+	assert(!isSatisfied(cl_ofs) && "Cannot branch on satisfied clause");
 	if (config_.verbose) {
 		unsigned active_vars = 0;
 		for (unsigned v = 1; v < variables_.size(); v++)
@@ -382,6 +384,7 @@ void Solver::decideClause(ClauseOfs cl_ofs) {
 
 	// Mark clause as removed (BCP and component analyzer will skip it)
 	markClauseRemoved(cl_ofs);
+	assert(isClauseRemoved(cl_ofs));
 
 	statistics_.num_decisions_++;
 	// Branch 1: clause removed, no literal assignments, no BCP needed
@@ -552,9 +555,10 @@ bool Solver::tryInstallSeparator(Component &comp) {
 		return false;
 	}
 
-	// Compute partition for cache storage (for future repair)
+	// Verify separator actually disconnects the graph
 	std::set<CutNode> removed_set(candidate.separator.begin(), candidate.separator.end());
 	auto comps = components_after_removing(info, removed_set);
+	assert(comps.size() >= 2 && "Separator must disconnect the graph");
 
 	// Partition A = largest component vars, B = union of rest
 	std::set<unsigned> partition_a, partition_b;
@@ -625,6 +629,7 @@ int Solver::findMatchingSeparatorElement(Component &comp) {
 }
 
 void Solver::decideSeparatorVariable(VariableIndex var) {
+	assert(isActive(LiteralID(var, true)) && "Separator variable must be active");
 	if (config_.verbose)
 		cout << "SEP_VAR_BRANCH dl=" << stack_.get_decision_level()
 			 << " var=" << var << endl;
@@ -735,6 +740,7 @@ retStateT Solver::backtrack() {
 			unmarkClauseRemoved(stack_.top().clauseBranchOfs());
 		}
 
+		assert(stack_.top().getTotalModelCount() >= 0);
 		comp_manager_.cacheModelCountOf(stack_.top().super_component(),
 				stack_.top().getTotalModelCount());
 

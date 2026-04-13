@@ -109,6 +109,7 @@ public:
     return literal_stack_ofs_;
   }
   void includeSolution(const mpz_class &solutions) {
+    assert(solutions >= 0);
     if (branch_found_unsat_[active_branch_]) {
       assert(branch_model_count_[active_branch_] == 0);
       return;
@@ -119,7 +120,6 @@ public:
       branch_model_count_[active_branch_] = solutions;
     else
       branch_model_count_[active_branch_] *= solutions;
-
   }
   void includeSolution(unsigned solutions) {
     if (branch_found_unsat_[active_branch_]) {

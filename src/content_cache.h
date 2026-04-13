@@ -13,6 +13,7 @@
 #define CONTENT_CACHE_H_
 
 #include <unordered_map>
+#include <cassert>
 #include <gmpxx.h>
 
 #include "canonical_key.h"
@@ -31,6 +32,7 @@ public:
   }
 
   void store(const CanonicalKey &key, const mpz_class &count) {
+    assert(count >= 0 && "Cached count must be non-negative");
     if (max_entries > 0 && cache_.size() >= max_entries)
       evict();
     cache_[key] = count;
