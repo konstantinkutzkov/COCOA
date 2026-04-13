@@ -74,28 +74,38 @@ CanonicalKey buildCanonicalKey(
   }
 
   // Step 3: Count occurrences per variable for singleton detection
-  std::unordered_map<unsigned, int> occurrence_count;
-  for (unsigned v : active_vars)
-    occurrence_count[v] = 0;
+  // and polarity normalization
+  std::unordered_map<unsigned, int> pos_count, neg_count;
+  for (unsigned v : active_vars) {
+    pos_count[v] = 0;
+    neg_count[v] = 0;
+  }
 
   for (const auto &cl : raw_clauses) {
     for (int lit : cl) {
       unsigned v = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
-      occurrence_count[v]++;
+      if (lit > 0) pos_count[v]++;
+      else neg_count[v]++;
     }
   }
 
   // Singletons: variables with exactly 1 total occurrence
   std::vector<bool> is_singleton(max_var + 1, false);
-  for (const auto &oc : occurrence_count)
-    if (oc.second == 1)
-      is_singleton[oc.first] = true;
+  for (unsigned v : active_vars)
+    if (pos_count[v] + neg_count[v] == 1)
+      is_singleton[v] = true;
+
+  // Polarity normalization: flip non-singleton variables where
+  // negative occurrences > positive occurrences
+  std::vector<bool> flip(max_var + 1, false);
+  for (unsigned v : active_vars)
+    if (!is_singleton[v] && neg_count[v] > pos_count[v])
+      flip[v] = true;
 
   // Step 4: Build canonical key
   CanonicalKey key;
 
   // Variable list: only non-singleton variables
-  // (singletons are captured by SINGLETON_MARKER in their clause)
   std::vector<int> var_entry;
   var_entry.push_back(-999999);  // marker
   for (unsigned v : active_vars)
@@ -103,15 +113,16 @@ CanonicalKey buildCanonicalKey(
       var_entry.push_back((int)v);
   key.clauses.push_back(std::move(var_entry));
 
-  // Build clauses with singletons replaced
+  // Build clauses with singletons replaced and polarity normalized
   for (const auto &cl : raw_clauses) {
     std::vector<int> canonical_lits;
     for (int lit : cl) {
       unsigned v = lit > 0 ? (unsigned)lit : (unsigned)(-lit);
-      if (is_singleton[v])
+      if (is_singleton[v]) {
         canonical_lits.push_back(SINGLETON_MARKER);
-      else
-        canonical_lits.push_back(lit);
+      } else {
+        canonical_lits.push_back(flip[v] ? -lit : lit);
+      }
     }
     std::sort(canonical_lits.begin(), canonical_lits.end(), litLess);
     key.clauses.push_back(std::move(canonical_lits));
