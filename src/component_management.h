@@ -164,6 +164,7 @@ void ComponentManager::recordRemainingCompsFor(StackLevel &top) {
            Component *p_new_comp = ana_.makeComponentFromArcheType();
 
            // Build canonical key and try content cache
+           unsigned comp_vars = p_new_comp->num_variables();
            if (config_.perform_component_caching && literals_ && lit_pool_) {
              static const std::unordered_map<ClauseOfs, unsigned> empty_removed;
              const auto &rm = removed_clauses_ ? *removed_clauses_ : empty_removed;

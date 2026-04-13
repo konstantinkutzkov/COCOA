@@ -215,6 +215,16 @@ SOLVER_StateT Solver::countSAT() {
 				}
 			}
 
+			// Time check (covers all branching paths)
+			{
+				static unsigned long loop_count = 0;
+				loop_count++;
+				if (loop_count % 1000 == 0)
+					std::cerr << "[loop] " << loop_count << " dl=" << stack_.get_decision_level() << " decisions=" << statistics_.num_decisions_ << std::endl;
+			}
+			if (stopwatch_.timeBoundBroken())
+				return TIMEOUT;
+
 			// --- Separator branching ---
 			if (config_.perform_separator_branching) {
 				Component &curr_comp = comp_manager_.currentRemainingComponentOf(stack_.top());

@@ -32,30 +32,33 @@ class Component;  // forward declaration
 static const int SINGLETON_MARKER = 0;
 
 struct CanonicalKey {
-  std::vector<std::vector<int>> clauses;
-  size_t hash = 0;
+  size_t hash1 = 14695981039346656037ULL;
+  size_t hash2 = 6364136223846793005ULL;
+  std::vector<std::vector<int>> clauses;  // TODO: remove after debugging
 
   bool operator==(const CanonicalKey &other) const {
-    return clauses == other.clauses;
+    return hash1 == other.hash1 && hash2 == other.hash2
+           && clauses == other.clauses;
   }
 
   void computeHash() {
-    // FNV-1a
-    size_t h = 14695981039346656037ULL;
+    hash1 = 14695981039346656037ULL;
+    hash2 = 6364136223846793005ULL;
+    // XOR per-clause hashes for order independence
     for (const auto &cl : clauses) {
+      size_t ch1 = 0, ch2 = 0;
       for (int lit : cl) {
-        h ^= (size_t)(unsigned)lit;
-        h *= 1099511628211ULL;
+        ch1 = ch1 * 1099511628211ULL ^ (size_t)(unsigned)lit;
+        ch2 = ch2 * 14695981039346656037ULL ^ (size_t)(unsigned)lit;
       }
-      h ^= 0xFFFFFFFFU;
-      h *= 1099511628211ULL;
+      hash1 ^= ch1;
+      hash2 ^= ch2;
     }
-    hash = h;
   }
 };
 
 struct CanonicalKeyHash {
-  size_t operator()(const CanonicalKey &k) const { return k.hash; }
+  size_t operator()(const CanonicalKey &k) const { return k.hash1; }
 };
 
 // Comparison for sorting literals: by variable ID, positive before negative
