@@ -13,6 +13,8 @@
 #include "containers.h"
 
 #include <assert.h>
+#include <set>
+#include <unordered_map>
 #include <unordered_set>
 
 class Instance {
@@ -110,6 +112,41 @@ protected:
   // Handled like satisfied clauses: stay in watch lists, skipped by BCP.
   std::unordered_map<ClauseOfs, unsigned> removed_clauses_;
 
+  // Scope of each learned clause: the set of clauses that were removed
+  // (via clause branching) at the moment this clause was learned.
+  //
+  // Soundness: let S_learn = scope stored at learn time and S_use =
+  // removed_clauses_ at use time. D was derived from F\S_learn, so
+  // F\S_learn ⊨ D. The current formula F\S_use entails D iff
+  //   S_use ⊆ S_learn,
+  // because then F\S_use ⊇ F\S_learn (use has more constraints),
+  // MODELS(F\S_use) ⊆ MODELS(F\S_learn), and every model of F\S_use
+  // satisfies D.
+  //
+  // Only tracked for non-binary learned clauses (binary ones have no
+  // ClauseOfs). Clauses with no entry in the map are assumed to have
+  // been learned at empty scope (sound only when S_use is also empty).
+  std::unordered_map<ClauseOfs, std::set<ClauseOfs>> learned_clause_scope_;
+
+  // True iff the learned clause at cl_ofs is sound under the current
+  // removed_clauses_. Requires current_removed ⊆ stored_scope.
+  // Non-learned clauses (ofs < original_lit_pool_size_) are always
+  // sound; caller should check that first.
+  bool learnedClauseInScope(ClauseOfs cl_ofs) const {
+    auto it = learned_clause_scope_.find(cl_ofs);
+    // Treat "no entry" as scope = empty set; then we need
+    // current_removed ⊆ ∅, i.e. current_removed is empty.
+    if (it == learned_clause_scope_.end())
+      return removed_clauses_.empty();
+    const auto &scope = it->second;
+    // Every currently-removed clause must be in scope.
+    for (const auto &p : removed_clauses_) {
+      if (scope.count(p.first) == 0)
+        return false;
+    }
+    return true;
+  }
+
   bool isClauseRemoved(ClauseOfs cl_ofs) const {
     return removed_clauses_.count(cl_ofs) > 0;
   }
@@ -176,6 +213,14 @@ protected:
   // and returns it as an Antecedent to the first
   // literal stored in literals
   inline Antecedent addUIPConflictClause(vector<LiteralID> &literals);
+  // Scoped variant: records the set of clauses currently in removed_clauses_
+  // as the scope of the learned clause. BCP will skip this clause whenever
+  // the scope is not a subset of the current removed_clauses_.
+  //
+  // If the learned clause would be binary (size < 3), this is a no-op: we
+  // can't key scope onto binary clauses (they have no ClauseOfs). The caller
+  // should check uip_clauses_.back().size() >= 3 if they want a scoped learn.
+  inline Antecedent addScopedUIPConflictClause(vector<LiteralID> &literals);
 
   inline bool addBinaryClause(LiteralID litA, LiteralID litB);
 
@@ -268,6 +313,32 @@ Antecedent Instance::addUIPConflictClause(vector<LiteralID> &literals) {
       statistics_.num_binary_conflict_clauses_++;
     } else if (literals.size() == 1)
       statistics_.num_unit_clauses_++;
+    return ante;
+  }
+
+Antecedent Instance::addScopedUIPConflictClause(vector<LiteralID> &literals) {
+    // Only non-binary clauses get scope tracking.
+    // Binary/unit learned clauses would need scope too, but they have no
+    // ClauseOfs to key on. Skip them under scope tracking.
+    if (literals.size() < 3)
+      return Antecedent(NOT_A_CLAUSE);
+
+    Antecedent ante(NOT_A_CLAUSE);
+    statistics_.num_clauses_learned_++;
+    ClauseOfs cl_ofs = addClause(literals);
+    if (cl_ofs != 0) {
+      conflict_clauses_.push_back(cl_ofs);
+      getHeaderOf(cl_ofs).set_length(literals.size());
+      ante = Antecedent(cl_ofs);
+      // Record scope = current removed_clauses_ key set.
+      if (!removed_clauses_.empty()) {
+        std::set<ClauseOfs> scope;
+        for (const auto &p : removed_clauses_) scope.insert(p.first);
+        learned_clause_scope_.emplace(cl_ofs, std::move(scope));
+      }
+      // If removed_clauses_ is empty, scope is {} — unconditionally sound,
+      // no entry needed in learned_clause_scope_.
+    }
     return ante;
   }
 

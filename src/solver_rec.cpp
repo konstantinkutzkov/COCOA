@@ -386,6 +386,13 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		return solveComponent(comp, separator, separator_reset);
 	}
 
+	// Push a placeholder StackLevel BEFORE setLiteralIfFree so:
+	//   - setLiteralIfFree records decision_level = this level (not 0)
+	//   - recordLastUIPCauses can identify "current dl" on conflict
+	// We pop at the end regardless of outcome.
+	stack_.push_back(StackLevel(1, lit_save,
+	                            comp_manager_.component_stack_size()));
+
 	setLiteralIfFree(lit);
 
 	bool bcp_ok = BCP(lit_save);
@@ -393,19 +400,20 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 	mpz_class result;
 	if (!bcp_ok) {
 		statistics_.num_conflicts_++;
-		// Clause learning intentionally disabled here.
-		// Context: learned clauses are sound for the formula they were
-		// derived from, but not necessarily for SIBLING sub-formulas
-		// (different removed_clauses_ sets) OR for the content cache
-		// (which keys on original clauses only; cached counts computed
-		// with learned clauses active may differ from counts of the
-		// same sub-component when different learned clauses are active).
-		// Solving this properly requires either:
-		//   - scoping learned clauses to their derivation context
-		//     (delete on exit from clause-branch subtree), or
-		//   - including learned-clause state in the canonical key, or
-		//   - disabling cache when learned clauses are present.
-		// Left as future work.
+		// Scoped conflict clause learning.
+		// The learned clause D is derived from the current removed set R.
+		// BCP will only use D in contexts where scope(D) = R ⊆ current
+		// removed set — keeping D sound across sibling branches and
+		// compatible with content caching (for in-scope contexts the
+		// cached count #SAT(F∖R ∧ D) = #SAT(F∖R) because F∖R ⊨ D).
+		//
+		// Order matters: conflict analysis walks literal_stack_ backward
+		// via antecedents, so it must run BEFORE we truncate the stack.
+		recordLastUIPCauses();
+		if (!uip_clauses_.empty() && uip_clauses_.back().size() >= 3
+		    && uip_clauses_.back().front() == lit.neg()) {
+			addScopedUIPConflictClause(uip_clauses_.back());
+		}
 		result = 0;
 	} else {
 		result = solveComponent(comp, separator, separator_reset);
@@ -415,6 +423,7 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		unSet(literal_stack_.back());
 		literal_stack_.pop_back();
 	}
+	stack_.pop_back();
 	return result;
 }
 
@@ -426,12 +435,25 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 	unsigned lit_save = literal_stack_.size();
 	statistics_.num_decisions_++;
 
+	// Push a StackLevel so the literals set below (by clause removal or
+	// clause negation) get decision_level >= 1 rather than 0.
+	//
+	// Why this matters: the CDCL conflict analyzer (recordLastUIPCauses)
+	// silently IGNORES DL=0 literals — treating them as globally-fixed
+	// unit-propagated assumptions. That's correct for original unit
+	// clauses but WRONG for the negated-clause literals we set in
+	// branch 2 of clause branching: those are temporary and may not hold
+	// in sibling/ancestor contexts. By putting them at DL>=1, conflict
+	// analysis handles them correctly (their negations end up in the
+	// learned clause when they contribute to a conflict).
+	stack_.push_back(StackLevel(1, lit_save,
+	                            comp_manager_.component_stack_size()));
+
 	// Mark clause as removed
 	markClauseRemoved(cl_ofs);
 
 	bool conflict = false;
 	if (negate_literals) {
-		// Branch 2: set negation of each literal in the clause.
 		for (auto it = beginOf(cl_ofs); *it != SENTINEL_LIT; it++) {
 			if (isSatisfied(*it)) {
 				conflict = true;
@@ -466,6 +488,7 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 		literal_stack_.pop_back();
 	}
 	unmarkClauseRemoved(cl_ofs);
+	stack_.pop_back();
 	return result;
 }
 

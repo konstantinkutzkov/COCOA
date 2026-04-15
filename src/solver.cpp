@@ -884,6 +884,14 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 
 			if (isSatisfied(*p_otherLit) || isClauseRemoved(*itcl))
 				continue;
+			// Scope check for learned clauses: if a learned clause was
+			// derived when some clauses C were removed, it's only sound
+			// in contexts where all of C are still removed. Otherwise
+			// skip — treat the clause as absent for BCP purposes.
+			// (Non-learned clauses have no scope entry and are always OK.)
+			if (*itcl >= (ClauseOfs)original_lit_pool_size_
+			    && !learnedClauseInScope(*itcl))
+				continue;
 			auto itL = beginOf(*itcl) + 2;
 			while (isResolved(*itL))
 				itL++;
