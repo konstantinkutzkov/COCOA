@@ -96,6 +96,12 @@ public:
     original_binary_link_count_ = binary_links_.size() - 1;
   }
 
+  void removeLearnedBinaryLinks() {
+    if (binary_links_.size() > original_binary_link_count_ + 1) {
+      binary_links_.resize(original_binary_link_count_ + 1);  // keep sentinel
+    }
+  }
+
   void increaseActivity(unsigned u = 1){
     activity_score_+= u;
   }

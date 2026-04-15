@@ -1,18 +1,11 @@
 /*
  * canonical_key.h
  *
- * Content-based canonical key for component caching.
+ * Fast canonical key for component caching using tabulation hashing.
  *
- * Builds a canonical representation of a CNF sub-formula:
- * 1. Collects active clauses (long + binary, excluding learned and removed)
- * 2. Identifies singleton variables (appear exactly once)
- * 3. Replaces singleton literals with marker SINGLETON_MARKER
- * 4. Normalizes non-singleton polarity (orient so positive >= negative)
- * 5. Sorts literals within clauses, sorts clauses lexicographically
- * 6. Computes hash for fast lookup
- *
- * The canonical key captures the actual formula content, not internal IDs.
- * Two structurally identical sub-formulas produce the same key.
+ * A global dictionary maps canonical clause types to random hash values.
+ * Variable signatures are computed via one-pass accumulation of
+ * dictionary values. No heap allocation per component.
  */
 
 #ifndef CANONICAL_KEY_H_
@@ -20,88 +13,109 @@
 
 #include <vector>
 #include <algorithm>
-#include <climits>
 #include <unordered_map>
 #include <cstdint>
+#include <cassert>
+#include <random>
 
 #include "primitive_types.h"
 #include "structures.h"
 #include "containers.h"
 
-class Component;  // forward declaration
+// ---------------------------------------------------------------
+// Canonical clause type: structural properties of a clause
+// ---------------------------------------------------------------
+struct ClauseType {
+  unsigned length;
+  unsigned num_pos;   // positive non-singleton literals
+  unsigned num_neg;   // negative non-singleton literals
+  unsigned num_sing;  // singleton literals
 
-static const int SINGLETON_MARKER = 0;
+  bool operator==(const ClauseType &o) const {
+    return length == o.length && num_pos == o.num_pos
+        && num_neg == o.num_neg && num_sing == o.num_sing;
+  }
+};
 
-struct CanonicalKey {
-  size_t hash = 0;
-  // Flat sorted representation: clauses sorted, separated by INT_MIN
-  std::vector<int> data;
+struct ClauseTypeHash {
+  size_t operator()(const ClauseType &t) const {
+    size_t h = t.length;
+    h = h * 31 + t.num_pos;
+    h = h * 31 + t.num_neg;
+    h = h * 31 + t.num_sing;
+    return h;
+  }
+};
 
-  bool operator==(const CanonicalKey &other) const {
-    return hash == other.hash && data == other.data;
+// ---------------------------------------------------------------
+// Global dictionary: clause type → random hash values
+// ---------------------------------------------------------------
+class ClauseTypeDictionary {
+public:
+  ClauseTypeDictionary() : rng_(42) {}
+
+  // Get hash values for a clause type (creates entry if new)
+  std::pair<uint64_t, uint64_t> lookup(const ClauseType &type) {
+    auto it = dict_.find(type);
+    if (it != dict_.end())
+      return it->second;
+
+    // Generate two independent random values for this type
+    uint64_t h_pos = rng_() | (uint64_t(rng_()) << 32);
+    uint64_t h_neg = rng_() | (uint64_t(rng_()) << 32);
+    // Ensure non-zero
+    if (h_pos == 0) h_pos = 1;
+    if (h_neg == 0) h_neg = 1;
+    dict_[type] = {h_pos, h_neg};
+    return {h_pos, h_neg};
   }
 
-  // Add one clause (literals must already be sorted).
-  // Clauses are accumulated unsorted; call finalize() when done.
-  void addClause(const int *lits, unsigned len) {
-    for (unsigned i = 0; i < len; i++)
-      clause_buf.push_back(lits[i]);
-    clause_buf.push_back(INT_MIN);  // separator
-  }
-
-  // Sort clauses and compute hash. Must be called after all addClause calls.
-  void finalize() {
-    // Parse clause_buf into individual clauses, sort them, flatten
-    std::vector<std::vector<int>> clauses;
-    std::vector<int> current;
-    for (int v : clause_buf) {
-      if (v == INT_MIN) {
-        if (!current.empty()) {
-          clauses.push_back(std::move(current));
-          current.clear();
-        }
-      } else {
-        current.push_back(v);
-      }
-    }
-    std::sort(clauses.begin(), clauses.end());
-
-    // Flatten into data
-    data.clear();
-    data.reserve(clause_buf.size());
-    for (const auto &cl : clauses) {
-      for (int v : cl) data.push_back(v);
-      data.push_back(INT_MIN);
-    }
-
-    // Hash the flat data with FNV-1a
-    hash = 14695981039346656037ULL;
-    for (int v : data) {
-      hash ^= (size_t)(unsigned)v;
-      hash *= 1099511628211ULL;
-    }
-
-    clause_buf.clear();
-    clause_buf.shrink_to_fit();
-  }
+  size_t size() const { return dict_.size(); }
 
 private:
-  std::vector<int> clause_buf;  // temporary buffer before finalize
+  std::unordered_map<ClauseType, std::pair<uint64_t, uint64_t>, ClauseTypeHash> dict_;
+  std::mt19937 rng_;
+};
+
+// Global instance (shared across all components)
+extern ClauseTypeDictionary g_clause_type_dict;
+
+// ---------------------------------------------------------------
+// Canonical key: hash for fast bucket lookup + normalized clause
+// multiset for structural equality.
+//
+// `clauses` stores, for each active clause, a sorted vector of
+// canonical literals (positive = canonical_id, negative = -canonical_id,
+// 0 = singleton marker). The outer vector is sorted lexicographically.
+//
+// Equality requires hash match AND exact structural match. This closes
+// the systematic-collision hole: two non-isomorphic sub-components
+// that happen to share a 64-bit hash will differ in `clauses` and be
+// correctly distinguished.
+// ---------------------------------------------------------------
+struct CanonicalKey {
+  uint64_t hash = 0;
+  unsigned num_vars = 0;
+  unsigned num_clauses = 0;
+  std::vector<std::vector<int>> clauses;  // normalized multiset
+
+  bool operator==(const CanonicalKey &other) const {
+    if (hash != other.hash) return false;
+    if (num_vars != other.num_vars) return false;
+    if (num_clauses != other.num_clauses) return false;
+    return clauses == other.clauses;
+  }
 };
 
 struct CanonicalKeyHash {
   size_t operator()(const CanonicalKey &k) const { return k.hash; }
 };
 
-// Comparison for sorting literals: by variable ID, positive before negative
-inline bool litLess(int a, int b) {
-  int va = a > 0 ? a : -a;
-  int vb = b > 0 ? b : -b;
-  if (va != vb) return va < vb;
-  return a > b;  // positive before negative
-}
+// ---------------------------------------------------------------
+// Build canonical key (declaration — implemented in canonical_key.cpp)
+// ---------------------------------------------------------------
+class Component;  // forward declaration
 
-// Declaration only — implementation in canonical_key.cpp
 CanonicalKey buildCanonicalKey(
     Component &comp,
     const std::vector<LiteralID> &literal_pool,

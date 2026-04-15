@@ -44,6 +44,8 @@ public:
       return ana_.clauseOfsOf(id);
   }
 
+  ComponentAnalyzer &getAnalyzer() { return ana_; }
+
   void setRemovedClauses(const std::unordered_map<ClauseOfs, unsigned> *p) {
       ana_.setRemovedClauses(p);
       removed_clauses_ = p;
@@ -165,8 +167,9 @@ void ComponentManager::recordRemainingCompsFor(StackLevel &top) {
            Component *p_new_comp = ana_.makeComponentFromArcheType();
 
            // Build canonical key and try content cache
+           // Skip caching for trivial components (< 3 vars)
            unsigned comp_vars = p_new_comp->num_variables();
-           if (config_.perform_component_caching && literals_ && lit_pool_) {
+           if (config_.perform_component_caching && comp_vars >= 3 && literals_ && lit_pool_) {
              static const std::unordered_map<ClauseOfs, unsigned> empty_removed;
              const auto &rm = removed_clauses_ ? *removed_clauses_ : empty_removed;
 

@@ -269,6 +269,15 @@ bool Instance::deleteConflictClauses() {
 }
 
 
+void Instance::deleteAllConflictClauses() {
+  vector<ClauseOfs> remaining;
+  for (auto clause_ofs : conflict_clauses_) {
+    if (!markClauseDeleted(clause_ofs))
+      remaining.push_back(clause_ofs);  // antecedent — can't delete yet
+  }
+  conflict_clauses_ = remaining;
+}
+
 bool Instance::markClauseDeleted(ClauseOfs cl_ofs){
   // only first literal may possibly have cl_ofs as antecedent
   if(isAntecedentOf(cl_ofs, *beginOf(cl_ofs)))

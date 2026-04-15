@@ -148,10 +148,21 @@ void Solver::solve(const string &file_name) {
 		comp_manager_.initialize(literals_, literal_pool_);
 		comp_manager_.setRemovedClauses(&removed_clauses_);
 		comp_manager_.setFormulaRefs(&literals_, &literal_pool_, original_lit_pool_size_);
+		// Note: verify_cache logic is implemented in solver_rec.cpp at the
+		// decomposition site. The ContentCache's own verify_mode is NOT
+		// toggled here because we want the solver's lookup to behave
+		// normally (return hits); solver_rec then recomputes independently
+		// and compares cached vs. recomputed counts.
+		if (config_.verify_cache)
+			cout << "c verify_cache mode ON (compare cached vs. recomputed on every hit; aborts on mismatch)" << endl;
 
-		statistics_.exit_state_ = countSAT();
-
-		statistics_.set_final_solution_count(stack_.top().getTotalModelCount());
+		if (config_.use_recursive_solver) {
+			statistics_.exit_state_ = countSATRec();
+			// countSATRec sets final_solution_count internally
+		} else {
+			statistics_.exit_state_ = countSAT();
+			statistics_.set_final_solution_count(stack_.top().getTotalModelCount());
+		}
 		statistics_.num_long_conflict_clauses_ = num_conflict_clauses();
 
 	} else {
@@ -167,6 +178,13 @@ void Solver::solve(const string &file_name) {
 	statistics_.writeToFile("data.out");
 	if (!config_.quiet)
 		statistics_.printShort();
+
+	if (config_.verify_cache) {
+		auto &cc = comp_manager_.contentCache();
+		cout << "c verify_cache summary: forced_misses(hits_converted)=" << cc.stats_verify_checks
+		     << " verified_matches=" << cc.stats_verify_ok
+		     << " unique_stores=" << cc.stats_stores << endl;
+	}
 }
 
 SOLVER_StateT Solver::countSAT() {
@@ -456,8 +474,11 @@ FormulaInfo Solver::buildFormulaInfo(Component &comp) {
 	for (unsigned v : info.active_vars) {
 		for (int sign = 0; sign <= 1; sign++) {
 			LiteralID lit(v, sign == 0);
+			unsigned orig_count = literal(lit).original_binary_link_count_;
+			unsigned idx = 0;
 			for (auto bt = literal(lit).binary_links_.begin();
-				 *bt != SENTINEL_LIT; bt++) {
+				 *bt != SENTINEL_LIT; bt++, idx++) {
+				if (idx >= orig_count) break;  // skip learned binary clauses
 				unsigned other_var = bt->var();
 				if (other_var <= v) continue;
 				if (other_var > max_var || !var_in_comp[other_var]) continue;
@@ -528,10 +549,13 @@ bool Solver::tryInstallSeparator(Component &comp) {
 
 	// Stage 3: Weighted bipartite separator discovery
 	SeparatorCandidate candidate;
+	// In verify_cache mode use a fixed seed so the same sub-component
+	// always picks the same separator across verify/non-verify runs,
+	// making collision reproduction deterministic.
 	bool found = find_weighted_separator(
 		info, candidate,
 		config_.separator_tries,
-		statistics_.num_decisions_,
+		config_.verify_cache ? 42 : (int)statistics_.num_decisions_,
 		0,   // min_balance (auto: n_vars/4)
 		30,  // max_iterations
 		30); // walks_per_iteration

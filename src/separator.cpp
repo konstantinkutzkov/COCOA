@@ -418,8 +418,11 @@ bool find_weighted_separator(
   if (n_vars < 4 || n_cls == 0)
     return false;
 
+  // Original (lenient) acceptance threshold; kept as a fallback floor.
+  int floor_balance = max(2, n_vars / 4);
+  // Preferred (tight) target — keep iterating to try to reach this.
   if (min_balance <= 0)
-    min_balance = max(2, n_vars / 4);
+    min_balance = max(3, n_vars / 3);
 
   // Build adjacency for random walks
   vector<vector<int>> adj(n_nodes);
@@ -551,13 +554,27 @@ bool find_weighted_separator(
 
       int balance = min(source_vars, sink_vars);
 
-      if (balance >= min_balance && sep_score < try_best_score) {
-        try_best_score = sep_score;
-        try_best_sep = separator;
-        try_best_balance = balance;
-        try_best_sizes = {max(source_vars, sink_vars), balance};
+      // A separator is a candidate to save if:
+      //   1. it meets at least the floor balance (must be a meaningful cut)
+      //   2. it actually disconnects the graph (structural validity)
+      //   3. it improves on what we have so far (higher balance, or same
+      //      balance with smaller cut score)
+      bool meets_floor = (balance >= floor_balance);
+      bool better = (balance > try_best_balance) ||
+                    (balance == try_best_balance && sep_score < try_best_score);
+      if (meets_floor && better && !separator.empty()) {
+        // Validate structural disconnection before accepting.
+        std::set<CutNode> sep_set(separator.begin(), separator.end());
+        auto comps_check = components_after_removing(info, sep_set);
+        if (comps_check.size() >= 2) {
+          try_best_score = sep_score;
+          try_best_sep = separator;
+          try_best_balance = balance;
+          try_best_sizes = {max(source_vars, sink_vars), balance};
+        }
       }
 
+      // Stop iterating once we hit the preferred (tight) balance target.
       if (balance >= min_balance) break;
 
       // Absorb small side + separator into smaller terminal set

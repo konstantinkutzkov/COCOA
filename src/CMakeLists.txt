@@ -8,6 +8,7 @@ SET(SOURCES alt_component_analyzer.cpp
 	new_component_analyzer.cpp
 	separator.cpp
 	solver.cpp
+	solver_rec.cpp
 	statistics.cpp)
 
 

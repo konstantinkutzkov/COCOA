@@ -50,6 +50,7 @@ protected:
   }
 
   bool deleteConflictClauses();
+  void deleteAllConflictClauses();
   bool markClauseDeleted(ClauseOfs cl_ofs);
 
   // Compact the literal pool erasing all the clause

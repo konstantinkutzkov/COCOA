@@ -130,6 +130,34 @@ private:
 
 	SOLVER_StateT countSAT();
 
+	// Recursive implementation (defined in solver_rec.cpp).
+	// Entry point: returns exit state; final count is stored in statistics_.
+	SOLVER_StateT countSATRec();
+	// Workhorse: compute #SAT of the current formula state restricted
+	// to component `comp`, given the remaining separator elements.
+	mpz_class solveComponent(Component &comp,
+	                         std::vector<CutNode> separator,
+	                         bool separator_reset);
+	// Branch on a literal, run BCP, recurse, then restore state.
+	mpz_class branchOnLiteral(LiteralID lit,
+	                           Component &comp,
+	                           std::vector<CutNode> separator,
+	                           bool separator_reset);
+	// Branch on a clause (removed vs removed+negated).
+	mpz_class branchOnClause(ClauseOfs cl_ofs,
+	                          Component &comp,
+	                          std::vector<CutNode> separator,
+	                          bool separator_reset,
+	                          bool negate_literals);
+	// Find separator for a component, return it (empty if none).
+	std::vector<CutNode> findSeparatorFor(Component &comp);
+	// Discover independent sub-components of the current formula state
+	// restricted to `super_comp`. Returns owned components.
+	std::vector<Component*> discoverComponentsOf(Component &super_comp,
+	                                              mpz_class &trivial_factor);
+	// Select next variable to branch on within comp (highest activity score).
+	VariableIndex pickBranchVariable(Component &comp);
+
 	void decideLiteral();
 	void decideClause(ClauseOfs cl_ofs);
 	ClauseOfs selectClauseForBranching();

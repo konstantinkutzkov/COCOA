@@ -61,6 +61,10 @@ int main(int argc, char *argv[]) {
         theSolver.config().separator_min_active_vars = atoi(argv[i + 1]);
         i++;
       }
+    } else if (strcmp(argv[i], "-rec") == 0) {
+      theSolver.config().use_recursive_solver = true;
+    } else if (strcmp(argv[i], "-verifyCache") == 0) {
+      theSolver.config().verify_cache = true;
     } else if (strcmp(argv[i], "-cs") == 0) {
       if (argc <= i + 1) {
         cout << " wrong parameters" << endl;

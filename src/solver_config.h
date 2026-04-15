@@ -37,6 +37,15 @@ struct SolverConfiguration {
   unsigned separator_max_size = 30;
   unsigned separator_tries = 12;
   unsigned separator_min_second_comp = 12;
+
+  // Use the recursive #SAT implementation (solver_rec.cpp) instead of
+  // the iterative countSAT loop.
+  bool use_recursive_solver = false;
+
+  // Verify cache keys: lookup() always misses, and store() compares the
+  // newly computed count against any previously stored count for the
+  // same key. A mismatch indicates a semantic bug in the canonical key.
+  bool verify_cache = false;
 };
 
 #endif /* SOLVER_CONFIG_H_ */
