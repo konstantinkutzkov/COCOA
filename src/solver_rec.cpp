@@ -369,11 +369,11 @@ mpz_class Solver::solveComponent(Component &comp,
 						active_ids.push_back(*it);
 				separator = nd_hierarchy_.lookupSeparator(active_ids, nd_node);
 			}
-			// If hierarchy didn't provide a separator, fall back to Dinic's
-			// ONLY when no hierarchy is active (to avoid mixing which
-			// breaks cache consistency).
-			if (separator.empty() && nd_node < 0) {
+			// Fallback to Dinic's if hierarchy didn't provide a separator
+			// (leaf node or mapping failed).
+			if (separator.empty()) {
 				separator = findSeparatorFor(comp, false);
+				nd_node = -1;  // lost hierarchy tracking
 			}
 		}
 	}
