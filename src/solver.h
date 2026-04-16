@@ -13,6 +13,7 @@
 #include "instance.h"
 #include "component_management.h"
 #include "separator.h"
+#include "nd_hierarchy.h"
 #include "separator_cache.h"
 
 
@@ -138,20 +139,23 @@ private:
 	mpz_class solveComponent(Component &comp,
 	                         std::vector<CutNode> separator,
 	                         bool separator_reset,
-	                         int depth = 0);
+	                         int depth = 0,
+	                         int nd_node = -1);  // hierarchy node, -1 = use root
 	// Branch on a literal, run BCP, recurse, then restore state.
 	mpz_class branchOnLiteral(LiteralID lit,
 	                           Component &comp,
 	                           std::vector<CutNode> separator,
 	                           bool separator_reset,
-	                           int depth = 0);
+	                           int depth = 0,
+	                           int nd_node = -1);
 	// Branch on a clause (removed vs removed+negated).
 	mpz_class branchOnClause(ClauseOfs cl_ofs,
 	                          Component &comp,
 	                          std::vector<CutNode> separator,
 	                          bool separator_reset,
 	                          bool negate_literals,
-	                          int depth = 0);
+	                          int depth = 0,
+	                          int nd_node = -1);
 	// Find separator for a component, return it (empty if none).
 	// use_metis: if true, prefer METIS over Dinic's for better balance.
 	std::vector<CutNode> findSeparatorFor(Component &comp, bool use_metis = false);
@@ -166,6 +170,9 @@ private:
 	void decideClause(ClauseOfs cl_ofs);
 	ClauseOfs selectClauseForBranching();
 	bool bcp();
+
+	// Precomputed nested-dissection hierarchy (built once at solve start)
+	NDHierarchy nd_hierarchy_;
 
 	// Separator branching
 	std::vector<CutNode> separator_elements_;

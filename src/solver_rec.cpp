@@ -187,9 +187,37 @@ static void dumpComponentState(
 }
 
 SOLVER_StateT Solver::countSATRec() {
-	// The initial "super component" is what initStack put at component_stack_[1].
+	// Build precomputed ND hierarchy if separator branching is enabled
+	if (config_.perform_separator_branching && !nd_hierarchy_.valid) {
+		// Collect clauses: (clause_ofs, list of variable IDs)
+		vector<pair<unsigned, vector<unsigned>>> clause_list;
+		for (auto ofs : occurrence_lists_[LiteralID(1, true)]) {
+			(void)ofs;  // just to check structure
+		}
+		// Actually, iterate the literal pool for original clauses
+		Component &root_comp = comp_manager_.superComponentOf(stack_.top());
+		for (auto it = root_comp.clsBegin(); *it != varsSENTINEL; it++) {
+			ClauseOfs ofs = comp_manager_.clauseOfsOf(*it);
+			if (ofs >= original_lit_pool_size_) continue;
+			vector<unsigned> vars;
+			for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++)
+				vars.push_back(lt->var());
+			clause_list.push_back({ofs, vars});
+		}
+		// Binary clauses omitted: no real clause offset to branch on.
+		// Variables connected via binary clauses share long clauses
+		// in the incidence graph, giving METIS enough connectivity info.
+		// If needed, binary clauses could be added as edges between
+		// their two variable nodes (bypassing clauses) but this would
+		// break the bipartite structure.
+		{
+		}
+		nd_hierarchy_.build(num_variables(), clause_list);
+	}
+
 	Component &root = comp_manager_.superComponentOf(stack_.top());
-	mpz_class result = solveComponent(root, {}, true);
+	int start_node = nd_hierarchy_.valid ? nd_hierarchy_.root() : -1;
+	mpz_class result = solveComponent(root, {}, true, 0, start_node);
 	statistics_.num_long_conflict_clauses_ = num_conflict_clauses();
 	// If solveComponent returned because of the time bound, the count is
 	// incomplete (any sub-call that hit timeout returned 0, poisoning the
@@ -205,7 +233,8 @@ SOLVER_StateT Solver::countSATRec() {
 mpz_class Solver::solveComponent(Component &comp,
                                   vector<CutNode> separator,
                                   bool separator_reset,
-                                  int depth) {
+                                  int depth,
+                                  int nd_node) {
 	if (stopwatch_.timeBoundBroken())
 		return 0;
 
@@ -223,6 +252,16 @@ mpz_class Solver::solveComponent(Component &comp,
 		vector<Component*> subcomps = discoverComponentsOf(comp, trivial_factor);
 		mpz_class result = trivial_factor;
 		for (Component *sub : subcomps) {
+			// Map sub-component to ND hierarchy child node
+			int child_nd_node = -1;
+			if (nd_node >= 0 && nd_hierarchy_.valid) {
+				vector<unsigned> sub_vars;
+				for (auto it = sub->varsBegin(); *it != varsSENTINEL; it++)
+					if (isActive(LiteralID(*it, true)))
+						sub_vars.push_back(*it);
+				child_nd_node = nd_hierarchy_.mapToChild(nd_node, sub_vars);
+			}
+
 			// Content cache lookup
 			mpz_class sub_count;
 			static const unordered_map<ClauseOfs, unsigned> empty_removed;
@@ -248,7 +287,7 @@ mpz_class Solver::solveComponent(Component &comp,
 				string cur_sig = componentSignature(*sub, literal_pool_, literals_,
 				    literal_values_, comp_manager_.getAnalyzer().clauseIdToOfs(),
 				    rm, original_lit_pool_size_);
-				mpz_class recomputed = solveComponent(*sub, {}, true, depth + 1);
+				mpz_class recomputed = solveComponent(*sub, {}, true, depth + 1, child_nd_node);
 				comp_manager_.contentCache().stats_verify_checks++;
 				if (cached != recomputed) {
 					auto it = g_first_sig.find(key.hash);
@@ -303,7 +342,7 @@ mpz_class Solver::solveComponent(Component &comp,
 				    literal_values_, comp_manager_.getAnalyzer().clauseIdToOfs(),
 				    rm, original_lit_pool_size_);
 			}
-			sub_count = solveComponent(*sub, {}, true, depth + 1);
+			sub_count = solveComponent(*sub, {}, true, depth + 1, child_nd_node);
 			if (config_.perform_component_caching && sub->num_variables() >= 3) {
 				if (config_.verify_cache && g_first_sig.find(key.hash) == g_first_sig.end()) {
 					g_first_sig[key.hash] = pre_sig;
@@ -322,10 +361,20 @@ mpz_class Solver::solveComponent(Component &comp,
 		separator_reset = false;
 		if (config_.perform_separator_branching &&
 		    comp.num_variables() >= config_.separator_min_active_vars) {
-			// Use METIS for the first 4 levels (better balance pays off
-			// exponentially at early splits). Dinic's for deeper levels.
-			bool use_metis = false;  // METIS disabled reactively; to be used for precomputed hierarchy
-			separator = findSeparatorFor(comp, use_metis);
+			// Try precomputed ND hierarchy first
+			if (nd_node >= 0 && nd_hierarchy_.valid) {
+				vector<unsigned> active_ids;
+				for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++)
+					if (isActive(LiteralID(*it, true)))
+						active_ids.push_back(*it);
+				separator = nd_hierarchy_.lookupSeparator(active_ids, nd_node);
+			}
+			// If hierarchy didn't provide a separator, fall back to Dinic's
+			// ONLY when no hierarchy is active (to avoid mixing which
+			// breaks cache consistency).
+			if (separator.empty() && nd_node < 0) {
+				separator = findSeparatorFor(comp, false);
+			}
 		}
 	}
 
@@ -338,24 +387,24 @@ mpz_class Solver::solveComponent(Component &comp,
 			// Variable element
 			if (!isActive(LiteralID(el.id, true))) {
 				// Consumed by BCP — skip
-				return solveComponent(comp, rest, false, depth);
+				return solveComponent(comp, rest, false, depth, nd_node);
 			}
 			// Branch: A = v=true, B = v=false
 			LiteralID lit_t(el.id, true), lit_f(el.id, false);
 			bool t_first = literal(lit_t).activity_score_ >
 			               literal(lit_f).activity_score_;
 			mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f,
-			                              comp, rest, false, depth);
+			                              comp, rest, false, depth, nd_node);
 			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t,
-			                              comp, rest, false, depth);
+			                              comp, rest, false, depth, nd_node);
 			return A + B;
 		} else {
 			// Clause element
 			if (isClauseRemoved(el.id) || isSatisfied(el.id)) {
-				return solveComponent(comp, rest, false, depth);
+				return solveComponent(comp, rest, false, depth, nd_node);
 			}
-			mpz_class A = branchOnClause(el.id, comp, rest, false, false, depth);
-			mpz_class B = branchOnClause(el.id, comp, rest, false, true, depth);
+			mpz_class A = branchOnClause(el.id, comp, rest, false, false, depth, nd_node);
+			mpz_class B = branchOnClause(el.id, comp, rest, false, true, depth, nd_node);
 			return A - B;
 		}
 	}
@@ -368,15 +417,15 @@ mpz_class Solver::solveComponent(Component &comp,
 	LiteralID lit_t(v, true), lit_f(v, false);
 	bool t_first = literal(lit_t).activity_score_ >
 	               literal(lit_f).activity_score_;
-	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth);
-	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false, depth);
+	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth, -1);
+	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false, depth, -1);
 	return A + B;
 }
 
 mpz_class Solver::branchOnLiteral(LiteralID lit,
                                    Component &comp,
                                    vector<CutNode> separator,
-                                   bool separator_reset, int depth) {
+                                   bool separator_reset, int depth, int nd_node) {
 	unsigned lit_save = literal_stack_.size();
 	statistics_.num_decisions_++;
 	if (statistics_.num_decisions_ % 128 == 0)
@@ -385,7 +434,7 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 	// Check if literal is already assigned
 	if (!isActive(lit)) {
 		if (literal_values_[lit] == F_TRI) return 0;
-		return solveComponent(comp, separator, separator_reset, depth);
+		return solveComponent(comp, separator, separator_reset, depth, nd_node);
 	}
 
 	// Push a placeholder StackLevel BEFORE setLiteralIfFree so:
@@ -418,7 +467,7 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		}
 		result = 0;
 	} else {
-		result = solveComponent(comp, separator, separator_reset, depth);
+		result = solveComponent(comp, separator, separator_reset, depth, nd_node);
 	}
 
 	while (literal_stack_.size() > lit_save) {
@@ -433,7 +482,7 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
                                   Component &comp,
                                   vector<CutNode> separator,
                                   bool separator_reset,
-                                  bool negate_literals, int depth) {
+                                  bool negate_literals, int depth, int nd_node) {
 	unsigned lit_save = literal_stack_.size();
 	statistics_.num_decisions_++;
 
@@ -481,7 +530,7 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 			// decision level, so it fails on this multi-decision setup.
 			result = 0;
 		} else {
-			result = solveComponent(comp, separator, separator_reset, depth);
+			result = solveComponent(comp, separator, separator_reset, depth, nd_node);
 		}
 	}
 
