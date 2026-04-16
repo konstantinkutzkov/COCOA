@@ -204,7 +204,8 @@ SOLVER_StateT Solver::countSATRec() {
 
 mpz_class Solver::solveComponent(Component &comp,
                                   vector<CutNode> separator,
-                                  bool separator_reset) {
+                                  bool separator_reset,
+                                  int depth) {
 	if (stopwatch_.timeBoundBroken())
 		return 0;
 
@@ -247,7 +248,7 @@ mpz_class Solver::solveComponent(Component &comp,
 				string cur_sig = componentSignature(*sub, literal_pool_, literals_,
 				    literal_values_, comp_manager_.getAnalyzer().clauseIdToOfs(),
 				    rm, original_lit_pool_size_);
-				mpz_class recomputed = solveComponent(*sub, {}, true);
+				mpz_class recomputed = solveComponent(*sub, {}, true, depth + 1);
 				comp_manager_.contentCache().stats_verify_checks++;
 				if (cached != recomputed) {
 					auto it = g_first_sig.find(key.hash);
@@ -302,7 +303,7 @@ mpz_class Solver::solveComponent(Component &comp,
 				    literal_values_, comp_manager_.getAnalyzer().clauseIdToOfs(),
 				    rm, original_lit_pool_size_);
 			}
-			sub_count = solveComponent(*sub, {}, true);
+			sub_count = solveComponent(*sub, {}, true, depth + 1);
 			if (config_.perform_component_caching && sub->num_variables() >= 3) {
 				if (config_.verify_cache && g_first_sig.find(key.hash) == g_first_sig.end()) {
 					g_first_sig[key.hash] = pre_sig;
@@ -321,7 +322,10 @@ mpz_class Solver::solveComponent(Component &comp,
 		separator_reset = false;
 		if (config_.perform_separator_branching &&
 		    comp.num_variables() >= config_.separator_min_active_vars) {
-			separator = findSeparatorFor(comp);
+			// Use METIS for the first 4 levels (better balance pays off
+			// exponentially at early splits). Dinic's for deeper levels.
+			bool use_metis = false;  // METIS disabled reactively; to be used for precomputed hierarchy
+			separator = findSeparatorFor(comp, use_metis);
 		}
 	}
 
@@ -334,24 +338,24 @@ mpz_class Solver::solveComponent(Component &comp,
 			// Variable element
 			if (!isActive(LiteralID(el.id, true))) {
 				// Consumed by BCP — skip
-				return solveComponent(comp, rest, false);
+				return solveComponent(comp, rest, false, depth);
 			}
 			// Branch: A = v=true, B = v=false
 			LiteralID lit_t(el.id, true), lit_f(el.id, false);
 			bool t_first = literal(lit_t).activity_score_ >
 			               literal(lit_f).activity_score_;
 			mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f,
-			                              comp, rest, false);
+			                              comp, rest, false, depth);
 			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t,
-			                              comp, rest, false);
+			                              comp, rest, false, depth);
 			return A + B;
 		} else {
 			// Clause element
 			if (isClauseRemoved(el.id) || isSatisfied(el.id)) {
-				return solveComponent(comp, rest, false);
+				return solveComponent(comp, rest, false, depth);
 			}
-			mpz_class A = branchOnClause(el.id, comp, rest, false, false);
-			mpz_class B = branchOnClause(el.id, comp, rest, false, true);
+			mpz_class A = branchOnClause(el.id, comp, rest, false, false, depth);
+			mpz_class B = branchOnClause(el.id, comp, rest, false, true, depth);
 			return A - B;
 		}
 	}
@@ -359,22 +363,20 @@ mpz_class Solver::solveComponent(Component &comp,
 	// No separator — regular variable branching within comp.
 	VariableIndex v = pickBranchVariable(comp);
 	if (v == 0) {
-		// No active variable in comp — this shouldn't happen if comp was
-		// non-trivial at entry, but handle defensively.
 		return 1;
 	}
 	LiteralID lit_t(v, true), lit_f(v, false);
 	bool t_first = literal(lit_t).activity_score_ >
 	               literal(lit_f).activity_score_;
-	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false);
-	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false);
+	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth);
+	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false, depth);
 	return A + B;
 }
 
 mpz_class Solver::branchOnLiteral(LiteralID lit,
                                    Component &comp,
                                    vector<CutNode> separator,
-                                   bool separator_reset) {
+                                   bool separator_reset, int depth) {
 	unsigned lit_save = literal_stack_.size();
 	statistics_.num_decisions_++;
 	if (statistics_.num_decisions_ % 128 == 0)
@@ -383,7 +385,7 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 	// Check if literal is already assigned
 	if (!isActive(lit)) {
 		if (literal_values_[lit] == F_TRI) return 0;
-		return solveComponent(comp, separator, separator_reset);
+		return solveComponent(comp, separator, separator_reset, depth);
 	}
 
 	// Push a placeholder StackLevel BEFORE setLiteralIfFree so:
@@ -416,7 +418,7 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		}
 		result = 0;
 	} else {
-		result = solveComponent(comp, separator, separator_reset);
+		result = solveComponent(comp, separator, separator_reset, depth);
 	}
 
 	while (literal_stack_.size() > lit_save) {
@@ -431,7 +433,7 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
                                   Component &comp,
                                   vector<CutNode> separator,
                                   bool separator_reset,
-                                  bool negate_literals) {
+                                  bool negate_literals, int depth) {
 	unsigned lit_save = literal_stack_.size();
 	statistics_.num_decisions_++;
 
@@ -479,7 +481,7 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 			// decision level, so it fails on this multi-decision setup.
 			result = 0;
 		} else {
-			result = solveComponent(comp, separator, separator_reset);
+			result = solveComponent(comp, separator, separator_reset, depth);
 		}
 	}
 
@@ -492,8 +494,9 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 	return result;
 }
 
-vector<CutNode> Solver::findSeparatorFor(Component &comp) {
+vector<CutNode> Solver::findSeparatorFor(Component &comp, bool use_metis) {
 	vector<CutNode> result;
+	prefer_metis_separator_ = use_metis;
 	if (tryInstallSeparator(comp)) {
 		// tryInstallSeparator writes to separator_elements_ and sets
 		// separator_base_dl_. Move the elements out and reset globals.

@@ -555,7 +555,7 @@ bool Solver::tryInstallSeparator(Component &comp) {
 	SeparatorCandidate candidate;
 	bool found = false;
 
-	if (false && info.active_vars.size() >= 40) {  // disabled: METIS slower reactively
+	if (prefer_metis_separator_) {
 		found = find_metis_separator(
 			info, candidate, config_.separator_min_second_comp);
 	}

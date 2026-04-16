@@ -137,20 +137,24 @@ private:
 	// to component `comp`, given the remaining separator elements.
 	mpz_class solveComponent(Component &comp,
 	                         std::vector<CutNode> separator,
-	                         bool separator_reset);
+	                         bool separator_reset,
+	                         int depth = 0);
 	// Branch on a literal, run BCP, recurse, then restore state.
 	mpz_class branchOnLiteral(LiteralID lit,
 	                           Component &comp,
 	                           std::vector<CutNode> separator,
-	                           bool separator_reset);
+	                           bool separator_reset,
+	                           int depth = 0);
 	// Branch on a clause (removed vs removed+negated).
 	mpz_class branchOnClause(ClauseOfs cl_ofs,
 	                          Component &comp,
 	                          std::vector<CutNode> separator,
 	                          bool separator_reset,
-	                          bool negate_literals);
+	                          bool negate_literals,
+	                          int depth = 0);
 	// Find separator for a component, return it (empty if none).
-	std::vector<CutNode> findSeparatorFor(Component &comp);
+	// use_metis: if true, prefer METIS over Dinic's for better balance.
+	std::vector<CutNode> findSeparatorFor(Component &comp, bool use_metis = false);
 	// Discover independent sub-components of the current formula state
 	// restricted to `super_comp`. Returns owned components.
 	std::vector<Component*> discoverComponentsOf(Component &super_comp,
@@ -167,6 +171,7 @@ private:
 	std::vector<CutNode> separator_elements_;
 	std::vector<bool> separator_used_;
 	int separator_base_dl_ = -1;
+	bool prefer_metis_separator_ = false;  // set by findSeparatorFor
 
 	// Stack of exhausted separators (for restoration on backtrack)
 	struct SavedSeparator {
