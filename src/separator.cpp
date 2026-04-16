@@ -653,3 +653,110 @@ bool find_weighted_separator(
 
   return true;
 }
+
+
+// ----------------------------------------------------------------
+// METIS-based vertex separator
+// ----------------------------------------------------------------
+
+#include <metis.h>
+
+bool find_metis_separator(
+    const FormulaInfo &info,
+    SeparatorCandidate &result,
+    int min_second_component_vars)
+{
+  int n_vars = info.active_vars.size();
+  int n_cls = info.active_clause_ids.size();
+  int n_nodes = n_vars + n_cls;
+
+  if (n_nodes < 4) return false;
+
+  // Build CSR adjacency for the bipartite incidence graph.
+  // Vertices 0..n_vars-1 = variables, n_vars..n_nodes-1 = clauses.
+  vector<idx_t> xadj(n_nodes + 1);
+  vector<idx_t> adjncy;
+
+  // For each variable, collect adjacent clause indices
+  // For each clause, collect adjacent variable indices
+  // Use var_id_to_idx and cls_id_to_idx for mapping.
+
+  // Variable adjacencies (var_idx → clause_indices via var_to_clause_indices)
+  for (int vi = 0; vi < n_vars; vi++) {
+    xadj[vi] = adjncy.size();
+    for (int ci : info.var_to_clause_indices[vi])
+      adjncy.push_back(n_vars + ci);
+  }
+
+  // Clause adjacencies (clause_idx → var_indices via clause_variables)
+  for (int ci = 0; ci < n_cls; ci++) {
+    xadj[n_vars + ci] = adjncy.size();
+    for (unsigned var_id : info.clause_variables[ci]) {
+      auto it = info.var_id_to_idx.find(var_id);
+      if (it != info.var_id_to_idx.end())
+        adjncy.push_back(it->second);
+    }
+  }
+  xadj[n_nodes] = adjncy.size();
+
+  // Vertex weights: variables = 1, clauses = 1
+  vector<idx_t> vwgt(n_nodes, 1);
+
+  idx_t options[METIS_NOPTIONS];
+  METIS_SetDefaultOptions(options);
+
+  idx_t nvtxs = n_nodes;
+  idx_t sepsize = 0;
+  vector<idx_t> part(n_nodes);
+
+  int ret = METIS_ComputeVertexSeparator(
+      &nvtxs, xadj.data(), adjncy.data(),
+      vwgt.data(), options, &sepsize, part.data());
+
+  if (ret != METIS_OK) return false;
+
+  // Extract separator elements and count variable balance
+  result.separator.clear();
+  int left_vars = 0, right_vars = 0;
+
+  for (int i = 0; i < n_vars; i++) {
+    if (part[i] == 2)
+      result.separator.push_back(CutNode(CutNode::VAR, info.active_vars[i]));
+    else if (part[i] == 0) left_vars++;
+    else right_vars++;
+  }
+
+  for (int ci = 0; ci < n_cls; ci++) {
+    if (part[n_vars + ci] == 2)
+      result.separator.push_back(
+          CutNode(CutNode::CLAUSE, info.active_clause_ids[ci]));
+  }
+
+  if (result.separator.empty()) return false;
+
+  // Check balance
+  int small_side = min(left_vars, right_vars);
+  if (min_second_component_vars > 0 && small_side < min_second_component_vars)
+    return false;
+
+  // Verify it actually disconnects
+  set<CutNode> sep_set(result.separator.begin(), result.separator.end());
+  auto comps = components_after_removing(info, sep_set);
+  if (comps.size() < 2) return false;
+
+  // Fill in result metadata
+  result.component_var_sizes.clear();
+  for (const auto &comp : comps) {
+    int nv = 0;
+    for (const auto &nd : comp)
+      if (nd.kind == CutNode::VAR) nv++;
+    result.component_var_sizes.push_back(nv);
+  }
+  sort(result.component_var_sizes.begin(),
+       result.component_var_sizes.end(), greater<int>());
+
+  result.flow_value = result.separator.size();
+  result.tries_used = 1;
+
+  return true;
+}

@@ -547,18 +547,28 @@ bool Solver::tryInstallSeparator(Component &comp) {
 		return true;
 	}
 
-	// Stage 3: Weighted bipartite separator discovery
+	// Stage 3: Separator discovery.
+	// Large components (≥ 20 vars): use METIS for well-balanced separators.
+	// METIS has higher per-call overhead but produces much better balance,
+	// which pays off exponentially at early recursion levels.
+	// Small components: use Dinic's-based weighted separator (fast, adequate).
 	SeparatorCandidate candidate;
-	// In verify_cache mode use a fixed seed so the same sub-component
-	// always picks the same separator across verify/non-verify runs,
-	// making collision reproduction deterministic.
-	bool found = find_weighted_separator(
-		info, candidate,
-		config_.separator_tries,
-		config_.verify_cache ? 42 : (int)statistics_.num_decisions_,
-		0,   // min_balance (auto: n_vars/4)
-		30,  // max_iterations
-		30); // walks_per_iteration
+	bool found = false;
+
+	if (false && info.active_vars.size() >= 40) {  // disabled: METIS slower reactively
+		found = find_metis_separator(
+			info, candidate, config_.separator_min_second_comp);
+	}
+
+	if (!found) {
+		found = find_weighted_separator(
+			info, candidate,
+			config_.separator_tries,
+			config_.verify_cache ? 42 : (int)statistics_.num_decisions_,
+			0,   // min_balance (auto: n_vars/4)
+			30,  // max_iterations
+			30); // walks_per_iteration
+	}
 
 	if (found && config_.verbose) {
 		int nv = 0, nc = 0;

@@ -149,4 +149,13 @@ bool find_weighted_separator(
     int max_iterations = 30,
     int walks_per_iteration = 30);
 
+// METIS-based vertex separator on the bipartite incidence graph.
+// Uses METIS_ComputeVertexSeparator for a balanced, mixed (var+clause)
+// separator. Returns false if METIS fails or the separator doesn't
+// disconnect the graph into ≥2 components.
+bool find_metis_separator(
+    const FormulaInfo &info,
+    SeparatorCandidate &result,
+    int min_second_component_vars = 0);
+
 #endif /* SEPARATOR_H_ */

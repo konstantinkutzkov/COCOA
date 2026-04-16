@@ -24,8 +24,15 @@ ENDIF(UNIX)
 find_library(GMP_LIB gmp)
 find_library(GMPXX_LIB gmpxx)
 
+# METIS graph partitioning library (for separator finding)
+set(METIS_DIR "${CMAKE_SOURCE_DIR}/../METIS" CACHE PATH "Path to METIS source")
+set(GKLIB_DIR "${CMAKE_SOURCE_DIR}/../GKlib" CACHE PATH "Path to GKlib source")
+include_directories(${METIS_DIR}/include ${GKLIB_DIR}/include)
+add_definitions(-DIDXTYPEWIDTH=32 -DREALTYPEWIDTH=32)
 
 add_subdirectory(src)
 
 add_executable (sharpSAT src/main.cpp)
-target_link_libraries (sharpSAT libsharpSAT ${GMP_LIB} ${GMPXX_LIB})
+target_link_libraries (sharpSAT libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a)
