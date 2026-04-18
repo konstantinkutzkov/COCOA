@@ -188,7 +188,9 @@ static void dumpComponentState(
 
 SOLVER_StateT Solver::countSATRec() {
 	// Build precomputed ND hierarchy if separator branching is enabled
-	if (config_.perform_separator_branching && !nd_hierarchy_.valid) {
+	// and the mode requests it (pure-Dinic mode skips this).
+	if (config_.perform_separator_branching && config_.use_nd_hierarchy &&
+	    !nd_hierarchy_.valid) {
 		// Collect clauses: (clause_ofs, list of variable IDs)
 		vector<pair<unsigned, vector<unsigned>>> clause_list;
 		for (auto ofs : occurrence_lists_[LiteralID(1, true)]) {
@@ -368,12 +370,39 @@ mpz_class Solver::solveComponent(Component &comp,
 					if (isActive(LiteralID(*it, true)))
 						active_ids.push_back(*it);
 				separator = nd_hierarchy_.lookupSeparator(active_ids, nd_node);
+				// Filter: the precomputed separator lists elements from the
+				// static hierarchy node. Only keep those actually present in
+				// the current sub-component — branching on a variable outside
+				// the component would double-count (A+B = 2*#SAT when the
+				// variable doesn't constrain the component).
+				if (!separator.empty()) {
+					std::unordered_set<unsigned> comp_vars;
+					for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++)
+						comp_vars.insert(*it);
+					std::unordered_set<unsigned> comp_clauses;
+					for (auto it = comp.clsBegin(); *it != clsSENTINEL; it++) {
+						ClauseOfs ofs = comp_manager_.clauseOfsOf(*it);
+						comp_clauses.insert(ofs);
+					}
+					std::vector<CutNode> filtered;
+					filtered.reserve(separator.size());
+					for (const auto &nd : separator) {
+						if (nd.kind == CutNode::VAR) {
+							if (comp_vars.count(nd.id))
+								filtered.push_back(nd);
+						} else {
+							if (comp_clauses.count(nd.id))
+								filtered.push_back(nd);
+						}
+					}
+					separator = std::move(filtered);
+				}
 			}
-			// Fallback to Dinic's if hierarchy didn't provide a separator
-			// (leaf node or mapping failed).
-			if (separator.empty()) {
+			// Reactive Dinic's fallback when hierarchy provides nothing.
+			// Covers pure-Dinic mode (hierarchy disabled) and hybrid mode
+			// (hierarchy exhausted at leaves or component maps mixed).
+			if (separator.empty() && config_.use_reactive_separator_fallback) {
 				separator = findSeparatorFor(comp, false);
-				nd_node = -1;  // lost hierarchy tracking
 			}
 		}
 	}

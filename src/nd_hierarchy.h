@@ -47,7 +47,7 @@ struct NDHierarchy {
   // For each original clause offset: leaf partition index
   std::unordered_map<unsigned, int> clause_leaf;
 
-  int root() const { return n_nodes - 1; }
+  int root() const { return 0; }  // dynamic tree: root allocated first
 
   // Build hierarchy from a CNF formula's incidence graph.
   // vars: number of variables (1-indexed)

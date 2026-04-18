@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cassert>
 #include <queue>
+#include <functional>
 
 using namespace std;
 
@@ -134,7 +135,7 @@ void NDHierarchy::build(
     int tree_node;
   };
 
-  int min_sep_vars = 6;  // don't bisect components with < 6 variables
+  int min_sep_vars = 2;  // bisect all the way down — no Dinic's fallback needed
 
   // Allocate root node
   int next_node = 0;
@@ -227,24 +228,63 @@ void NDHierarchy::build(
     work.push({right_v, rc});
   }
 
-  // Assign separator vertices to a leaf in their left child's range
-  // (after all leaves are assigned). Do a post-pass.
-  for (int i = 0; i < next_node; i++) {
-    if (separator[i].empty()) continue;
+  // Post-pass 1: renumber leaves in DFS order so each subtree's leaves
+  // form a contiguous range [leaf_lo..leaf_hi]. BFS order (as built above)
+  // interleaves sibling subtrees' leaves, breaking range queries.
+  std::vector<int> old_to_new(next_leaf, -1);
+  int dfs_leaf_id = 0;
+  std::function<void(int)> dfs = [&](int node) {
+    if (node < 0) return;
+    if (separator[node].empty()) {
+      // Leaf: remap its single leaf_id
+      int old_id = leaf_lo[node];
+      if (old_id >= 0 && old_id < (int)old_to_new.size()) {
+        if (old_to_new[old_id] < 0)
+          old_to_new[old_id] = dfs_leaf_id++;
+        leaf_lo[node] = leaf_hi[node] = old_to_new[old_id];
+      }
+      return;
+    }
+    dfs(left_child[node]);
+    dfs(right_child[node]);
+  };
+  dfs(0);
+
+  // Update var_leaf and clause_leaf with the remapped IDs
+  for (size_t i = 0; i < var_leaf.size(); i++) {
+    int old_id = var_leaf[i];
+    if (old_id >= 0 && old_id < (int)old_to_new.size() && old_to_new[old_id] >= 0)
+      var_leaf[i] = old_to_new[old_id];
+  }
+  for (auto &kv : clause_leaf) {
+    int old_id = kv.second;
+    if (old_id >= 0 && old_id < (int)old_to_new.size() && old_to_new[old_id] >= 0)
+      kv.second = old_to_new[old_id];
+  }
+
+  // Post-pass 2: propagate leaf ranges up from leaves to root (bottom-up).
+  for (int i = next_node - 1; i >= 0; i--) {
+    if (separator[i].empty()) continue;  // leaf — already set above
     int lc = left_child[i];
-    int assigned_leaf = (lc >= 0 && leaf_lo[lc] >= 0) ? leaf_lo[lc] : 0;
+    int rc = right_child[i];
+    if (lc >= 0 && rc >= 0 && leaf_lo[lc] >= 0 && leaf_lo[rc] >= 0) {
+      leaf_lo[i] = std::min(leaf_lo[lc], leaf_lo[rc]);
+      leaf_hi[i] = std::max(leaf_hi[lc], leaf_hi[rc]);
+    } else if (lc >= 0 && leaf_lo[lc] >= 0) {
+      leaf_lo[i] = leaf_lo[lc];
+      leaf_hi[i] = leaf_hi[lc];
+    } else if (rc >= 0 && leaf_lo[rc] >= 0) {
+      leaf_lo[i] = leaf_lo[rc];
+      leaf_hi[i] = leaf_hi[rc];
+    }
+    // Assign separator vertices to leaf_lo of this node's subtree.
+    int assigned_leaf = (leaf_lo[i] >= 0) ? leaf_lo[i] : 0;
     for (const auto &nd : separator[i]) {
       if (nd.kind == CutNode::VAR) {
         if (nd.id < var_leaf.size()) var_leaf[nd.id] = assigned_leaf;
       } else {
         clause_leaf[nd.id] = assigned_leaf;
       }
-    }
-    // Update this node's leaf range
-    if (lc >= 0 && right_child[i] >= 0) {
-      leaf_lo[i] = leaf_lo[lc];
-      leaf_hi[i] = (leaf_hi[right_child[i]] >= 0) ?
-                    leaf_hi[right_child[i]] : leaf_hi[lc];
     }
   }
 
@@ -290,19 +330,18 @@ int NDHierarchy::mapToChild(
   int left_lo_val = leaf_lo[lc], left_hi_val = leaf_hi[lc];
   if (left_lo_val < 0) return -1;
 
-  bool any_left = false, any_right = false;
+  int n_left = 0, n_right = 0;
   for (unsigned var_id : active_var_ids) {
     if (var_id >= var_leaf.size()) continue;
     int leaf = var_leaf[var_id];
     if (leaf < 0) continue;
     if (leaf >= left_lo_val && leaf <= left_hi_val)
-      any_left = true;
+      n_left++;
     else
-      any_right = true;
-    if (any_left && any_right) break;
+      n_right++;
   }
 
-  if (any_left && !any_right) return lc;
-  if (any_right && !any_left) return rc;
+  if (n_left > 0 && n_right == 0) return lc;
+  if (n_right > 0 && n_left == 0) return rc;
   return -1;  // mixed
 }
