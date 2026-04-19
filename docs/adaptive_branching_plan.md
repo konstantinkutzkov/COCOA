@@ -89,13 +89,29 @@ where:
 
 - `vars_forced(v, σ)` = number of variables assigned (including v)
   after setting v=σ and running BCP to fixpoint from the current
-  component state. Minimum 1. Zero indicates a conflict → **failed
-  literal** (force v=¬σ as unit, don't branch).
+  component state. Always ≥ 1 since v itself is assigned.
 - `Δ_2clauses(v, σ)` = (# of active length-2 clauses after BCP) − (# of
-  active length-2 clauses before). Net change: positive if BCP created
-  new 2-clauses (from 3→2 shortening) net of those destroyed (via
-  satisfaction or firing).
-- `ε` = small weight, default 0.1.
+  active length-2 clauses before), **clamped to** `[−K_Δ, +K_Δ]`
+  where `K_Δ = ⌊1/ε⌋ − 1` (so `ε · K_Δ < 1`). Net change: positive if
+  BCP created new 2-clauses (from 3→2 shortening) net of those
+  destroyed (via satisfaction or firing).
+- `ε` = small weight, default 0.1 (so `K_Δ = 9`).
+
+**Clamping rationale.** The clamp ensures `|ε · Δ_2clauses| < 1 ≤
+vars_forced`, so the score stays strictly positive:
+
+    s(v, σ) ≥ 1 − ε · K_Δ > 0
+
+This protects the Newton solve for τ from singular inputs. It also
+reflects that the 2-clause term is a secondary tiebreaker: once ε·Δ
+approaches 1, the cascade size term (vars_forced) should dominate,
+not be overridden by arbitrarily-large 2-clause movements.
+
+A probe returns the triple `(success, vars_forced, Δ_2clauses)` where
+`success` is false iff BCP derives a conflict (the assigned-so-far
+literals falsify some clause). A conflict is not represented by
+vars_forced = 0 — it's a separate signal. The score `s(v, σ)` is only
+defined when `success = true`.
 
 ### Aggregation via branching number
 
@@ -115,11 +131,99 @@ Computing τ: Newton's method on `f(τ) = τ^(-a) + τ^(-b) − 1`,
 starting from τ = 2^(1/max(a,b)), converges in ~5 iterations to
 double precision. Trivial cost per candidate.
 
-### Failed literal handling
+### Failed literals as free commitments
 
-Before scoring, run a quick failed-literal check: if probing (v, T)
-produces a conflict, force v = F and skip scoring v. If both
-directions conflict, the component is UNSAT — return 0.
+When a probe returns `success = false`, we've proven that the formula
+conjoined with the probed literal is UNSAT in the current state.
+Therefore the negated literal is **entailed at the current state** —
+it's equivalent to a derived unit clause. Applying it is pure
+progress: a variable removed from the branching pool with no
+recursion needed.
+
+This is exactly the information that `implicitBCP` (currently disabled
+in separator mode) was designed to extract. Tier 2's scoring pass
+replaces that role, producing failed-literal forcings as a side
+effect.
+
+**Outer loop for Tier 2 — failed literals are committed and BCP
+re-propagates:**
+
+    loop:
+        changed = false
+        candidates = top_K_by_cheap_filter(active_vars)
+        scores = {}
+
+        for v in candidates:
+            probe_T = probe(v, T)
+            probe_F = probe(v, F)
+
+            if not probe_T.success and not probe_F.success:
+                return 0                      # component UNSAT
+
+            if not probe_T.success:
+                setLiteralIfFree(v, F, learned_UIP_antecedent)
+                BCP()                         # may cascade and
+                                              # expose more failures
+                changed = true
+                break                         # restart the pass
+                                              # from a clean state
+
+            if not probe_F.success:
+                setLiteralIfFree(v, T, learned_UIP_antecedent)
+                BCP()
+                changed = true
+                break
+
+            # both succeeded — record score
+            scores[v] = (probe_T, probe_F)
+
+        if not changed:
+            break
+
+    # scores is stable; pick the argmin τ
+    τ_best = +∞
+    v_best = None
+    for v in scores:
+        a = probe_T.vars_forced + ε · clamp(probe_T.delta_2clauses)
+        b = probe_F.vars_forced + ε · clamp(probe_F.delta_2clauses)
+        τ_v = newton_branching_number(a, b)
+        if τ_v < τ_best:
+            τ_best = τ_v
+            v_best = v
+
+    branch on v_best
+
+Notes:
+- Each iteration of the outer loop probes the same or a re-ranked
+  candidate set, but against a simplified formula (after failed
+  literals have been committed). Subsequent iterations typically have
+  smaller candidate sets and shorter cascades.
+- Restarting the pass on every failed-literal discovery is
+  conservative but simple. A tighter version could continue probing
+  the remaining candidates and only re-rank scores that were clearly
+  stale; this is a post-measurement optimization.
+- Each UIP clause recorded during failed-literal detection is stored
+  as a scoped learned clause (same infrastructure as implicant
+  caching).
+
+### Why Tier 2 is always worth running
+
+Even in the case where no single candidate has `τ` better than Tier
+1's separator branching, the scoring pass has already achieved two
+side benefits:
+
+1. **Unconditional forcings** — all failed literals in the top-K
+   candidate set are applied as units, simplifying the formula.
+2. **Conditional learned clauses** — every BCP cascade during a probe
+   that forces a literal `l` from assumption `v=σ` yields the clause
+   `(¬(v=σ) ∨ l)`. When the cascade involves ≤ 4 antecedent literals
+   through hyper-binary resolution, the result is kept as a scoped
+   learned clause, speeding up future BCP.
+
+So Tier 2 is not just a branching selector — it's also a bounded
+failed-literal-detection + hyper-binary-resolution pass, scoped to
+the current component. The implicit loss of `implicitBCP` in
+separator mode (see `solver.cpp:869` guard) is recovered here.
 
 ### Stage 0: cheap pre-filter for top-K
 
@@ -307,7 +411,10 @@ Each phase must pass existing regression tests before moving on.
 - [ ] Add `n_2clauses` counter with incremental updates on literal
   assignment/unassignment.
 - [ ] Extend `fail_test` to return `{bool success, int vars_forced, int
-  delta_2clauses}`.
+  delta_2clauses}`. Preserve its existing rollback behavior.
+- [ ] Refactor `implicitBCP` (solver.cpp:938) to call the extended
+  `fail_test` in its inner loop instead of inlining the probe. This
+  unifies the two callers of the same underlying primitive.
 - [ ] Unit tests on small CNFs verifying the 2-clause counter is
   consistent after random assignment/unassignment sequences.
 
@@ -325,14 +432,18 @@ Each phase must pass existing regression tests before moving on.
 ### Phase 3: Tier 2 basic scoring
 
 - [ ] Implement `pickBranchVariableAdaptive`:
-  - Enumerate candidates, apply Stage 0 cheap filter → top-K
-  - For each top-K, run Stage 2 probes → compute `(a, b)`
-  - Handle failed-literals
-  - Compute τ via Newton
-  - Pick argmin τ
+  - Outer loop: repeat until no failed literal is discovered in a pass
+    - Enumerate candidates, apply Stage 0 cheap filter → top-K
+    - For each v in top-K, run extended `fail_test` for both polarities
+    - On failed literal: apply forced unit + learned UIP antecedent,
+      run BCP, restart the pass
+    - Otherwise record scores
+  - After the outer loop settles: compute τ via Newton, pick argmin τ
 - [ ] Wire into `solver_rec.cpp`'s no-separator path.
 - [ ] Measure on `t1_049`: does τ-based selection outperform current
-  `pickBranchVariable`? Time + decision count.
+  `pickBranchVariable`? Time + decision count. Also measure:
+  failed-literals-per-decision discovered by the Tier 2 pass (a win
+  Tier 2 provides even when τ doesn't beat the existing heuristic).
 
 ### Phase 4: implicant caching
 
@@ -419,8 +530,10 @@ Initial parameter values (all tunable after measurement):
 - **Tier 2 becomes slow on medium instances.** If probing overhead
   outweighs the savings from better branching, we lose. The threshold
   machinery must cleanly skip Tier 2 when unnecessary.
-- **τ numerics.** `a = 0` or `b = 0` degenerate cases need explicit
-  handling (failed literal path), not Newton on a singular equation.
+- **τ numerics.** With the `Δ_2clauses` clamp and `vars_forced ≥ 1`,
+  both inputs `a, b` to the Newton solve are guaranteed `> 0`, so the
+  singular case `a = 0` cannot occur. Conflict cases bypass Newton via
+  the failed-literal path.
 
 ---
 
