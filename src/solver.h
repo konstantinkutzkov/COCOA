@@ -316,6 +316,9 @@ private:
 	unsigned long long reactive_metis_sum_nvars_ = 0;
 	unsigned long long reactive_metis_sum_sep_   = 0;
 	unsigned long long reactive_metis_failed_    = 0;  // returned no sep
+	unsigned long long reactive_metis_accepted_ = 0;  // passed both gates, used
+	unsigned long long reactive_metis_gate1_rej_ = 0; // Gate 1 rejected
+	unsigned long long reactive_metis_gate2_rej_ = 0; // Gate 2 rejected
 	// Bucketed histograms (by input var count) for a sense of scaling.
 	// Buckets: [0,16), [16,32), [32,64), [64,128), [128,256), [256,512), [512,inf)
 	static constexpr int kReactiveBuckets = 7;

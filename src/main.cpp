@@ -28,7 +28,7 @@ int main(int argc, char *argv[]) {
     cout << "\t -adaptiveMin n\t components with fewer than n active vars skip probing (default 12)" << endl;
     cout << "\t -reactiveMetis\t enable runtime-METIS fallback at hierarchy-reject points (opt-in; measured to regress on dense sub-instances as of 2026-04-20)" << endl;
     cout << "\t -reactiveMetisMin n\t min active vars to trigger reactive METIS (default 15)" << endl;
-    cout << "\t -reactiveMetisSkip k\t after a reactive-METIS failure, wait k decomposition levels before retrying (default 3)" << endl;
+    cout << "\t -reactiveMetisSkip k\t after a reactive-METIS failure, wait k decomposition levels before retrying (default 5)" << endl;
     cout << "\t -reactiveMetisBeta b\t Scheme F branching-var quality gate: require σ_sep_avg ≥ b·σ_top (default 0.5)" << endl;
     cout << "\t" << endl;
 

@@ -575,6 +575,7 @@ mpz_class Solver::solveComponent(Component &comp,
 						if (g1_ratio > config_.separator_max_ratio
 						    || g1_balance < config_.separator_min_balance) {
 							accept = false;
+							reactive_metis_gate1_rej_++;
 							if (config_.verbose) {
 								std::cerr << "  SEP_REJECT_REACTIVE gate=1"
 								          << " depth=" << depth
@@ -617,6 +618,7 @@ mpz_class Solver::solveComponent(Component &comp,
 									if (sigma_sep_avg
 									    < config_.reactive_metis_sigma_beta * sigma_top) {
 										accept = false;
+										reactive_metis_gate2_rej_++;
 										if (config_.verbose) {
 											std::cerr << "  SEP_REJECT_REACTIVE gate=2"
 											          << " depth=" << depth
@@ -634,6 +636,7 @@ mpz_class Solver::solveComponent(Component &comp,
 					}
 
 					if (accept) {
+						reactive_metis_accepted_++;
 						if (config_.verbose) {
 							std::cerr << "  SEP_USE kind=reactive depth=" << depth
 							          << " sep=" << r.separator.size()

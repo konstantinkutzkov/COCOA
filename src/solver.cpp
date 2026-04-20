@@ -192,7 +192,10 @@ void Solver::solve(const string &file_name) {
 	if (config_.use_reactive_metis && reactive_metis_calls_ > 0) {
 		cout << "\n=== Reactive-METIS summary ===" << endl;
 		cout << "  calls            : " << reactive_metis_calls_ << endl;
-		cout << "  failed           : " << reactive_metis_failed_ << endl;
+		cout << "  failed (r.ok=0)  : " << reactive_metis_failed_ << endl;
+		cout << "  gate1 rejected   : " << reactive_metis_gate1_rej_ << endl;
+		cout << "  gate2 rejected   : " << reactive_metis_gate2_rej_ << endl;
+		cout << "  accepted & used  : " << reactive_metis_accepted_ << endl;
 		cout << "  total time (ms)  : "
 		     << (reactive_metis_total_us_ / 1000.0) << endl;
 		cout << "  mean time (us)   : "

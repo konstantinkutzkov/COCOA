@@ -130,7 +130,7 @@ struct SolverConfiguration {
   // proceed exactly as before (nothing changes from the no-throttle
   // behaviour on sparse instances where the precomputed hierarchy is
   // always good enough).
-  unsigned reactive_metis_skip_k    = 3;
+  unsigned reactive_metis_skip_k    = 5;
   // Scheme F — branching-variable quality gate for reactive METIS
   // separators. Even when a reactive separator is structurally good
   // (passes the Phase-2 ratio + balance gates applied to its sides),
