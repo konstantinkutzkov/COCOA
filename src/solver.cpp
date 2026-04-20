@@ -6,6 +6,8 @@
  */
 #include "solver.h"
 #include <deque>
+#include <cmath>
+#include <limits>
 
 #include <algorithm>
 
@@ -1104,9 +1106,44 @@ ProbeResult Solver::probeLiteral(LiteralID lit) {
 
 bool Solver::commitFailedLiteral() {
 	const unsigned sz = literal_stack_.size();
-	for (auto it = uip_clauses_.rbegin(); it != uip_clauses_.rend(); ++it) {
-		setLiteralIfFree(it->front(), addUIPConflictClause(*it));
+	// recordAllUIPCauses can emit an empty UIP clause when the conflict
+	// is fully determined by literals at lower decision levels than the
+	// probe's (e.g. inside a deep clause-branch scope where prior learned
+	// clauses already make the formula UNSAT at the probe point). In that
+	// case there is no literal to force — the component is UNSAT.
+	//
+	// Scope-aware learning: if we're at the root scope (removed_clauses_
+	// empty) we use addUIPConflictClause (unscoped); if we're at a deeper
+	// scope we use addScopedUIPConflictClause so the learned clause's
+	// scope is recorded and learnedClauseInScope() gives the right
+	// answer in sibling/ancestor contexts. addScopedUIPConflictClause
+	// only learns non-binary (size >= 3) clauses — smaller UIPs are
+	// forced via setLiteralIfFree with NOT_A_CLAUSE antecedent, which is
+	// sound (the literal is an entailed unit of F at this scope, and is
+	// unSet on backtrack).
+	if (uip_clauses_.empty() || uip_clauses_.front().empty()) {
+		return false;
 	}
+	// Scope-safe learning across the whole call path. We always use
+	// addScopedUIPConflictClause:
+	//   - size ≥ 3: the learned clause is added with its current scope
+	//     (empty at root, {C, ...} inside clause branches). BCP's
+	//     learnedClauseInScope check then keeps it sound across sibling
+	//     branches.
+	//   - size < 3: addScoped returns NOT_A_CLAUSE without learning, so
+	//     we do NOT touch the global unit_clauses_ / binary_links_.
+	//     Those have no scope tracking and no BCP scope guard, so a
+	//     binary UIP derived under removed_clauses_ = {C} would
+	//     propagate in the sibling ¬C branch and could be unsound
+	//     there — causing a silent undercount (observed on t1_071).
+	//     The forced literal is still committed (sound under the
+	//     current state); we just don't persist the unit/binary form.
+	//
+	// Commit only the 1-UIP (uip_clauses_.front()); committing the full
+	// chain changed counts on t1_071 and was never shown to help.
+	auto &uip = const_cast<std::vector<LiteralID>&>(uip_clauses_.front());
+	Antecedent ante = addScopedUIPConflictClause(uip);
+	setLiteralIfFree(uip.front(), ante);
 	return BCP(sz);
 }
 
@@ -1164,6 +1201,191 @@ bool Solver::hierarchySeparatorAcceptable(int nd_node,
 		return false;
 	}
 	return true;
+}
+
+// ----------------------------------------------------------------------------
+// Phase 3: adaptive branching (Tier 2)
+// ----------------------------------------------------------------------------
+
+// Solve τ^(-a) + τ^(-b) = 1 for τ via Newton's method.
+// Precondition: a, b > 0. Returns a value in (1, 2].
+static double newton_branching_number(double a, double b) {
+	// Degenerate safety (callers should ensure a,b > 0).
+	if (a <= 0.0 || b <= 0.0) return 2.0;
+	// Start with the τ that would satisfy the larger exponent alone:
+	// τ^(-max(a,b)) = 1/2 ⇒ τ = 2^(1/max(a,b)). Always > actual root.
+	const double m = std::max(a, b);
+	double tau = std::pow(2.0, 1.0 / m);
+	for (int iter = 0; iter < 25; ++iter) {
+		double pa = std::pow(tau, -a);
+		double pb = std::pow(tau, -b);
+		double f  = pa + pb - 1.0;
+		double fp = -(a * pa + b * pb) / tau;
+		if (fp == 0.0) break;
+		double step = f / fp;
+		tau -= step;
+		if (tau < 1.0 + 1e-12) tau = 1.0 + 1e-12;
+		if (std::abs(step) < 1e-12) break;
+	}
+	return tau;
+}
+
+// Compute Stage 0 cheap scores for every active variable in `comp`.
+// Writes `cheap[v]` for each active v and fills `candidates` with the
+// unassigned component vars. Cost: O(|comp active vars| + L_comp).
+void Solver::stage0_cheap_scores(Component &comp,
+                                 double alpha,
+                                 std::vector<double> &cheap,
+                                 std::vector<VariableIndex> &candidates) {
+	candidates.clear();
+	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
+		if (literal_values_[LiteralID(*it, true)] == X_TRI)
+			candidates.push_back(*it);
+	}
+	cheap.assign(num_variables() + 1, 0.0);
+	if (candidates.empty()) return;
+
+	const double binary_weight = std::pow(2.0, -2.0 * alpha);
+	for (VariableIndex v : candidates) {
+		for (int pol = 0; pol < 2; ++pol) {
+			LiteralID l(v, pol == 1);
+			const auto &blinks = literals_[l].binary_links_;
+			for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
+				if (literal_values_[*bt] == X_TRI)
+					cheap[v] += binary_weight;
+			}
+		}
+	}
+
+	for (auto ct = comp.clsBegin(); *ct != clsSENTINEL; ++ct) {
+		ClauseOfs ofs = comp_manager_.clauseOfsOf(*ct);
+		if (isClauseRemoved(ofs) || isSatisfied(ofs)) continue;
+		if (ofs >= (ClauseOfs)original_lit_pool_size_
+		    && !learnedClauseInScope(ofs)) continue;
+		unsigned active_len = 0;
+		for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt) {
+			if (literal_values_[*lt] == X_TRI) active_len++;
+		}
+		if (active_len < 2) continue;
+		double w = std::pow(2.0, -alpha * (double)active_len);
+		for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt) {
+			if (literal_values_[*lt] == X_TRI)
+				cheap[lt->var()] += w;
+		}
+	}
+}
+
+VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsat) {
+	out_unsat = false;
+
+	const double alpha   = config_.stage0_length_decay;
+	const double epsilon = config_.epsilon_2clauses;
+	const size_t K       = config_.adaptive_top_k;
+	const unsigned min_probe_vars = config_.adaptive_probing_min_vars;
+	// Clamp bound for Δ_2clauses so |ε·Δ| < 1 (keeps scores > 0).
+	const int K_delta = std::max(1,
+	                   (int)std::floor(1.0 / std::max(epsilon, 1e-9)) - 1);
+
+	std::vector<VariableIndex> candidates;
+	std::vector<double> cheap;
+
+	// ------ Fast path: small component → Stage 0-only picker ------
+	//
+	// On well-decomposed instances (e.g. t1_071's 252-leaf ND hierarchy),
+	// the "no separator" path at hierarchy leaves usually has a tiny
+	// active component. K=20 × 2 probes per decision is disproportionate
+	// there. Skip probing for components below the configured threshold
+	// and use the argmax of the cheap score — same asymptotic cost as
+	// the legacy `pickBranchVariable`.
+	if (comp.num_variables() < min_probe_vars) {
+		stage0_cheap_scores(comp, alpha, cheap, candidates);
+		if (candidates.empty()) return 0;
+		VariableIndex best = candidates[0];
+		double best_score = cheap[best];
+		for (VariableIndex v : candidates) {
+			if (cheap[v] > best_score) {
+				best_score = cheap[v];
+				best = v;
+			}
+		}
+		return best;
+	}
+
+	// ------ Slow path: full adaptive with top-K probing + τ aggregation ------
+	struct ScoredCand {
+		VariableIndex v;
+		int vars_forced_T, vars_forced_F;
+		int delta_2c_T,    delta_2c_F;
+	};
+	std::vector<ScoredCand> scored;
+
+	while (true) {
+		stage0_cheap_scores(comp, alpha, cheap, candidates);
+		if (candidates.empty()) return 0;
+
+		// Sort candidates by cheap score descending, keep top-K.
+		std::sort(candidates.begin(), candidates.end(),
+		          [&cheap](VariableIndex a, VariableIndex b) {
+		              return cheap[a] > cheap[b];
+		          });
+		if (candidates.size() > K) candidates.resize(K);
+
+		// ------ Probe each top-K candidate; commit failed literals ------
+		scored.clear();
+		bool found_failed = false;
+		for (VariableIndex v : candidates) {
+			if (literal_values_[LiteralID(v, true)] != X_TRI) continue;
+
+			ProbeResult prT = probeLiteral(LiteralID(v, true));
+			ProbeResult prF = probeLiteral(LiteralID(v, false));
+
+			if (!prT.success && !prF.success) {
+				out_unsat = true;
+				return 0;
+			}
+			if (!prT.success) {
+				if (!commitFailedLiteral()) { out_unsat = true; return 0; }
+				found_failed = true;
+				break;
+			}
+			if (!prF.success) {
+				if (!commitFailedLiteral()) { out_unsat = true; return 0; }
+				found_failed = true;
+				break;
+			}
+
+			scored.push_back({v,
+			                   prT.vars_forced, prF.vars_forced,
+			                   prT.delta_2clauses, prF.delta_2clauses});
+		}
+
+		if (!found_failed) break;  // outer loop settled — proceed to τ selection
+	}
+
+	// ------ Pick argmin τ ------
+	if (scored.empty()) return 0;  // defensive
+
+	auto clamp_delta = [K_delta](int d) {
+		return std::max(-K_delta, std::min(K_delta, d));
+	};
+
+	double best_tau = std::numeric_limits<double>::infinity();
+	VariableIndex best_v = 0;
+	for (const auto &c : scored) {
+		double a = (double)c.vars_forced_T + epsilon * (double)clamp_delta(c.delta_2c_T);
+		double b = (double)c.vars_forced_F + epsilon * (double)clamp_delta(c.delta_2c_F);
+		double tau = newton_branching_number(a, b);
+		if (tau < best_tau) {
+			best_tau = tau;
+			best_v = c.v;
+		}
+	}
+	if (config_.verbose) {
+		std::cout << "  TIER2_PICK v=" << best_v
+		          << " tau=" << best_tau
+		          << " scored=" << scored.size() << std::endl;
+	}
+	return best_v;
 }
 
 bool Solver::initForTesting(const std::string &file_name) {

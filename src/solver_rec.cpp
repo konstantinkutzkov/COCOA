@@ -447,8 +447,19 @@ mpz_class Solver::solveComponent(Component &comp,
 		}
 	}
 
-	// No separator — regular variable branching within comp.
-	VariableIndex v = pickBranchVariable(comp);
+	// No separator — variable branching within comp.
+	// Phase 3: when `perform_adaptive_branching` is enabled, use the τ-based
+	// adaptive picker which also commits failed literals as unconditional
+	// progress (see pickBranchVariableAdaptive). Otherwise fall back to the
+	// legacy activity-score picker.
+	VariableIndex v;
+	if (config_.perform_adaptive_branching) {
+		bool comp_unsat = false;
+		v = pickBranchVariableAdaptive(comp, comp_unsat);
+		if (comp_unsat) return 0;
+	} else {
+		v = pickBranchVariable(comp);
+	}
 	if (v == 0) {
 		return 1;
 	}

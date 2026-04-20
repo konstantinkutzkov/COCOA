@@ -51,6 +51,32 @@ struct SolverConfiguration {
   double separator_max_ratio   = 0.20;
   double separator_min_balance = 0.30;
 
+  // Phase 3 / Tier 2: adaptive branching via probe-scored τ minimization.
+  // When enabled, replaces `pickBranchVariable` on the no-separator path
+  // inside `solveComponent`.
+  //
+  //   adaptive_top_k        = number of candidates to probe after Stage 0.
+  //   stage0_length_decay   = α in cheap_score(v) = Σ 2^(−α · active_len(C)).
+  //   epsilon_2clauses      = ε in s(v,σ) = vars_forced + ε · clamp(Δ_2clauses).
+  //                           Δ is clamped to [−K_Δ, +K_Δ] with K_Δ = ⌊1/ε⌋−1
+  //                           so |ε·Δ| < 1 ≤ vars_forced (protects Newton).
+  bool perform_adaptive_branching = false;
+  unsigned adaptive_top_k        = 20;
+  double   stage0_length_decay   = 1.0;
+  double   epsilon_2clauses      = 0.1;
+  // Components smaller than this many active variables use a
+  // Stage-0-only (cheap clause-length-weighted) picker — no probing,
+  // no Newton-τ, no failed-literal commits. The probing machinery only
+  // pays off on medium-to-large components; on hierarchy leaves and
+  // post-filter intermediate nodes of well-decomposed instances
+  // (e.g. t1_071) probing is pure overhead.
+  //
+  // Default 60 is the empirically-measured elbow on t1_071 — above it
+  // probing never fires on any decision and performance matches the
+  // no-adaptive baseline. Lower the threshold with -adaptiveMin n to
+  // experiment with probing on dense instances (e.g. t1_049).
+  unsigned adaptive_probing_min_vars = 60;
+
   // Separator discovery mode:
   //   use_nd_hierarchy=true, reactive_fallback=false -> pure METIS hierarchy
   //   use_nd_hierarchy=true, reactive_fallback=true  -> hybrid (METIS top + Dinic's)

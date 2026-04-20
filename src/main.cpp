@@ -24,6 +24,8 @@ int main(int argc, char *argv[]) {
     cout << "\t -cb [n]\t enable clause branching (min clause length n, default 8)" << endl;
     cout << "\t -sep [n]\t enable separator branching (min active vars n, default 15)" << endl;
     cout << "\t -sepMode m\t separator mode: metis|hybrid|dinic (default metis)" << endl;
+    cout << "\t -adaptive\t use Phase-3 adaptive (τ-based) branching on the no-separator path" << endl;
+    cout << "\t -adaptiveMin n\t components with fewer than n active vars skip probing (default 12)" << endl;
     cout << "\t" << endl;
 
     return -1;
@@ -84,6 +86,15 @@ int main(int argc, char *argv[]) {
       i++;
     } else if (strcmp(argv[i], "-rec") == 0) {
       theSolver.config().use_recursive_solver = true;
+    } else if (strcmp(argv[i], "-adaptive") == 0) {
+      theSolver.config().perform_adaptive_branching = true;
+    } else if (strcmp(argv[i], "-adaptiveMin") == 0) {
+      if (argc <= i + 1) {
+        cout << " -adaptiveMin needs a numeric argument" << endl;
+        return -1;
+      }
+      theSolver.config().adaptive_probing_min_vars = atoi(argv[i + 1]);
+      i++;
     } else if (strcmp(argv[i], "-verifyCache") == 0) {
       theSolver.config().verify_cache = true;
     } else if (strcmp(argv[i], "-cs") == 0) {

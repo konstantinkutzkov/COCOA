@@ -200,6 +200,33 @@ private:
 	                                  Component &comp,
 	                                  unsigned filtered_sep_size);
 
+	// Phase 3 / Tier 2: adaptive branching via probe-scored τ minimization.
+	// Returns the chosen branching variable, or 0 if no branching is
+	// possible. When `out_unsat` is set to true on return, the component
+	// is UNSAT (model count = 0). When `out_unsat == false && return == 0`,
+	// the component is already fully assigned (model count = 1).
+	//
+	// Implementation (see docs/adaptive_branching_plan.md Phase 3):
+	//   - outer loop: gather active vars in comp, Stage 0 cheap filter
+	//     (clause-length-weighted occurrence sum with exponential decay),
+	//     take top-K by cheap score.
+	//   - probe each top-K candidate in both polarities. On failed literal
+	//     (one polarity conflicts), commit the UIP(s) and restart the
+	//     outer loop against the simplified formula. On both polarities
+	//     failing, return UNSAT.
+	//   - once no failed literals are found in a pass, pick the candidate
+	//     minimizing the branching number τ from τ^(-a) + τ^(-b) = 1.
+	VariableIndex pickBranchVariableAdaptive(Component &comp, bool &out_unsat);
+
+	// Stage 0 cheap-score helper: fills `cheap[v]` for every active
+	// variable in `comp` using the clause-length-weighted sum
+	// Σ 2^(-α · active_len(C)). Fills `candidates` with unassigned
+	// vars of comp. No probing, no side effects on the formula state.
+	void stage0_cheap_scores(Component &comp,
+	                         double alpha,
+	                         std::vector<double> &cheap,
+	                         std::vector<VariableIndex> &candidates);
+
 	// Recursive implementation (defined in solver_rec.cpp).
 	// Entry point: returns exit state; final count is stored in statistics_.
 	SOLVER_StateT countSATRec();
