@@ -92,6 +92,29 @@ struct SolverConfiguration {
   // newly computed count against any previously stored count for the
   // same key. A mismatch indicates a semantic bug in the canonical key.
   bool verify_cache = false;
+
+  // Reactive METIS: when the precomputed hierarchy separator is
+  // unavailable or rejected by the Phase-2 gate, compute a fresh
+  // METIS separator on the current sub-component's incidence graph
+  // and USE it. Applies only to sub-components with at least
+  // `reactive_metis_min_vars` active variables — below that threshold
+  // we fall through to the variable-branching path (adaptive Stage 0
+  // picker or legacy activity-score picker).
+  //
+  // Default OFF. A naive per-fallback invocation was measured to be a
+  // 22-93x slowdown on shrunken t1_049 sub-instances, because the
+  // call count compounds across recursion levels (165k+ calls on an
+  // 80-var instance). The infrastructure is kept for future work on
+  // a *strategic* version — invoked sparsely after enough simplification
+  // that METIS is likely to find a useful separator — or with an
+  // incremental graph that avoids rebuilding the incidence snapshot on
+  // every call. As shipped, reactive METIS is an opt-in experiment.
+  //
+  // Stats (call count, total/mean/max us, failure rate, bucket
+  // distribution) are always accumulated when use_reactive_metis is
+  // on and printed at end-of-solve if any call was made.
+  bool     use_reactive_metis       = false;
+  unsigned reactive_metis_min_vars  = 15;
 };
 
 #endif /* SOLVER_CONFIG_H_ */

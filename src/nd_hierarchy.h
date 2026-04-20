@@ -89,4 +89,36 @@ struct NDHierarchy {
                  const std::vector<unsigned> &active_var_ids) const;
 };
 
+// ---------------------------------------------------------------
+// Runtime METIS separator computation for a sub-component.
+//
+// Input: a snapshot of the currently-active piece of the formula —
+//   active_vars    : variables still unassigned in the sub-component
+//   long_clauses   : list of (clause_offset, active-var-ids) for each
+//                    non-satisfied, in-scope clause of length >= 3
+//   binary_pairs   : pairs (a, b) for each active binary clause; each
+//                    pair represents one clause and must be deduplicated
+//                    by the caller (emit once per clause)
+//
+// Output: RuntimeSeparatorResult containing the separator as CutNodes
+// (variables or long-clause offsets; never binaries, since those are
+// rendered as direct var-var edges). metis_elapsed_us is the wall time
+// spent inside the METIS_ComputeVertexSeparator call + graph setup.
+//
+// Intended for measurement and for a possible reactive-METIS code path
+// when the precomputed hierarchy's separator is inapplicable to the
+// current sub-component.
+struct RuntimeSeparatorResult {
+  std::vector<CutNode> separator;
+  unsigned left_vars  = 0;
+  unsigned right_vars = 0;
+  double   metis_elapsed_us = 0.0;
+  bool     ok = false;
+};
+
+RuntimeSeparatorResult computeRuntimeMetisSeparator(
+    const std::vector<unsigned> &active_vars,
+    const std::vector<std::pair<unsigned, std::vector<unsigned>>> &long_clauses,
+    const std::vector<std::pair<unsigned, unsigned>> &binary_pairs);
+
 #endif /* ND_HIERARCHY_H_ */

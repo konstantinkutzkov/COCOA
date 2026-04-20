@@ -218,6 +218,17 @@ private:
 	//     minimizing the branching number τ from τ^(-a) + τ^(-b) = 1.
 	VariableIndex pickBranchVariableAdaptive(Component &comp, bool &out_unsat);
 
+	// Extract a runtime snapshot of `comp` in the form expected by
+	// computeRuntimeMetisSeparator: active variables, active long
+	// clauses (each with its current unassigned literals' vars), and
+	// active binary clauses (deduplicated pairs). Used for the
+	// reactive-METIS measurement path.
+	void buildMetisInputFromComponent(
+	    Component &comp,
+	    std::vector<unsigned> &active_vars,
+	    std::vector<std::pair<unsigned, std::vector<unsigned>>> &long_clauses,
+	    std::vector<std::pair<unsigned, unsigned>> &binary_pairs);
+
 	// Stage 0 cheap-score helper: fills `cheap[v]` for every active
 	// variable in `comp` using the clause-length-weighted sum
 	// Σ 2^(-α · active_len(C)). Fills `candidates` with unassigned
@@ -284,6 +295,20 @@ private:
 
 	// Precomputed nested-dissection hierarchy (built once at solve start)
 	NDHierarchy nd_hierarchy_;
+
+	// Reactive-METIS measurement accumulators. Populated when
+	// config_.measure_reactive_metis is on; printed at end-of-solve.
+	unsigned long long reactive_metis_calls_   = 0;
+	double             reactive_metis_total_us_ = 0.0;
+	double             reactive_metis_max_us_   = 0.0;
+	unsigned long long reactive_metis_sum_nvars_ = 0;
+	unsigned long long reactive_metis_sum_sep_   = 0;
+	unsigned long long reactive_metis_failed_    = 0;  // returned no sep
+	// Bucketed histograms (by input var count) for a sense of scaling.
+	// Buckets: [0,16), [16,32), [32,64), [64,128), [128,256), [256,512), [512,inf)
+	static constexpr int kReactiveBuckets = 7;
+	unsigned long long reactive_metis_bucket_count_[kReactiveBuckets] = {0};
+	double             reactive_metis_bucket_total_us_[kReactiveBuckets] = {0};
 
 	// Separator branching
 	std::vector<CutNode> separator_elements_;

@@ -464,6 +464,57 @@ mpz_class Solver::solveComponent(Component &comp,
 			if (separator.empty() && config_.use_reactive_separator_fallback) {
 				separator = findSeparatorFor(comp, false);
 			}
+			// Reactive METIS fallback: when the precomputed hierarchy's
+			// separator is unavailable or was rejected by the Phase-2
+			// gate, compute a fresh METIS separator on the current
+			// sub-component and USE it. Sub-components with fewer
+			// than `reactive_metis_min_vars` active variables are
+			// skipped (too small for METIS to bisect usefully) and
+			// fall through to variable branching.
+			if (separator.empty() && config_.use_reactive_metis) {
+				// Cheap threshold check first: count active vars WITHOUT
+				// building the full METIS input. buildMetisInput iterates
+				// every clause and binary link too, which is wasteful for
+				// sub-components that will be rejected here anyway.
+				unsigned n_active_quick = 0;
+				for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it)
+					if (isActive(LiteralID(*it, true))) n_active_quick++;
+				if (n_active_quick >= config_.reactive_metis_min_vars) {
+					std::vector<unsigned> mv;
+					std::vector<std::pair<unsigned, std::vector<unsigned>>> mc;
+					std::vector<std::pair<unsigned, unsigned>> mp;
+					buildMetisInputFromComponent(comp, mv, mc, mp);
+					RuntimeSeparatorResult r = computeRuntimeMetisSeparator(mv, mc, mp);
+					// Accumulate measurement stats regardless of outcome.
+					reactive_metis_calls_++;
+					reactive_metis_total_us_ += r.metis_elapsed_us;
+					if (r.metis_elapsed_us > reactive_metis_max_us_)
+						reactive_metis_max_us_ = r.metis_elapsed_us;
+					reactive_metis_sum_nvars_ += mv.size();
+					reactive_metis_sum_sep_   += r.separator.size();
+					if (!r.ok) reactive_metis_failed_++;
+					int bucket = 0;
+					size_t n = mv.size();
+					if      (n >= 512) bucket = 6;
+					else if (n >= 256) bucket = 5;
+					else if (n >= 128) bucket = 4;
+					else if (n >= 64)  bucket = 3;
+					else if (n >= 32)  bucket = 2;
+					else if (n >= 16)  bucket = 1;
+					reactive_metis_bucket_count_[bucket]++;
+					reactive_metis_bucket_total_us_[bucket] += r.metis_elapsed_us;
+
+					// Use the separator if METIS produced a valid
+					// bisection. Invalidate nd_node — we're off the
+					// precomputed tree now, so subsequent mapToChild
+					// calls should not be attempted (nd_node=-1 is the
+					// legitimate "no hierarchy" signal).
+					if (r.ok) {
+						separator = std::move(r.separator);
+						nd_node = -1;
+					}
+				}
+			}
 		}
 	}
 

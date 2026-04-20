@@ -26,6 +26,8 @@ int main(int argc, char *argv[]) {
     cout << "\t -sepMode m\t separator mode: metis|hybrid|dinic (default metis)" << endl;
     cout << "\t -adaptive\t use Phase-3 adaptive (τ-based) branching on the no-separator path" << endl;
     cout << "\t -adaptiveMin n\t components with fewer than n active vars skip probing (default 12)" << endl;
+    cout << "\t -reactiveMetis\t enable runtime-METIS fallback at hierarchy-reject points (opt-in; measured to regress on dense sub-instances as of 2026-04-20)" << endl;
+    cout << "\t -reactiveMetisMin n\t min active vars to trigger reactive METIS (default 15)" << endl;
     cout << "\t" << endl;
 
     return -1;
@@ -88,6 +90,15 @@ int main(int argc, char *argv[]) {
       theSolver.config().use_recursive_solver = true;
     } else if (strcmp(argv[i], "-adaptive") == 0) {
       theSolver.config().perform_adaptive_branching = true;
+    } else if (strcmp(argv[i], "-reactiveMetis") == 0) {
+      theSolver.config().use_reactive_metis = true;
+    } else if (strcmp(argv[i], "-noReactiveMetis") == 0) {
+      theSolver.config().use_reactive_metis = false;
+    } else if (strcmp(argv[i], "-reactiveMetisMin") == 0) {
+      if (i + 1 < argc && isdigit(argv[i+1][0])) {
+        theSolver.config().reactive_metis_min_vars = atoi(argv[i + 1]);
+        i++;
+      }
     } else if (strcmp(argv[i], "-adaptiveMin") == 0) {
       if (argc <= i + 1) {
         cout << " -adaptiveMin needs a numeric argument" << endl;

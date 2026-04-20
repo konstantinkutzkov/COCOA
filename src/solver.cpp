@@ -8,6 +8,7 @@
 #include <deque>
 #include <cmath>
 #include <limits>
+#include <unordered_set>
 
 #include <algorithm>
 
@@ -186,6 +187,36 @@ void Solver::solve(const string &file_name) {
 		cout << "c verify_cache summary: forced_misses(hits_converted)=" << cc.stats_verify_checks
 		     << " verified_matches=" << cc.stats_verify_ok
 		     << " unique_stores=" << cc.stats_stores << endl;
+	}
+
+	if (config_.use_reactive_metis && reactive_metis_calls_ > 0) {
+		cout << "\n=== Reactive-METIS summary ===" << endl;
+		cout << "  calls            : " << reactive_metis_calls_ << endl;
+		cout << "  failed           : " << reactive_metis_failed_ << endl;
+		cout << "  total time (ms)  : "
+		     << (reactive_metis_total_us_ / 1000.0) << endl;
+		cout << "  mean time (us)   : "
+		     << (reactive_metis_total_us_ / (double)reactive_metis_calls_) << endl;
+		cout << "  max  time (us)   : " << reactive_metis_max_us_ << endl;
+		cout << "  mean input vars  : "
+		     << ((double)reactive_metis_sum_nvars_ / (double)reactive_metis_calls_) << endl;
+		cout << "  mean sep size    : "
+		     << ((double)reactive_metis_sum_sep_ / (double)reactive_metis_calls_) << endl;
+		cout << "  overhead vs solve time : "
+		     << (reactive_metis_total_us_ / 1e6 / std::max(1e-9, statistics_.time_elapsed_) * 100.0)
+		     << " %" << endl;
+		static const char *bucket_labels[kReactiveBuckets] = {
+			"[0,16)", "[16,32)", "[32,64)", "[64,128)",
+			"[128,256)", "[256,512)", "[512,inf)"};
+		cout << "  bucket distribution (vars -> calls / mean us):" << endl;
+		for (int i = 0; i < kReactiveBuckets; i++) {
+			if (reactive_metis_bucket_count_[i] == 0) continue;
+			cout << "    " << bucket_labels[i]
+			     << " : " << reactive_metis_bucket_count_[i] << " calls, "
+			     << (reactive_metis_bucket_total_us_[i]
+			         / (double)reactive_metis_bucket_count_[i])
+			     << " us mean" << endl;
+		}
 	}
 }
 
@@ -1390,6 +1421,64 @@ VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsa
 		          << " scored=" << scored.size() << std::endl;
 	}
 	return best_v;
+}
+
+void Solver::buildMetisInputFromComponent(
+    Component &comp,
+    std::vector<unsigned> &active_vars,
+    std::vector<std::pair<unsigned, std::vector<unsigned>>> &long_clauses,
+    std::vector<std::pair<unsigned, unsigned>> &binary_pairs)
+{
+	active_vars.clear();
+	long_clauses.clear();
+	binary_pairs.clear();
+
+	// Active variables of the component.
+	std::unordered_set<unsigned> in_comp;
+	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
+		if (literal_values_[LiteralID(*it, true)] == X_TRI) {
+			active_vars.push_back(*it);
+			in_comp.insert(*it);
+		}
+	}
+	if (active_vars.size() < 4) return;
+
+	// Active long (non-binary) clauses with their live literals' vars.
+	for (auto ct = comp.clsBegin(); *ct != clsSENTINEL; ++ct) {
+		ClauseOfs ofs = comp_manager_.clauseOfsOf(*ct);
+		if (isClauseRemoved(ofs) || isSatisfied(ofs)) continue;
+		if (ofs >= (ClauseOfs)original_lit_pool_size_
+		    && !learnedClauseInScope(ofs)) continue;
+		std::vector<unsigned> vars;
+		for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt) {
+			if (literal_values_[*lt] == X_TRI) vars.push_back(lt->var());
+		}
+		if (vars.size() >= 3) {
+			long_clauses.push_back({(unsigned)ofs, std::move(vars)});
+		}
+		// Size-2 entries (after BCP trimmed a length-3+ clause to 2)
+		// are pseudo-binaries; we could add them as binary_pairs, but
+		// the inclusion below via binary_links_ won't catch them
+		// because they are not stored there. Skipping them is
+		// conservative — they will still be part of BCP, just not part
+		// of the METIS connectivity. Acceptable for the one-shot
+		// runtime separator.
+	}
+
+	// Active binary clauses where both endpoints are in the component.
+	for (VariableIndex v : active_vars) {
+		for (int pol = 0; pol < 2; ++pol) {
+			LiteralID l(v, pol == 1);
+			const auto &blinks = literals_[l].binary_links_;
+			for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
+				if (literal_values_[*bt] != X_TRI) continue;
+				if (l.raw() >= bt->raw()) continue;  // dedup
+				if (in_comp.count(bt->var())) {
+					binary_pairs.push_back({(unsigned)v, (unsigned)bt->var()});
+				}
+			}
+		}
+	}
 }
 
 bool Solver::initForTesting(const std::string &file_name) {

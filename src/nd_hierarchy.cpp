@@ -12,6 +12,7 @@
 #include <metis.h>
 #include <cstdio>
 #include <cassert>
+#include <chrono>
 #include <queue>
 #include <functional>
 
@@ -370,4 +371,99 @@ int NDHierarchy::mapToChild(
   if (n_left > 0 && n_right == 0) return lc;
   if (n_right > 0 && n_left == 0) return rc;
   return -2;  // mixed across subtrees — invariant violation
+}
+
+// ---------------------------------------------------------------
+// Runtime METIS separator (one-shot) on a sub-component snapshot.
+// See declaration in nd_hierarchy.h for semantics.
+// ---------------------------------------------------------------
+RuntimeSeparatorResult computeRuntimeMetisSeparator(
+    const vector<unsigned> &active_vars,
+    const vector<pair<unsigned, vector<unsigned>>> &long_clauses,
+    const vector<pair<unsigned, unsigned>> &binary_pairs)
+{
+  RuntimeSeparatorResult out;
+  const size_t n_vars = active_vars.size();
+  const size_t n_cls  = long_clauses.size();
+  const size_t n      = n_vars + n_cls;
+  if (n < 4) return out;  // too small for METIS to bisect usefully
+
+  auto t0 = chrono::steady_clock::now();
+
+  // Map variable id → local 0..n_vars-1 index.
+  unordered_map<unsigned, int> var_to_local;
+  var_to_local.reserve(n_vars * 2);
+  for (size_t i = 0; i < n_vars; i++) var_to_local[active_vars[i]] = (int)i;
+
+  // Build adjacency lists in local-index space.
+  vector<vector<int>> adj(n);
+  // long clauses: bipartite var ↔ clause edges
+  for (size_t ci = 0; ci < n_cls; ci++) {
+    int cl_local = (int)(n_vars + ci);
+    for (unsigned v : long_clauses[ci].second) {
+      auto it = var_to_local.find(v);
+      if (it == var_to_local.end()) continue;
+      adj[it->second].push_back(cl_local);
+      adj[cl_local].push_back(it->second);
+    }
+  }
+  // binary clauses: direct var-var edges
+  for (const auto &pr : binary_pairs) {
+    auto ia = var_to_local.find(pr.first);
+    auto ib = var_to_local.find(pr.second);
+    if (ia == var_to_local.end() || ib == var_to_local.end()) continue;
+    adj[ia->second].push_back(ib->second);
+    adj[ib->second].push_back(ia->second);
+  }
+
+  // Build CSR for METIS.
+  vector<idx_t> xadj(n + 1);
+  vector<idx_t> adjncy;
+  adjncy.reserve(2 * (n_cls * 3 + binary_pairs.size()));
+  xadj[0] = 0;
+  for (size_t i = 0; i < n; i++) {
+    for (int u : adj[i]) adjncy.push_back(u);
+    xadj[i + 1] = (idx_t)adjncy.size();
+  }
+
+  vector<idx_t> vwgt(n, 1);
+  idx_t options[METIS_NOPTIONS];
+  METIS_SetDefaultOptions(options);
+
+  idx_t nvtxs = (idx_t)n;
+  idx_t sepsize = 0;
+  vector<idx_t> part(n);
+
+  int ret = METIS_ComputeVertexSeparator(
+      &nvtxs, xadj.data(), adjncy.data(),
+      vwgt.data(), options, &sepsize, part.data());
+
+  auto t1 = chrono::steady_clock::now();
+  out.metis_elapsed_us =
+      chrono::duration<double, std::micro>(t1 - t0).count();
+
+  if (ret != METIS_OK) return out;
+
+  // Translate local separator indices back to CutNodes.
+  for (size_t i = 0; i < n; i++) {
+    if (part[i] == 0) {
+      if (i < n_vars) out.left_vars++;
+    } else if (part[i] == 1) {
+      if (i < n_vars) out.right_vars++;
+    } else {
+      // Separator vertex.
+      if (i < n_vars) {
+        out.separator.push_back(CutNode(CutNode::VAR, active_vars[i]));
+      } else {
+        size_t ci = i - n_vars;
+        out.separator.push_back(CutNode(CutNode::CLAUSE,
+                                         long_clauses[ci].first));
+      }
+    }
+  }
+
+  out.ok = (!out.separator.empty()
+            && out.left_vars > 0
+            && out.right_vars > 0);
+  return out;
 }
