@@ -397,6 +397,15 @@ mpz_class Solver::solveComponent(Component &comp,
 					}
 					separator = std::move(filtered);
 				}
+				// Phase 2 / Tier 1 gating: reject too-large or too-imbalanced
+				// hierarchy separators for this sub-component. When rejected,
+				// `separator` is cleared and we fall through to the reactive
+				// Dinic's fallback (if enabled) or plain variable branching.
+				if (!separator.empty() &&
+				    !hierarchySeparatorAcceptable(nd_node, comp,
+				                                  (unsigned)separator.size())) {
+					separator.clear();
+				}
 			}
 			// Reactive Dinic's fallback when hierarchy provides nothing.
 			// Covers pure-Dinic mode (hierarchy disabled) and hybrid mode

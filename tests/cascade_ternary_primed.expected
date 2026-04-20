@@ -1,0 +1,9 @@
+# cascade_ternary_primed — length-3 clauses pre-shortened by unit clauses
+# Baseline applies units first: x5=F, x6=F → 3 active 2-clauses.
+model_count                 9
+probe.1=T.success           true
+probe.1=T.vars_forced       4
+probe.1=T.delta_2clauses    -3
+probe.1=F.success           true
+probe.1=F.vars_forced       1
+probe.1=F.delta_2clauses    -3

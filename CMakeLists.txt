@@ -36,3 +36,9 @@ add_executable (sharpSAT src/main.cpp)
 target_link_libraries (sharpSAT libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
     ${GKLIB_DIR}/build/libGKlib.a)
+
+add_executable (test_probe tests/test_probe.cpp)
+target_include_directories (test_probe PRIVATE src)
+target_link_libraries (test_probe libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a)

@@ -1,0 +1,10 @@
+c both_polarities_fail — probing x1 in either polarity conflicts.
+c Clauses: (x1∨x2), (x1∨¬x2), (¬x1∨x3), (¬x1∨¬x3).
+c x1=T forces x3 and ¬x3 → conflict.
+c x1=F forces x2 and ¬x2 → conflict.
+c Component is UNSAT.
+p cnf 3 4
+1 2 0
+1 -2 0
+-1 3 0
+-1 -3 0

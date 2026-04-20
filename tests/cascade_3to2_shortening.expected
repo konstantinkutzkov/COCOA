@@ -1,0 +1,8 @@
+# cascade_3to2_shortening — 3-clauses become 2-clauses, positive Δ
+model_count                 47
+probe.1=T.success           true
+probe.1=T.vars_forced       1
+probe.1=T.delta_2clauses    3
+probe.1=F.success           true
+probe.1=F.vars_forced       1
+probe.1=F.delta_2clauses    0

@@ -1,0 +1,6 @@
+# both_polarities_fail — component UNSAT
+model_count                 0
+probe.1=T.success           false
+probe.1=T.uip_clause        {-1}
+probe.1=F.success           false
+probe.1=F.uip_clause        {1}

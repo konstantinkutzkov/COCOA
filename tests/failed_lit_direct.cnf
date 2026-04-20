@@ -1,0 +1,8 @@
+c failed_lit_direct — probing x1=T immediately forces y=T and y=F, conflict.
+c UIP clause is unit ¬x1. Probe(x1=F) succeeds trivially.
+c Shell variables x3, x4 keep the instance SAT for model-count check.
+p cnf 4 4
+-1 2 0
+-1 -2 0
+3 4 0
+-3 -4 0

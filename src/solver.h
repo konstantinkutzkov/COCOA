@@ -26,6 +26,14 @@ enum retStateT {
 	EXIT, RESOLVED, PROCESS_COMPONENT, BACKTRACK
 };
 
+// Result of a one-shot BCP probe (see Solver::probeLiteral).
+// vars_forced and delta_2clauses are undefined when success == false.
+struct ProbeResult {
+	bool success;
+	int  vars_forced;
+	int  delta_2clauses;
+};
+
 
 
 class StopWatch {
@@ -93,6 +101,51 @@ public:
 
 	void solve(const string & file_name);
 
+	// Test-support entry point: load the CNF, initialize the decision
+	// stack, apply the unit clauses, and run BCP. Returns true iff no
+	// conflict is derived during the initial propagation. Does NOT run
+	// the full preprocessing (failed-literal pre-pass, hard-wire compact).
+	// Intended for unit tests that want to exercise probeLiteral /
+	// commitFailedLiteral against a known baseline state.
+	bool initForTesting(const std::string &file_name);
+
+	// One-shot BCP probe with rollback. Sets `lit`, runs BCP. On failure
+	// populates uip_clauses_ via recordAllUIPCauses. Rolls back the
+	// literal stack to its entry state unconditionally. On success
+	// reports the cascade size (including `lit`) and the signed change
+	// in the count of active 2-clauses.
+	//
+	// probeLiteral does the full O(L) 2-clause scans before and after
+	// BCP to compute delta_2clauses. Callers that only need pass/fail
+	// (e.g. implicitBCP) should use probeLiteralPassFail instead, which
+	// skips the scoring scans entirely.
+	ProbeResult probeLiteral(LiteralID lit);
+
+	// Lightweight probe: same BCP-with-rollback + UIP-recording behavior
+	// as probeLiteral, but skips the vars_forced / delta_2clauses
+	// bookkeeping. Returns true iff BCP succeeded. Used by implicitBCP
+	// where only the failed-literal signal is consumed.
+	bool probeLiteralPassFail(LiteralID lit);
+
+	// Installs the UIP clauses from the most recent failed probe as
+	// antecedents for the forced literals, then runs BCP. Returns false
+	// iff the resulting BCP derives a new conflict (component UNSAT).
+	// Precondition: uip_clauses_ was populated by a probeLiteral that
+	// returned success == false.
+	bool commitFailedLiteral();
+
+	// Counts active 2-clauses in the current formula state. A clause is
+	// an active 2-clause iff it is in scope, not satisfied, not removed,
+	// and has exactly two non-falsified literals. Binary clauses are
+	// counted via binary_links_; non-binary via a walk over literal_pool_.
+	int count_active_2clauses();
+
+	// Read-only access to the UIP clauses from the most recent failed
+	// probe. Used by test harnesses to assert on learned-clause content.
+	const std::vector<std::vector<LiteralID>> &uip_clauses_view() const {
+		return uip_clauses_;
+	}
+
 	SolverConfiguration &config() {
 		return config_;
 	}
@@ -130,6 +183,22 @@ private:
 	void HardWireAndCompact();
 
 	SOLVER_StateT countSAT();
+
+	// Phase 2 / Tier 1 gating: decide whether a precomputed ND-hierarchy
+	// separator is acceptable for the current sub-component. Rejects
+	// separators that are too large (|sep|/n > separator_max_ratio) or
+	// too imbalanced (min(L,R)/(L+R) < separator_min_balance), where L
+	// and R are the counts of active component vars falling into the
+	// left/right child subtrees of `nd_node`.
+	//
+	// Called after the component-filter step in solver_rec.cpp. Returns
+	// true iff both gates pass (and therefore the separator should be
+	// used). Returns true trivially when the separator is empty or when
+	// nd_node is invalid / leaf (no balance signal available); the gate
+	// is only meaningful for non-empty separators at internal nodes.
+	bool hierarchySeparatorAcceptable(int nd_node,
+	                                  Component &comp,
+	                                  unsigned filtered_sep_size);
 
 	// Recursive implementation (defined in solver_rec.cpp).
 	// Entry point: returns exit state; final count is stored in statistics_.
@@ -288,28 +357,6 @@ private:
 		stack_.top().resetRemainingComps();
 	}
 
-	bool fail_test(LiteralID lit) {
-		unsigned sz = literal_stack_.size();
-		// we increase the decLev artificially
-		// s.t. after the tentative BCP call, we can learn a conflict clause
-		// relative to the assignment of *jt
-		stack_.startFailedLitTest();
-		setLiteralIfFree(lit);
-
-		assert(!hasAntecedent(lit));
-
-		bool bSucceeded = BCP(sz);
-		if (!bSucceeded)
-			recordAllUIPCauses();
-
-		stack_.stopFailedLitTest();
-
-		while (literal_stack_.size() > sz) {
-			unSet(literal_stack_.back());
-			literal_stack_.pop_back();
-		}
-		return bSucceeded;
-	}
 	/////////////////////////////////////////////
 	//  BEGIN conflict analysis
 	/////////////////////////////////////////////

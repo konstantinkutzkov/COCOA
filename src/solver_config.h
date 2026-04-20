@@ -38,6 +38,19 @@ struct SolverConfiguration {
   unsigned separator_tries = 12;
   unsigned separator_min_second_comp = 12;
 
+  // Phase 2 / Tier 1 gating: reject a precomputed ND-hierarchy separator
+  // for the current sub-component if it is too large or too imbalanced
+  // relative to the component's active variables. When rejected, the
+  // separator falls back to Dinic's (if enabled) or to variable branching.
+  //
+  //   separator_max_ratio   = max ( |filtered_sep| / |active vars in comp| )
+  //   separator_min_balance = min ( min(L,R) / (L+R) )
+  //
+  // L and R count active component vars mapped to the left/right child
+  // subtrees of the current hierarchy node.
+  double separator_max_ratio   = 0.20;
+  double separator_min_balance = 0.30;
+
   // Separator discovery mode:
   //   use_nd_hierarchy=true, reactive_fallback=false -> pure METIS hierarchy
   //   use_nd_hierarchy=true, reactive_fallback=true  -> hybrid (METIS top + Dinic's)

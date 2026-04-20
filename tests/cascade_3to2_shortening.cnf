@@ -1,0 +1,6 @@
+c cascade_3to2_shortening — length-3 clauses that shorten to length-2 when x1=T
+c Probe(x1=T): no forcing but +3 new 2-clauses. Probe(x1=F): all satisfied.
+p cnf 6 3
+-1 2 3 0
+-1 4 5 0
+-1 6 2 0

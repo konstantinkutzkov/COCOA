@@ -227,14 +227,42 @@ separator mode (see `solver.cpp:869` guard) is recovered here.
 
 ### Stage 0: cheap pre-filter for top-K
 
-Scoring all active vars by full BCP would cost O(n_active × BCP). Instead:
+Scoring all active vars by full BCP would cost O(n_active × BCP). We
+need a cheap proxy that predicts BCP-activation potential — not just
+raw occurrence count, since a variable appearing in many length-8
+clauses will trigger no cascades, while a variable in a few
+length-2/3 clauses is highly active.
 
-    For each candidate v:
-        cheap_score(v) = |binary_links_[LiteralID(v, false)]|
-                      + |binary_links_[LiteralID(v, true)]|
+Weighted occurrence score with exponential decay in clause length:
 
-This is O(1) per var, O(n_active) total. Sort by `cheap_score`, take
-top-K (default K = 20) for full BCP probing.
+    For each active variable v:
+        cheap_score(v) = Σ_{C ∋ v, C active}  2^(−α · current_length(C))
+
+where `current_length(C)` is the clause's length under the current
+partial assignment (maintained by the Phase 1 infrastructure). Binary
+clauses (length 2) contribute `2^(−2α)`; length-3 clauses contribute
+`2^(−3α)`; and so on. With `α = 1` the weight halves per extra
+literal; with `α = 2` it quarters. Default: `α = 1.0`, adjustable.
+
+**Rationale.** A length-ℓ clause containing v becomes a forcing
+clause only after ℓ−1 of its other literals are falsified, so its
+contribution to BCP triggered by assigning v decays roughly
+exponentially in ℓ. This makes `cheap_score` a rank-correlated proxy
+for the full `vars_forced` without simulating BCP.
+
+**Cost.** Per variable: O(|occ(v)|) to sum over its clause
+occurrences. Total across active vars: O(L), where L = total literal
+occurrences in the component. Still cheap — no state mutation, pure
+read of `clause_length_` and occurrence lists.
+
+Sort by `cheap_score` descending, take top-K (default K = 20) for
+full BCP probing.
+
+**New config:**
+
+```cpp
+double stage0_length_decay = 1.0;   // α in 2^(−α·length)
+```
 
 ### Stage 1: binary implication closure (optional)
 
@@ -346,7 +374,7 @@ Per decision, the estimated cost:
 | stage | worst-case | typical |
 |-------|-----------|---------|
 | Tier 1 lookup + threshold check | O(n_active) | O(n_active) |
-| Tier 2 Stage 0 cheap filter | O(n_active) | O(n_active) |
+| Tier 2 Stage 0 cheap filter | O(L) | O(L) |
 | Tier 2 Stage 1 binary closure (optional) | O(n·(n+e)) | O(n·c̄) |
 | Tier 2 Stage 2 full BCP × 2K probes | O(K · L) | O(K · c̄ · d̄) |
 | τ via Newton × K | O(K) | O(K) |
@@ -496,6 +524,7 @@ Initial parameter values (all tunable after measurement):
 | `separator_max_ratio` | 0.20 |
 | `separator_min_balance` | 0.30 |
 | `K` (top-K probes) | 20 |
+| `stage0_length_decay` (α in Stage 0) | 1.0 |
 | `ε` (2-clause weight) | 0.1 |
 | `θ_τ_ratio` (Tier 2→3 trigger) | 1.05 |
 | `max_implicant_size` | 4 |

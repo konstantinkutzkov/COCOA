@@ -1,0 +1,9 @@
+# failed_lit_direct — x1=T is a failed literal.
+# x1=F: cl 1,2 sat (¬x1=T); x2 free; x3,x4 under XOR → 2 models.
+# Total: 1 · 2 · 2 = 4.
+model_count                 4
+probe.1=T.success           false
+probe.1=T.uip_clause        {-1}
+probe.1=F.success           true
+probe.1=F.vars_forced       1
+probe.1=F.delta_2clauses    -2

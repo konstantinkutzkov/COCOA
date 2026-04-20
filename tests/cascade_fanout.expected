@@ -1,0 +1,9 @@
+# cascade_fanout — binary fanout, asymmetric vars_forced, symmetric Δ
+# x1=T: x2..x6 all forced (1 model). x1=F: x2..x6 free (2^5 = 32 models). Total 33.
+model_count                 33
+probe.1=T.success           true
+probe.1=T.vars_forced       6
+probe.1=T.delta_2clauses    -5
+probe.1=F.success           true
+probe.1=F.vars_forced       1
+probe.1=F.delta_2clauses    -5

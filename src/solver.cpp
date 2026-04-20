@@ -975,54 +975,209 @@ bool Solver::implicitBCP() {
 
 		statistics_.num_failed_literal_tests_ += test_lits.size();
 
-		for (auto lit : test_lits)
-			if (isActive(lit) && threshold <= literal(lit).activity_score_) {
-				unsigned sz = literal_stack_.size();
-				// we increase the decLev artificially
-				// s.t. after the tentative BCP call, we can learn a conflict clause
-				// relative to the assignment of *jt
-				stack_.startFailedLitTest();
-				setLiteralIfFree(lit);
+		for (auto lit : test_lits) {
+			if (!isActive(lit)) continue;
+			if (threshold > literal(lit).activity_score_) continue;
 
-				assert(!hasAntecedent(lit));
+			if (probeLiteralPassFail(lit)) continue;
 
-				bool bSucceeded = BCP(sz);
-				if (!bSucceeded)
-					recordAllUIPCauses();
-
-				stack_.stopFailedLitTest();
-
-				while (literal_stack_.size() > sz) {
-					unSet(literal_stack_.back());
-					literal_stack_.pop_back();
+			statistics_.num_failed_literals_detected_++;
+			if (config_.verbose) {
+				cout << "  IBCP_FAILED lit=" << lit.toInt()
+					 << " removed_cls=" << removed_clauses_.size()
+					 << " learned:";
+				for (auto &cl : uip_clauses_) {
+					cout << " [";
+					for (auto l : cl) cout << l.toInt() << " ";
+					cout << "]";
 				}
-
-				if (!bSucceeded) {
-					statistics_.num_failed_literals_detected_++;
-					if (config_.verbose) {
-						cout << "  IBCP_FAILED lit=" << lit.toInt()
-							 << " removed_cls=" << removed_clauses_.size()
-							 << " learned:";
-						for (auto &cl : uip_clauses_) {
-							cout << " [";
-							for (auto l : cl) cout << l.toInt() << " ";
-							cout << "]";
-						}
-						cout << endl;
-					}
-					sz = literal_stack_.size();
-					for (auto it = uip_clauses_.rbegin();
-							it != uip_clauses_.rend(); it++) {
-						setLiteralIfFree(it->front(),
-								addUIPConflictClause(*it));
-					}
-					if (!BCP(sz))
-						return false;
-				}
+				cout << endl;
 			}
+			if (!commitFailedLiteral())
+				return false;
+		}
 	}
 
 	return true;
+}
+
+// ----------------------------------------------------------------------------
+// Phase 1 primitives (see docs/phase1_implementation_contract.md)
+// ----------------------------------------------------------------------------
+
+int Solver::count_active_2clauses() {
+	int count = 0;
+
+	// 1) Binary clauses: each active literal's active neighbors in
+	//    binary_links_ counts one endpoint of an active binary clause.
+	//    Each active binary is counted twice (once per endpoint), so we
+	//    divide by two at the end.
+	unsigned bin_endpoint_sum = 0;
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		if (literal_values_[l] != X_TRI) continue;  // not active
+		const auto &blinks = literals_[l].binary_links_;
+		for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
+			if (literal_values_[*bt] == X_TRI) bin_endpoint_sum++;
+		}
+	}
+	count += (int)(bin_endpoint_sum / 2);
+
+	// 2) Non-binary clauses: walk literal_pool_ linearly. The pool starts
+	//    with a lone SENTINEL_LIT at position 0 (see Instance::createfromFile),
+	//    so the first real clause's literals start at
+	//    1 + ClauseHeader::overheadInLits(). Each clause ends at its
+	//    SENTINEL_LIT, followed by the next clause's header slots.
+	ClauseOfs cl_ofs = (ClauseOfs)(1 + ClauseHeader::overheadInLits());
+	while (cl_ofs < (ClauseOfs)literal_pool_.size()) {
+		bool in_scope = true;
+		if (cl_ofs >= (ClauseOfs)original_lit_pool_size_
+		    && !learnedClauseInScope(cl_ofs)) {
+			in_scope = false;
+		}
+		if (isClauseRemoved(cl_ofs)) in_scope = false;
+
+		bool satisfied = false;
+		int nonfalsified = 0;
+		auto it = literal_pool_.begin() + cl_ofs;
+		for (; *it != SENTINEL_LIT; ++it) {
+			TriValue v = literal_values_[*it];
+			if (v == T_TRI) satisfied = true;
+			if (v != F_TRI) nonfalsified++;
+		}
+		// it now points at SENTINEL_LIT. The next clause's header begins
+		// immediately after the sentinel.
+		cl_ofs = (ClauseOfs)((it - literal_pool_.begin()) + 1
+		                      + ClauseHeader::overheadInLits());
+
+		if (in_scope && !satisfied && nonfalsified == 2) count++;
+	}
+
+	return count;
+}
+
+bool Solver::probeLiteralPassFail(LiteralID lit) {
+	const unsigned sz = literal_stack_.size();
+	stack_.startFailedLitTest();
+	setLiteralIfFree(lit);
+	assert(!hasAntecedent(lit));
+
+	const bool bSucceeded = BCP(sz);
+	if (!bSucceeded) recordAllUIPCauses();
+
+	stack_.stopFailedLitTest();
+	while (literal_stack_.size() > sz) {
+		unSet(literal_stack_.back());
+		literal_stack_.pop_back();
+	}
+	assert(literal_stack_.size() == sz);
+	return bSucceeded;
+}
+
+ProbeResult Solver::probeLiteral(LiteralID lit) {
+	ProbeResult res{true, 0, 0};
+	const int baseline_2c = count_active_2clauses();
+	const unsigned sz = literal_stack_.size();
+
+	stack_.startFailedLitTest();
+	setLiteralIfFree(lit);
+	assert(!hasAntecedent(lit));
+
+	const bool bSucceeded = BCP(sz);
+	if (!bSucceeded) {
+		recordAllUIPCauses();
+		res.success = false;
+	} else {
+		const int post_2c = count_active_2clauses();
+		res.vars_forced    = (int)(literal_stack_.size() - sz);
+		res.delta_2clauses = post_2c - baseline_2c;
+	}
+
+	stack_.stopFailedLitTest();
+	while (literal_stack_.size() > sz) {
+		unSet(literal_stack_.back());
+		literal_stack_.pop_back();
+	}
+	assert(literal_stack_.size() == sz);
+
+	return res;
+}
+
+bool Solver::commitFailedLiteral() {
+	const unsigned sz = literal_stack_.size();
+	for (auto it = uip_clauses_.rbegin(); it != uip_clauses_.rend(); ++it) {
+		setLiteralIfFree(it->front(), addUIPConflictClause(*it));
+	}
+	return BCP(sz);
+}
+
+bool Solver::hierarchySeparatorAcceptable(int nd_node,
+                                          Component &comp,
+                                          unsigned filtered_sep_size) {
+	// Nothing to gate on.
+	if (filtered_sep_size == 0) return true;
+	if (nd_node < 0 || !nd_hierarchy_.valid) return true;
+
+	// Ratio gate: |filtered_sep| / |active vars in comp|.
+	unsigned n_active = comp.num_variables();
+	if (n_active == 0) return true;
+	double ratio = (double)filtered_sep_size / (double)n_active;
+	if (ratio > config_.separator_max_ratio) {
+		if (config_.verbose) {
+			std::cout << "  TIER1_REJECT nd=" << nd_node
+			          << " reason=ratio sep=" << filtered_sep_size
+			          << " n=" << n_active
+			          << " ratio=" << ratio
+			          << " max=" << config_.separator_max_ratio << std::endl;
+		}
+		return false;
+	}
+
+	// Balance gate: partition active component vars by the child subtree
+	// they belong to, using the ND-hierarchy leaf ranges.
+	int lc = nd_hierarchy_.left_child[nd_node];
+	int rc = nd_hierarchy_.right_child[nd_node];
+	if (lc < 0 || rc < 0) return true;  // leaf node has no balance signal
+
+	int L_lo = nd_hierarchy_.leaf_lo[lc];
+	int L_hi = nd_hierarchy_.leaf_hi[lc];
+	int R_lo = nd_hierarchy_.leaf_lo[rc];
+	int R_hi = nd_hierarchy_.leaf_hi[rc];
+
+	int L = 0, R = 0;
+	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
+		if (!isActive(LiteralID(*it, true))) continue;
+		if ((size_t)*it >= nd_hierarchy_.var_leaf.size()) continue;
+		int leaf = nd_hierarchy_.var_leaf[*it];
+		if (leaf < 0) continue;
+		if (leaf >= L_lo && leaf <= L_hi) L++;
+		else if (leaf >= R_lo && leaf <= R_hi) R++;
+	}
+	int total = L + R;
+	double balance = (total > 0) ? (double)std::min(L, R) / (double)total : 0.0;
+	if (balance < config_.separator_min_balance) {
+		if (config_.verbose) {
+			std::cout << "  TIER1_REJECT nd=" << nd_node
+			          << " reason=balance L=" << L << " R=" << R
+			          << " balance=" << balance
+			          << " min=" << config_.separator_min_balance << std::endl;
+		}
+		return false;
+	}
+	return true;
+}
+
+bool Solver::initForTesting(const std::string &file_name) {
+	createfromFile(file_name);
+	initStack(num_variables());
+
+	// Detect immediately conflicting unit clauses (x AND ¬x).
+	for (auto lit : unit_clauses_) {
+		if (literal_values_[lit] == F_TRI) return false;
+	}
+	for (auto lit : unit_clauses_) {
+		setLiteralIfFree(lit);
+	}
+	return BCP(0);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
