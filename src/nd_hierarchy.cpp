@@ -89,6 +89,7 @@ static bool bisect_subgraph(
 void NDHierarchy::build(
     int n_vars,
     const vector<pair<unsigned, vector<unsigned>>> &clauses,
+    const vector<pair<unsigned, unsigned>> &binary_pairs,
     int /* target_npes — unused, tree depth is automatic */)
 {
   valid = false;
@@ -97,8 +98,11 @@ void NDHierarchy::build(
 
   if (n_full < 4) return;
 
-  // Build full adjacency lists (indexed by full graph index)
-  // Vertices: 0..n_vars-1 = variables, n_vars..n_full-1 = clauses
+  // Build adjacency lists (indexed by full graph index).
+  // Vertices: 0..n_vars-1 = variables, n_vars..n_full-1 = long-clause
+  // nodes. Binary clauses are NOT represented as separate nodes; they
+  // contribute a direct edge between their two variable nodes. This
+  // is not bipartite but METIS handles general undirected graphs.
   vector<vector<int>> full_adj(n_full);
   for (int ci = 0; ci < n_cls; ci++) {
     int clause_gidx = n_vars + ci;
@@ -108,6 +112,15 @@ void NDHierarchy::build(
       full_adj[var_gidx].push_back(clause_gidx);
       full_adj[clause_gidx].push_back(var_gidx);
     }
+  }
+  // Binary clauses: direct var-var edges.
+  for (const auto &pr : binary_pairs) {
+    unsigned a = pr.first, b = pr.second;
+    if (a < 1 || (int)a > n_vars) continue;
+    if (b < 1 || (int)b > n_vars) continue;
+    int ga = a - 1, gb = b - 1;
+    full_adj[ga].push_back(gb);
+    full_adj[gb].push_back(ga);
   }
 
   // Maps for full graph index ↔ variable/clause IDs
@@ -321,11 +334,23 @@ int NDHierarchy::mapToChild(
     int parent_node,
     const vector<unsigned> &active_var_ids) const
 {
+  // Return convention:
+  //   >= 0 : valid child to descend to.
+  //   -1   : legitimate "can't descend" — parent is a leaf (no children)
+  //          OR active_var_ids contributes no information (all vars have
+  //          leaf < 0, or the list is empty). Not an error: the caller
+  //          should just treat the hierarchy as unavailable for the
+  //          sub-component from here on.
+  //   -2   : INVARIANT VIOLATION — the sub-component's active vars span
+  //          both children's subtrees. This must not happen when clause
+  //          learning is correctly disabled during separator branching
+  //          (BCP + clause removal cannot create cross-subtree edges).
+  //          Callers should abort on -2 so the underlying bug is found.
   if (!valid || parent_node < 0 || parent_node >= n_nodes) return -1;
 
   int lc = left_child[parent_node];
   int rc = right_child[parent_node];
-  if (lc < 0 || rc < 0) return -1;
+  if (lc < 0 || rc < 0) return -1;  // parent is a leaf — legitimate
 
   int left_lo_val = leaf_lo[lc], left_hi_val = leaf_hi[lc];
   if (left_lo_val < 0) return -1;
@@ -341,7 +366,8 @@ int NDHierarchy::mapToChild(
       n_right++;
   }
 
+  if (n_left == 0 && n_right == 0) return -1;  // empty info — legitimate
   if (n_left > 0 && n_right == 0) return lc;
   if (n_right > 0 && n_left == 0) return rc;
-  return -1;  // mixed
+  return -2;  // mixed across subtrees — invariant violation
 }

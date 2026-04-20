@@ -50,10 +50,29 @@ struct NDHierarchy {
   int root() const { return 0; }  // dynamic tree: root allocated first
 
   // Build hierarchy from a CNF formula's incidence graph.
-  // vars: number of variables (1-indexed)
-  // clauses: list of (clause_offset, list of variable IDs in clause)
+  //
+  // Long clauses (size >= 3) contribute a clause-node + one edge per
+  // literal (bipartite pattern). Binary clauses MUST be supplied here
+  // too: they are rendered as direct var-var edges in the same graph
+  // (non-bipartite — METIS handles this fine). Omitting binaries was
+  // a latent bug: it gave METIS an incomplete connectivity graph, so
+  // the produced separator could leave binary-clause connectivity
+  // intact across its two sides, violating the separator invariant
+  // for any formula with binary clauses.
+  //
+  // Unit clauses are not needed (a unit fixes a single variable; it
+  // doesn't contribute connectivity between distinct variables).
+  //
+  // Arguments:
+  //   n_vars         - number of variables (1-indexed)
+  //   long_clauses   - list of (clause_offset, list of variable IDs)
+  //                    for clauses of size >= 3
+  //   binary_pairs   - list of (var_a, var_b) for binary clauses; each
+  //                    pair represents one binary clause (caller must
+  //                    deduplicate)
   void build(int n_vars,
-             const std::vector<std::pair<unsigned, std::vector<unsigned>>> &clauses,
+             const std::vector<std::pair<unsigned, std::vector<unsigned>>> &long_clauses,
+             const std::vector<std::pair<unsigned, unsigned>> &binary_pairs,
              int target_npes = 8);
 
   // Look up the best separator for a component described by its active

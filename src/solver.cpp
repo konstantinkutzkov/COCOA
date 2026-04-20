@@ -1289,17 +1289,21 @@ VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsa
 	std::vector<VariableIndex> candidates;
 	std::vector<double> cheap;
 
-	// ------ Fast path: small component → Stage 0-only picker ------
+	// Compute Stage 0 scores + active candidate list up front. This lets
+	// the threshold check use the ACTIVE variable count (not the
+	// component's stored var count, which may be much larger after BCP
+	// has assigned many of its variables).
+	stage0_cheap_scores(comp, alpha, cheap, candidates);
+	if (candidates.empty()) return 0;
+
+	// ------ Fast path: small active component → Stage 0 argmax ------
 	//
-	// On well-decomposed instances (e.g. t1_071's 252-leaf ND hierarchy),
-	// the "no separator" path at hierarchy leaves usually has a tiny
-	// active component. K=20 × 2 probes per decision is disproportionate
-	// there. Skip probing for components below the configured threshold
-	// and use the argmax of the cheap score — same asymptotic cost as
-	// the legacy `pickBranchVariable`.
-	if (comp.num_variables() < min_probe_vars) {
-		stage0_cheap_scores(comp, alpha, cheap, candidates);
-		if (candidates.empty()) return 0;
+	// On well-decomposed instances the "no separator" path at hierarchy
+	// leaves usually has a tiny active component. K=20 × 2 probes per
+	// decision is disproportionate there. Use the argmax of the cheap
+	// score instead — same asymptotic cost as the legacy
+	// `pickBranchVariable`.
+	if (candidates.size() < min_probe_vars) {
 		VariableIndex best = candidates[0];
 		double best_score = cheap[best];
 		for (VariableIndex v : candidates) {

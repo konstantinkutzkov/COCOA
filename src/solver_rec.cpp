@@ -191,12 +191,11 @@ SOLVER_StateT Solver::countSATRec() {
 	// and the mode requests it (pure-Dinic mode skips this).
 	if (config_.perform_separator_branching && config_.use_nd_hierarchy &&
 	    !nd_hierarchy_.valid) {
-		// Collect clauses: (clause_ofs, list of variable IDs)
+		// Collect long clauses: (clause_ofs, list of variable IDs).
+		// We drop clauses that are already satisfied/removed from the
+		// metis input to keep the graph snug, but MUST include every
+		// active clause that carries connectivity.
 		vector<pair<unsigned, vector<unsigned>>> clause_list;
-		for (auto ofs : occurrence_lists_[LiteralID(1, true)]) {
-			(void)ofs;  // just to check structure
-		}
-		// Actually, iterate the literal pool for original clauses
 		Component &root_comp = comp_manager_.superComponentOf(stack_.top());
 		for (auto it = root_comp.clsBegin(); *it != varsSENTINEL; it++) {
 			ClauseOfs ofs = comp_manager_.clauseOfsOf(*it);
@@ -206,15 +205,24 @@ SOLVER_StateT Solver::countSATRec() {
 				vars.push_back(lt->var());
 			clause_list.push_back({ofs, vars});
 		}
-		// Binary clauses omitted: no real clause offset to branch on.
-		// Variables connected via binary clauses share long clauses
-		// in the incidence graph, giving METIS enough connectivity info.
-		// If needed, binary clauses could be added as edges between
-		// their two variable nodes (bypassing clauses) but this would
-		// break the bipartite structure.
-		{
+		// Binary clauses: collected as (var_a, var_b) pairs. Each binary
+		// is physically stored once per endpoint in binary_links_; we
+		// deduplicate here by only emitting when the lower-raw endpoint
+		// owns the pair. The METIS input graph will render these as
+		// direct var-var edges (see nd_hierarchy.cpp).
+		vector<pair<unsigned, unsigned>> binary_pairs;
+		for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+			const auto &blinks = literal(l).binary_links_;
+			for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
+				if (l.raw() < bt->raw()) {
+					// Each binary clause connects two variables; we only
+					// care about variable connectivity for METIS.
+					binary_pairs.push_back({(unsigned)l.var(),
+					                         (unsigned)bt->var()});
+				}
+			}
 		}
-		nd_hierarchy_.build(num_variables(), clause_list);
+		nd_hierarchy_.build(num_variables(), clause_list, binary_pairs);
 	}
 
 	Component &root = comp_manager_.superComponentOf(stack_.top());
@@ -254,14 +262,43 @@ mpz_class Solver::solveComponent(Component &comp,
 		vector<Component*> subcomps = discoverComponentsOf(comp, trivial_factor);
 		mpz_class result = trivial_factor;
 		for (Component *sub : subcomps) {
-			// Map sub-component to ND hierarchy child node
+			// Map sub-component to ND hierarchy child node.
+			// mapToChild's return convention:
+			//   >= 0 : valid child to descend to.
+			//   -1   : legitimate "no child" (parent is a leaf, or no
+			//          active vars with known leaves). Treat as "no
+			//          hierarchy available for this sub-component".
+			//   -2   : invariant violation — sub-comp vars span both
+			//          children. Must not happen when learning is
+			//          correctly disabled during separator branching.
 			int child_nd_node = -1;
 			if (nd_node >= 0 && nd_hierarchy_.valid) {
 				vector<unsigned> sub_vars;
 				for (auto it = sub->varsBegin(); *it != varsSENTINEL; it++)
 					if (isActive(LiteralID(*it, true)))
 						sub_vars.push_back(*it);
-				child_nd_node = nd_hierarchy_.mapToChild(nd_node, sub_vars);
+				int mt = nd_hierarchy_.mapToChild(nd_node, sub_vars);
+				if (mt == -2) {
+					std::cerr << "\n*** SEPARATOR_INVARIANT_VIOLATED ***\n"
+					          << "  nd_node=" << nd_node
+					          << " sub_vars.size()=" << sub_vars.size()
+					          << " removed_clauses=" << removed_clauses_.size()
+					          << "\n  sub_vars leaves:";
+					for (unsigned v : sub_vars) {
+						int l = ((size_t)v < nd_hierarchy_.var_leaf.size())
+						        ? nd_hierarchy_.var_leaf[v] : -1;
+						std::cerr << " " << v << "(leaf=" << l << ")";
+					}
+					std::cerr << "\n  child subtrees:"
+					          << " left=[" << nd_hierarchy_.leaf_lo[nd_hierarchy_.left_child[nd_node]]
+					          << ".." << nd_hierarchy_.leaf_hi[nd_hierarchy_.left_child[nd_node]] << "]"
+					          << " right=[" << nd_hierarchy_.leaf_lo[nd_hierarchy_.right_child[nd_node]]
+					          << ".." << nd_hierarchy_.leaf_hi[nd_hierarchy_.right_child[nd_node]] << "]"
+					          << std::endl;
+					std::cerr.flush();
+					std::abort();
+				}
+				child_nd_node = mt;  // >= 0 or -1 (both valid/legitimate)
 			}
 
 			// Content cache lookup
@@ -395,6 +432,20 @@ mpz_class Solver::solveComponent(Component &comp,
 								filtered.push_back(nd);
 						}
 					}
+					if (config_.verbose && filtered.empty() && !separator.empty()) {
+						// Separator vars at this node are assigned to
+						// the left child's leaf range by construction, so
+						// a stored but entirely-filtered separator means
+						// the current sub-component lives only in the
+						// right child's subtree. That's exactly the
+						// extreme-imbalance case the balance gate is for
+						// (L=0, R=n → balance=0). Report it as a single
+						// rejection reason — the action (fall through to
+						// variable branching) is the same either way.
+						std::cerr << "  TIER1_REJECT nd=" << nd_node
+						          << " reason=filter_empty stored_sep="
+						          << separator.size() << std::endl;
+					}
 					separator = std::move(filtered);
 				}
 				// Phase 2 / Tier 1 gating: reject too-large or too-imbalanced
@@ -427,14 +478,17 @@ mpz_class Solver::solveComponent(Component &comp,
 				// Consumed by BCP — skip
 				return solveComponent(comp, rest, false, depth, nd_node);
 			}
-			// Branch: A = v=true, B = v=false
+			// Branch: A = v=true, B = v=false. This branch consumes a
+			// separator element — learning must be suppressed inside.
 			LiteralID lit_t(el.id, true), lit_f(el.id, false);
 			bool t_first = literal(lit_t).activity_score_ >
 			               literal(lit_f).activity_score_;
 			mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f,
-			                              comp, rest, false, depth, nd_node);
+			                              comp, rest, false, depth, nd_node,
+			                              /*from_separator=*/true);
 			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t,
-			                              comp, rest, false, depth, nd_node);
+			                              comp, rest, false, depth, nd_node,
+			                              /*from_separator=*/true);
 			return A + B;
 		} else {
 			// Clause element
@@ -466,15 +520,19 @@ mpz_class Solver::solveComponent(Component &comp,
 	LiteralID lit_t(v, true), lit_f(v, false);
 	bool t_first = literal(lit_t).activity_score_ >
 	               literal(lit_f).activity_score_;
-	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth, -1);
-	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false, depth, -1);
+	// Non-separator variable branching: learning IS allowed here.
+	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth, -1,
+	                              /*from_separator=*/false);
+	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false, depth, -1,
+	                              /*from_separator=*/false);
 	return A + B;
 }
 
 mpz_class Solver::branchOnLiteral(LiteralID lit,
                                    Component &comp,
                                    vector<CutNode> separator,
-                                   bool separator_reset, int depth, int nd_node) {
+                                   bool separator_reset, int depth, int nd_node,
+                                   bool from_separator) {
 	unsigned lit_save = literal_stack_.size();
 	statistics_.num_decisions_++;
 	if (statistics_.num_decisions_ % 128 == 0)
@@ -509,8 +567,18 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		//
 		// Order matters: conflict analysis walks literal_stack_ backward
 		// via antecedents, so it must run BEFORE we truncate the stack.
+		//
+		// IMPORTANT: learning is suppressed when this branch is part of
+		// consuming a precomputed separator element (from_separator=true).
+		// A learned clause adds a hyperedge to the incidence graph, which
+		// can connect variables across the hierarchy's left/right subtrees
+		// and violate the separator's structural invariant — breaking
+		// mapToChild's ability to descend. During separator branching the
+		// formula must evolve only via BCP + clause removal (which can
+		// only shrink connectivity, never grow it).
 		recordLastUIPCauses();
-		if (!uip_clauses_.empty() && uip_clauses_.back().size() >= 3
+		if (!from_separator
+		    && !uip_clauses_.empty() && uip_clauses_.back().size() >= 3
 		    && uip_clauses_.back().front() == lit.neg()) {
 			addScopedUIPConflictClause(uip_clauses_.back());
 		}

@@ -238,12 +238,27 @@ private:
 	                         int depth = 0,
 	                         int nd_node = -1);  // hierarchy node, -1 = use root
 	// Branch on a literal, run BCP, recurse, then restore state.
+	//
+	// `from_separator` distinguishes the two call sites:
+	//  - true  : consuming a variable element of the precomputed
+	//            separator. Clause learning MUST be disabled here —
+	//            a learned clause can add incidence-graph edges that
+	//            violate the separator's structural invariant (the
+	//            separator must separate F, no exceptions; BCP + clause
+	//            removal can only shrink connectivity, but learning
+	//            adds it). If we learn during separator branching, a
+	//            future `mapToChild` may return -1 because the learned
+	//            clause now connects variables across subtree boundaries.
+	//  - false : regular variable branching on the no-separator path.
+	//            Learning is allowed and safe (scoped by
+	//            removed_clauses_ for clause-branch contexts).
 	mpz_class branchOnLiteral(LiteralID lit,
 	                           Component &comp,
 	                           std::vector<CutNode> separator,
 	                           bool separator_reset,
 	                           int depth = 0,
-	                           int nd_node = -1);
+	                           int nd_node = -1,
+	                           bool from_separator = false);
 	// Branch on a clause (removed vs removed+negated).
 	mpz_class branchOnClause(ClauseOfs cl_ofs,
 	                          Component &comp,
