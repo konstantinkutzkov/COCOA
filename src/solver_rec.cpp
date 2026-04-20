@@ -244,7 +244,8 @@ mpz_class Solver::solveComponent(Component &comp,
                                   vector<CutNode> separator,
                                   bool separator_reset,
                                   int depth,
-                                  int nd_node) {
+                                  int nd_node,
+                                  int reactive_metis_skip_until_depth) {
 	if (stopwatch_.timeBoundBroken())
 		return 0;
 
@@ -326,7 +327,8 @@ mpz_class Solver::solveComponent(Component &comp,
 				string cur_sig = componentSignature(*sub, literal_pool_, literals_,
 				    literal_values_, comp_manager_.getAnalyzer().clauseIdToOfs(),
 				    rm, original_lit_pool_size_);
-				mpz_class recomputed = solveComponent(*sub, {}, true, depth + 1, child_nd_node);
+				mpz_class recomputed = solveComponent(*sub, {}, true, depth + 1, child_nd_node,
+				                                       reactive_metis_skip_until_depth);
 				comp_manager_.contentCache().stats_verify_checks++;
 				if (cached != recomputed) {
 					auto it = g_first_sig.find(key.hash);
@@ -381,7 +383,8 @@ mpz_class Solver::solveComponent(Component &comp,
 				    literal_values_, comp_manager_.getAnalyzer().clauseIdToOfs(),
 				    rm, original_lit_pool_size_);
 			}
-			sub_count = solveComponent(*sub, {}, true, depth + 1, child_nd_node);
+			sub_count = solveComponent(*sub, {}, true, depth + 1, child_nd_node,
+			                           reactive_metis_skip_until_depth);
 			if (config_.perform_component_caching && sub->num_variables() >= 3) {
 				if (config_.verify_cache && g_first_sig.find(key.hash) == g_first_sig.end()) {
 					g_first_sig[key.hash] = pre_sig;
@@ -457,6 +460,34 @@ mpz_class Solver::solveComponent(Component &comp,
 				                                  (unsigned)separator.size())) {
 					separator.clear();
 				}
+				// Verbose logging: accepted precomputed separator —
+				// record size, component size, L/R distribution.
+				if (config_.verbose && !separator.empty() && nd_node >= 0
+				    && nd_hierarchy_.valid) {
+					unsigned n_act = 0, L_dbg = 0, R_dbg = 0;
+					int lc = nd_hierarchy_.left_child[nd_node];
+					int rc = nd_hierarchy_.right_child[nd_node];
+					if (lc >= 0 && rc >= 0) {
+						int L_lo = nd_hierarchy_.leaf_lo[lc];
+						int L_hi = nd_hierarchy_.leaf_hi[lc];
+						int R_lo = nd_hierarchy_.leaf_lo[rc];
+						int R_hi = nd_hierarchy_.leaf_hi[rc];
+						for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
+							if (!isActive(LiteralID(*it, true))) continue;
+							n_act++;
+							if ((size_t)*it >= nd_hierarchy_.var_leaf.size()) continue;
+							int leaf = nd_hierarchy_.var_leaf[*it];
+							if (leaf < 0) continue;
+							if (leaf >= L_lo && leaf <= L_hi) L_dbg++;
+							else if (leaf >= R_lo && leaf <= R_hi) R_dbg++;
+						}
+						std::cerr << "  SEP_USE kind=precomp depth=" << depth
+						          << " sep=" << separator.size()
+						          << " n_active=" << n_act
+						          << " L=" << L_dbg
+						          << " R=" << R_dbg << std::endl;
+					}
+				}
 			}
 			// Reactive Dinic's fallback when hierarchy provides nothing.
 			// Covers pure-Dinic mode (hierarchy disabled) and hybrid mode
@@ -471,7 +502,17 @@ mpz_class Solver::solveComponent(Component &comp,
 			// than `reactive_metis_min_vars` active variables are
 			// skipped (too small for METIS to bisect usefully) and
 			// fall through to variable branching.
-			if (separator.empty() && config_.use_reactive_metis) {
+			//
+			// Failure throttle: after a reactive-METIS failure at some
+			// depth d we advance `reactive_metis_skip_until_depth` to
+			// d + config_.reactive_metis_skip_k, so this subtree does
+			// not retry METIS until BCP + variable branching at k more
+			// decomposition levels has had a chance to simplify the
+			// formula. Success does NOT raise the skip — a succeeding
+			// subtree continues to attempt METIS on subsequent
+			// fallbacks, matching the pre-throttle behaviour.
+			if (separator.empty() && config_.use_reactive_metis
+			    && depth >= reactive_metis_skip_until_depth) {
 				// Cheap threshold check first: count active vars WITHOUT
 				// building the full METIS input. buildMetisInput iterates
 				// every clause and binary link too, which is wasteful for
@@ -504,14 +545,111 @@ mpz_class Solver::solveComponent(Component &comp,
 					reactive_metis_bucket_count_[bucket]++;
 					reactive_metis_bucket_total_us_[bucket] += r.metis_elapsed_us;
 
-					// Use the separator if METIS produced a valid
-					// bisection. Invalidate nd_node — we're off the
-					// precomputed tree now, so subsequent mapToChild
-					// calls should not be attempted (nd_node=-1 is the
-					// legitimate "no hierarchy" signal).
-					if (r.ok) {
+					// Scheme F: dual-gate the reactive separator before
+					// accepting. Even when METIS returns a valid
+					// bisection, the separator may be a poor branching
+					// choice on two axes:
+					//   Gate 1 (structural): the bisection itself must
+					//     be reasonable — sep size modest relative to n,
+					//     and the two sides not lopsided. Reuses the
+					//     Phase-2 thresholds already applied to
+					//     precomputed separators.
+					//   Gate 2 (branching-variable quality): the
+					//     separator's variables must be "good" branching
+					//     targets by the Stage-0 σ proxy (BCP cascade
+					//     potential). Rejects the bench_A pathology
+					//     where METIS chose a 1-var separator whose
+					//     one variable is σ-weak. Skipped when the σ
+					//     signal across the component is too uniform
+					//     to discriminate.
+					bool accept = r.ok;
+					if (accept) {
+						// Gate 1: structural bisection quality.
+						double g1_ratio = (double)r.separator.size()
+						                   / (double)n_active_quick;
+						unsigned Ltot = r.left_vars + r.right_vars;
+						double g1_balance = (Ltot > 0)
+						    ? (double)std::min(r.left_vars, r.right_vars)
+						      / (double)Ltot
+						    : 0.0;
+						if (g1_ratio > config_.separator_max_ratio
+						    || g1_balance < config_.separator_min_balance) {
+							accept = false;
+							if (config_.verbose) {
+								std::cerr << "  SEP_REJECT_REACTIVE gate=1"
+								          << " depth=" << depth
+								          << " sep=" << r.separator.size()
+								          << " n=" << n_active_quick
+								          << " ratio=" << g1_ratio
+								          << " balance=" << g1_balance << std::endl;
+							}
+						}
+					}
+					if (accept && config_.reactive_metis_sigma_beta > 0.0) {
+						// Gate 2: branching-variable quality via σ.
+						std::vector<double> sigma_all;
+						std::vector<VariableIndex> cand_all;
+						stage0_cheap_scores(comp, config_.stage0_length_decay,
+						                     sigma_all, cand_all);
+						if (!cand_all.empty()) {
+							std::vector<double> sorted_sigma;
+							sorted_sigma.reserve(cand_all.size());
+							for (VariableIndex v : cand_all)
+								sorted_sigma.push_back(sigma_all[v]);
+							std::sort(sorted_sigma.begin(), sorted_sigma.end());
+							double sigma_top    = sorted_sigma.back();
+							double sigma_median = sorted_sigma[sorted_sigma.size() / 2];
+							bool signal_strong = (sigma_median > 0.0 &&
+							    sigma_top / sigma_median
+							    >= config_.reactive_metis_sigma_signal_threshold);
+							if (signal_strong) {
+								double sigma_sep_sum = 0.0;
+								int var_count = 0;
+								for (const auto &cn : r.separator) {
+									if (cn.kind == CutNode::VAR
+									    && (size_t)cn.id < sigma_all.size()) {
+										sigma_sep_sum += sigma_all[cn.id];
+										var_count++;
+									}
+								}
+								if (var_count > 0) {
+									double sigma_sep_avg = sigma_sep_sum / var_count;
+									if (sigma_sep_avg
+									    < config_.reactive_metis_sigma_beta * sigma_top) {
+										accept = false;
+										if (config_.verbose) {
+											std::cerr << "  SEP_REJECT_REACTIVE gate=2"
+											          << " depth=" << depth
+											          << " sep_avg=" << sigma_sep_avg
+											          << " top=" << sigma_top
+											          << " median=" << sigma_median
+											          << " beta="
+											          << config_.reactive_metis_sigma_beta
+											          << std::endl;
+										}
+									}
+								}
+							}
+						}
+					}
+
+					if (accept) {
+						if (config_.verbose) {
+							std::cerr << "  SEP_USE kind=reactive depth=" << depth
+							          << " sep=" << r.separator.size()
+							          << " n_active=" << n_active_quick
+							          << " L=" << r.left_vars
+							          << " R=" << r.right_vars << std::endl;
+						}
 						separator = std::move(r.separator);
 						nd_node = -1;
+					} else {
+						// Either METIS failed, or Scheme F gates rejected.
+						// In both cases throttle: don't retry reactive METIS
+						// for this subtree until k more decomposition
+						// levels have passed.
+						reactive_metis_skip_until_depth =
+							depth + (int)config_.reactive_metis_skip_k;
 					}
 				}
 			}
@@ -527,7 +665,8 @@ mpz_class Solver::solveComponent(Component &comp,
 			// Variable element
 			if (!isActive(LiteralID(el.id, true))) {
 				// Consumed by BCP — skip
-				return solveComponent(comp, rest, false, depth, nd_node);
+				return solveComponent(comp, rest, false, depth, nd_node,
+				                      reactive_metis_skip_until_depth);
 			}
 			// Branch: A = v=true, B = v=false. This branch consumes a
 			// separator element — learning must be suppressed inside.
@@ -536,18 +675,23 @@ mpz_class Solver::solveComponent(Component &comp,
 			               literal(lit_f).activity_score_;
 			mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f,
 			                              comp, rest, false, depth, nd_node,
-			                              /*from_separator=*/true);
+			                              /*from_separator=*/true,
+			                              reactive_metis_skip_until_depth);
 			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t,
 			                              comp, rest, false, depth, nd_node,
-			                              /*from_separator=*/true);
+			                              /*from_separator=*/true,
+			                              reactive_metis_skip_until_depth);
 			return A + B;
 		} else {
 			// Clause element
 			if (isClauseRemoved(el.id) || isSatisfied(el.id)) {
-				return solveComponent(comp, rest, false, depth, nd_node);
+				return solveComponent(comp, rest, false, depth, nd_node,
+				                      reactive_metis_skip_until_depth);
 			}
-			mpz_class A = branchOnClause(el.id, comp, rest, false, false, depth, nd_node);
-			mpz_class B = branchOnClause(el.id, comp, rest, false, true, depth, nd_node);
+			mpz_class A = branchOnClause(el.id, comp, rest, false, false, depth, nd_node,
+			                              reactive_metis_skip_until_depth);
+			mpz_class B = branchOnClause(el.id, comp, rest, false, true, depth, nd_node,
+			                              reactive_metis_skip_until_depth);
 			return A - B;
 		}
 	}
@@ -573,9 +717,11 @@ mpz_class Solver::solveComponent(Component &comp,
 	               literal(lit_f).activity_score_;
 	// Non-separator variable branching: learning IS allowed here.
 	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth, -1,
-	                              /*from_separator=*/false);
+	                              /*from_separator=*/false,
+	                              reactive_metis_skip_until_depth);
 	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false, depth, -1,
-	                              /*from_separator=*/false);
+	                              /*from_separator=*/false,
+	                              reactive_metis_skip_until_depth);
 	return A + B;
 }
 
@@ -583,7 +729,8 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
                                    Component &comp,
                                    vector<CutNode> separator,
                                    bool separator_reset, int depth, int nd_node,
-                                   bool from_separator) {
+                                   bool from_separator,
+                                   int reactive_metis_skip_until_depth) {
 	unsigned lit_save = literal_stack_.size();
 	statistics_.num_decisions_++;
 	if (statistics_.num_decisions_ % 128 == 0)
@@ -592,7 +739,8 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 	// Check if literal is already assigned
 	if (!isActive(lit)) {
 		if (literal_values_[lit] == F_TRI) return 0;
-		return solveComponent(comp, separator, separator_reset, depth, nd_node);
+		return solveComponent(comp, separator, separator_reset, depth, nd_node,
+		                      reactive_metis_skip_until_depth);
 	}
 
 	// Push a placeholder StackLevel BEFORE setLiteralIfFree so:
@@ -635,7 +783,8 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		}
 		result = 0;
 	} else {
-		result = solveComponent(comp, separator, separator_reset, depth, nd_node);
+		result = solveComponent(comp, separator, separator_reset, depth, nd_node,
+		                        reactive_metis_skip_until_depth);
 	}
 
 	while (literal_stack_.size() > lit_save) {
@@ -650,7 +799,8 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
                                   Component &comp,
                                   vector<CutNode> separator,
                                   bool separator_reset,
-                                  bool negate_literals, int depth, int nd_node) {
+                                  bool negate_literals, int depth, int nd_node,
+                                  int reactive_metis_skip_until_depth) {
 	unsigned lit_save = literal_stack_.size();
 	statistics_.num_decisions_++;
 
@@ -698,7 +848,8 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 			// decision level, so it fails on this multi-decision setup.
 			result = 0;
 		} else {
-			result = solveComponent(comp, separator, separator_reset, depth, nd_node);
+			result = solveComponent(comp, separator, separator_reset, depth, nd_node,
+			                        reactive_metis_skip_until_depth);
 		}
 	}
 

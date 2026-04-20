@@ -243,11 +243,21 @@ private:
 	SOLVER_StateT countSATRec();
 	// Workhorse: compute #SAT of the current formula state restricted
 	// to component `comp`, given the remaining separator elements.
+	//
+	// `reactive_metis_skip_until_depth` implements the failure throttle
+	// for reactive METIS: reactive METIS is only attempted when
+	// `depth >= reactive_metis_skip_until_depth`. On a reactive-METIS
+	// failure this value is advanced to `depth + skip_k` for the rest
+	// of this subtree; on success it is left unchanged. The value is
+	// propagated verbatim through separator consumption and into child
+	// sub-components. Only a failed reactive call inside the current
+	// subtree raises it.
 	mpz_class solveComponent(Component &comp,
 	                         std::vector<CutNode> separator,
 	                         bool separator_reset,
 	                         int depth = 0,
-	                         int nd_node = -1);  // hierarchy node, -1 = use root
+	                         int nd_node = -1,  // hierarchy node, -1 = use root
+	                         int reactive_metis_skip_until_depth = 0);
 	// Branch on a literal, run BCP, recurse, then restore state.
 	//
 	// `from_separator` distinguishes the two call sites:
@@ -269,7 +279,8 @@ private:
 	                           bool separator_reset,
 	                           int depth = 0,
 	                           int nd_node = -1,
-	                           bool from_separator = false);
+	                           bool from_separator = false,
+	                           int reactive_metis_skip_until_depth = 0);
 	// Branch on a clause (removed vs removed+negated).
 	mpz_class branchOnClause(ClauseOfs cl_ofs,
 	                          Component &comp,
@@ -277,7 +288,8 @@ private:
 	                          bool separator_reset,
 	                          bool negate_literals,
 	                          int depth = 0,
-	                          int nd_node = -1);
+	                          int nd_node = -1,
+	                          int reactive_metis_skip_until_depth = 0);
 	// Find separator for a component, return it (empty if none).
 	// use_metis: if true, prefer METIS over Dinic's for better balance.
 	std::vector<CutNode> findSeparatorFor(Component &comp, bool use_metis = false);

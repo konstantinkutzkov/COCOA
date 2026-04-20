@@ -62,7 +62,12 @@ struct SolverConfiguration {
   //                           so |ε·Δ| < 1 ≤ vars_forced (protects Newton).
   bool perform_adaptive_branching = false;
   unsigned adaptive_top_k        = 20;
-  double   stage0_length_decay   = 1.0;
+  // α = 2 (base 4): binaries contribute 0.0625, ternaries 0.0156, so a
+  // var in one binary scores ~4× a var in one ternary. This sharpens
+  // σ as a proxy for BCP-cascade potential, where binaries actually
+  // trigger BCP immediately and longer clauses rarely do anything on
+  // a single assignment.
+  double   stage0_length_decay   = 2.0;
   double   epsilon_2clauses      = 0.1;
   // Components smaller than this many active variables use a
   // Stage-0-only (cheap clause-length-weighted) picker — no probing,
@@ -115,6 +120,42 @@ struct SolverConfiguration {
   // on and printed at end-of-solve if any call was made.
   bool     use_reactive_metis       = false;
   unsigned reactive_metis_min_vars  = 15;
+  // Failure throttle: when reactive METIS is attempted at decomposition
+  // depth d and fails to produce a usable separator (r.ok = false), do
+  // not retry reactive METIS in this subtree until we reach depth
+  // d + reactive_metis_skip_k. Intuition: BCP and variable branching
+  // at intermediate levels simplify the formula; after k more levels
+  // METIS is more likely to find a useful separator. Success does NOT
+  // set the skip — future reactive calls in the successful subtree
+  // proceed exactly as before (nothing changes from the no-throttle
+  // behaviour on sparse instances where the precomputed hierarchy is
+  // always good enough).
+  unsigned reactive_metis_skip_k    = 3;
+  // Scheme F — branching-variable quality gate for reactive METIS
+  // separators. Even when a reactive separator is structurally good
+  // (passes the Phase-2 ratio + balance gates applied to its sides),
+  // its variables may be poor branching targets: METIS's objective is
+  // graph-theoretic balance, not BCP-cascade potential. A variable
+  // with low σ triggers tiny cascades, leading to bloated search trees
+  // (measured: 22× slowdown on bench_A with 1-var reactive separators
+  // whose single variable was σ-weak).
+  //
+  // Gate 2: require σ_sep_avg ≥ β · σ_top, where σ is the Stage-0
+  // cheap-score over every active variable in the component, σ_top is
+  // its max, and σ_sep_avg is the mean σ of the separator's VAR
+  // elements (CLAUSE elements are excluded from the average).
+  //
+  // Safeguard for uniform-σ formulas: if σ_top / σ_median <
+  // reactive_metis_sigma_signal_threshold, Gate 2 is skipped entirely
+  // (the σ signal is too weak to discriminate; trust Gate 1 alone).
+  //
+  //   β = 0       : Gate 2 disabled (today's behaviour before Scheme F).
+  //   β = 1       : demand separator elements average at least σ_top —
+  //                 very strict, often falls back to Stage 0.
+  //   β = 0.5     : separator's elements score at least half the top —
+  //                 reasonable starting point.
+  double   reactive_metis_sigma_beta               = 0.5;
+  double   reactive_metis_sigma_signal_threshold   = 2.0;
 };
 
 #endif /* SOLVER_CONFIG_H_ */

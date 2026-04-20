@@ -28,6 +28,8 @@ int main(int argc, char *argv[]) {
     cout << "\t -adaptiveMin n\t components with fewer than n active vars skip probing (default 12)" << endl;
     cout << "\t -reactiveMetis\t enable runtime-METIS fallback at hierarchy-reject points (opt-in; measured to regress on dense sub-instances as of 2026-04-20)" << endl;
     cout << "\t -reactiveMetisMin n\t min active vars to trigger reactive METIS (default 15)" << endl;
+    cout << "\t -reactiveMetisSkip k\t after a reactive-METIS failure, wait k decomposition levels before retrying (default 3)" << endl;
+    cout << "\t -reactiveMetisBeta b\t Scheme F branching-var quality gate: require σ_sep_avg ≥ b·σ_top (default 0.5)" << endl;
     cout << "\t" << endl;
 
     return -1;
@@ -97,6 +99,16 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(argv[i], "-reactiveMetisMin") == 0) {
       if (i + 1 < argc && isdigit(argv[i+1][0])) {
         theSolver.config().reactive_metis_min_vars = atoi(argv[i + 1]);
+        i++;
+      }
+    } else if (strcmp(argv[i], "-reactiveMetisSkip") == 0) {
+      if (i + 1 < argc && isdigit(argv[i+1][0])) {
+        theSolver.config().reactive_metis_skip_k = atoi(argv[i + 1]);
+        i++;
+      }
+    } else if (strcmp(argv[i], "-reactiveMetisBeta") == 0) {
+      if (i + 1 < argc) {
+        theSolver.config().reactive_metis_sigma_beta = atof(argv[i + 1]);
         i++;
       }
     } else if (strcmp(argv[i], "-adaptiveMin") == 0) {
