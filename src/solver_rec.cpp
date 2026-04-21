@@ -80,6 +80,11 @@ static uint64_t implicantSignature(const std::vector<LiteralID> &clause) {
 std::vector<LiteralID> Solver::deriveDecisionImplicant(
     LiteralID l_star, unsigned max_size)
 {
+  // Guard: the walk starts from a currently-true literal. If l_star
+  // isn't true, the caller invoked us with a stale/unassigned literal.
+  assert(literal_values_[l_star] == T_TRI
+         && "deriveDecisionImplicant: l_star must be currently true");
+
   std::vector<LiteralID> impl;
   std::unordered_set<unsigned> seen;
   std::queue<LiteralID> frontier;
@@ -89,12 +94,26 @@ std::vector<LiteralID> Solver::deriveDecisionImplicant(
   while (!frontier.empty()) {
     LiteralID l = frontier.front();
     frontier.pop();
+    // Guard A: every frontier literal must be currently true. The walk
+    // traces currently-true literals back through their antecedents; a
+    // currently-false literal in the frontier means the push site got
+    // the polarity wrong (the binary-antecedent bug we already caught
+    // looked exactly like this: wrong polarity produced F_TRI literals
+    // in the frontier, leading to unsound implicants and undercounts).
+    assert(literal_values_[l] == T_TRI
+           && "frontier literal must be currently true");
+
     int dl = var(l).decision_level;
     if (dl <= 0) continue;  // baseline (DL 0) or not-yet-assigned — skip
     Antecedent ante = var(l).ante;
     if (!ante.isAnt()) {
       // Decision. Collect in the implicant frontier.
       if (impl.size() >= max_size) return {};  // too big — bail
+      // Guard B: decision literals we collect into the implicant must
+      // be currently true, otherwise the resulting clause would have
+      // flipped polarities.
+      assert(literal_values_[l] == T_TRI
+             && "implicant decision literal must be currently true");
       impl.push_back(l);
       continue;
     }
@@ -106,6 +125,11 @@ std::vector<LiteralID> Solver::deriveDecisionImplicant(
         // Stored clause contains `lt` (literal). For this clause to
         // have forced `l`, `lt` is falsified → its negation is the
         // currently-true trigger to walk back through.
+        // Guard: BCP invariant — non-forced literals of the antecedent
+        // clause must be falsified at firing time (and still now, since
+        // we haven't backtracked since the firing).
+        assert(literal_values_[*lt] == F_TRI
+               && "antecedent clause's non-forced literal must be F_TRI");
         frontier.push(lt->neg());
       }
     } else {
@@ -114,7 +138,10 @@ std::vector<LiteralID> Solver::deriveDecisionImplicant(
       // Antecedent(unLit)) where unLit is the currently-falsified
       // literal, the "other" half of the binary clause). To walk back
       // we need the currently-TRUE literal: that's ante.asLit().neg().
-      LiteralID other_true = ante.asLit().neg();
+      LiteralID other_false = ante.asLit();
+      assert(literal_values_[other_false] == F_TRI
+             && "binary antecedent's stored literal must be F_TRI");
+      LiteralID other_true = other_false.neg();
       if (seen.insert(other_true.var()).second) frontier.push(other_true);
     }
   }
@@ -183,6 +210,41 @@ void Solver::maybeLearnImplicants(unsigned bcp_start_ofs)
     clause.reserve(impl.size() + 1);
     clause.push_back(l);
     for (auto d : impl) clause.push_back(d.neg());
+
+    // Guard C: at store time the clause must satisfy the BCP invariant
+    // for a conflict-driven learned clause: clause[0] is the asserting
+    // literal (currently TRUE, since l* was just forced by BCP), and
+    // every other literal is currently FALSE (because each d_i is a
+    // currently-true decision, so ¬d_i is currently false). If any
+    // "other" literal is TRUE, the polarity was flipped somewhere in
+    // the walk — this is exactly the class of bug we hit with binary
+    // antecedents before the fix. Runtime undercount ensues.
+    //
+    // Runtime (not just debug) check: implicant learning is opt-in via
+    // -implicantLearn, so paying a small O(k) check per learned clause
+    // is acceptable. The silent failure mode (undercount) is too bad
+    // to miss in Release.
+    if (literal_values_[clause[0]] != T_TRI) {
+      std::cerr << "\n*** UNSOUND_IMPLICANT: asserting literal not true ***\n"
+                << "  clause[0]=" << clause[0].toInt()
+                << " value=" << (int)literal_values_[clause[0]]
+                << " (expected T_TRI=" << (int)T_TRI << ")\n";
+      std::cerr.flush();
+      std::abort();
+    }
+    for (size_t ci = 1; ci < clause.size(); ci++) {
+      if (literal_values_[clause[ci]] != F_TRI) {
+        std::cerr << "\n*** UNSOUND_IMPLICANT: non-asserting literal not false ***\n"
+                  << "  clause[" << ci << "]=" << clause[ci].toInt()
+                  << " value=" << (int)literal_values_[clause[ci]]
+                  << " (expected F_TRI=" << (int)F_TRI << ")\n"
+                  << "  full clause:";
+        for (auto lx : clause) std::cerr << " " << lx.toInt();
+        std::cerr << "\n";
+        std::cerr.flush();
+        std::abort();
+      }
+    }
 
     // Dedup via signature.
     uint64_t sig = implicantSignature(clause);
