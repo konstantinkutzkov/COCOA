@@ -1290,20 +1290,35 @@ void Solver::analyzeOriginalClausePool() {
 				r.sig |= (1ULL << (hash_lit(lt->raw()) & 63));
 			}
 			std::sort(r.lits.begin(), r.lits.end());
-			// Capture length BEFORE the move — std::move leaves r.lits empty
-			// and r.lits.size() would underflow to SIZE_MAX (caught this bug
-			// during initial implementation; keep the capture to prevent
-			// regression).
+			// Capture length, do the iterator advance, THEN move. This
+			// ordering matters: std::move(r) leaves r.lits empty, so any
+			// subsequent r.lits.size() would return 0 and the advance
+			// `(size_t)0 - 1` would underflow to SIZE_MAX (this bug
+			// actually surfaced during initial implementation, producing
+			// phantom length-0 records for every real clause). By doing
+			// the advance before the move, we cannot re-introduce the bug.
 			const size_t clause_len = r.lits.size();
 			len_hist[clause_len]++;
-			recs.push_back(std::move(r));
-			// Advance so the outer loop's ++ lands at the next clause's
-			// terminating SENTINEL. If clause_len is 0 (shouldn't happen
-			// for valid clauses but defend anyway), don't advance — the
-			// outer ++ alone will move us forward.
-			if (clause_len >= 1) {
-				it_lit += (ptrdiff_t)clause_len - 1;
+			// Guard: the iterator must never advance backward. A backward
+			// advance means we've hit the use-after-move bug or some
+			// other corruption of clause_len. Runtime check (not debug
+			// assert) because a silent backward walk produces corrupt
+			// records that then feed into the subsumption/SSR analysis.
+			if (clause_len == 0) {
+				std::cerr << "*** ANALYZER_INVARIANT: clause_len == 0 at ofs="
+				          << ofs << " — pool iteration bug\n";
+				std::cerr.flush();
+				std::abort();
 			}
+			const ptrdiff_t advance = (ptrdiff_t)clause_len - 1;
+			if (advance < 0) {
+				std::cerr << "*** ANALYZER_INVARIANT: negative advance (="
+				          << advance << ") at ofs=" << ofs << "\n";
+				std::cerr.flush();
+				std::abort();
+			}
+			it_lit += advance;
+			recs.push_back(std::move(r));
 		}
 	}
 
