@@ -10,6 +10,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <random>
 #include <unordered_set>
 
 #include <algorithm>
@@ -1494,6 +1495,39 @@ void Solver::verifyUnitPropagationSaturated(const char *label) {
 		std::cerr.flush();
 		std::abort();
 	}
+}
+
+// Test-support: permute stored-literal order within each original
+// clause. Preserves clause boundaries (SENTINEL_LIT) and watch-list
+// references (watches are keyed on ClauseOfs, not literal position).
+// Intended to run once BEFORE search starts, to test whether downstream
+// code is invariant under stored-literal order.
+void Solver::_permuteClauseLiteralsForTest(unsigned seed) {
+	std::mt19937 rng(seed);
+	auto it = literal_pool_.begin();
+	while (it != literal_pool_.end()) {
+		if (*it != SENTINEL_LIT) { it++; continue; }
+		if (it + 1 == literal_pool_.end()) break;
+		it += ClauseHeader::overheadInLits();
+		ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+		auto start = literal_pool_.begin() + ofs;
+		auto end = start;
+		while (*end != SENTINEL_LIT) end++;
+		std::shuffle(start, end, rng);
+		it = end;
+	}
+}
+
+// Test-support: minimal preparation sequence (parse + preprocess +
+// component-manager init) sufficient for canonical-key computation.
+// Does NOT allocate the guard variable and does NOT start the search.
+void Solver::_prepareForKeyComputation(const std::string &file_name) {
+	createfromFile(file_name);
+	initStack(num_variables());
+	simplePreProcess();
+	comp_manager_.initialize(literals_, literal_pool_);
+	comp_manager_.setRemovedClauses(&removed_clauses_);
 }
 
 // Invariant guard: verify there are no failed literals. See declaration

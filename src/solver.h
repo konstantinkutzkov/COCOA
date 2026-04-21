@@ -13,6 +13,7 @@
 #include "instance.h"
 #include "component_management.h"
 #include "nd_hierarchy.h"
+#include "canonical_key.h"
 
 
 
@@ -143,6 +144,31 @@ public:
 	const std::vector<std::vector<LiteralID>> &uip_clauses_view() const {
 		return uip_clauses_;
 	}
+
+	// Test-support entry points: after initForTesting (or a full solve
+	// start), compute the canonical key for the super-component. Used
+	// by test_canonical_key_invariance to verify the key is invariant
+	// under stored-clause-literal permutations.
+	CanonicalKey _computeRootCanonicalKey() {
+		Component &root = comp_manager_.superComponentOf(stack_.top());
+		return buildCanonicalKey(
+		    root, literal_pool_, literals_, literal_values_,
+		    comp_manager_.getAnalyzer().clauseIdToOfs(),
+		    removed_clauses_, original_lit_pool_size_);
+	}
+
+	// Test-support: randomly permute the stored-literal order within
+	// each original long clause in literal_pool_. Preserves SENTINEL_LIT
+	// terminators. Watch-list references track clauses by ClauseOfs,
+	// not literal position within the clause body, so this is safe as
+	// a one-shot perturbation BEFORE search starts.
+	void _permuteClauseLiteralsForTest(unsigned seed);
+
+	// Test-support: prepare the solver for key-building without
+	// starting a full solve (parse file, preprocess, init component
+	// manager). Does NOT allocate the guard variable — tests that
+	// need only the canonical-key computation don't need it.
+	void _prepareForKeyComputation(const std::string &file_name);
 
 	SolverConfiguration &config() {
 		return config_;
