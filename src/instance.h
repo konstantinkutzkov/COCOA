@@ -107,6 +107,46 @@ protected:
   vector<Variable> variables_;
   LiteralIndexedVector<TriValue> literal_values_;
 
+  // Guard variable for scope-tracked binary UIP learning.
+  //
+  // Background: learned clauses need a ClauseOfs to key their scope in
+  // learned_clause_scope_. Binaries stored in Literal::binary_links_ have
+  // no ClauseOfs, and binary BCP walks binary_links_ with no scope gate.
+  // Storing a binary UIP there under non-empty scope would be unsound.
+  //
+  // Solution: allocate one guard variable d post-preprocessing, assign
+  // d=true at decision level 0, and represent every learned binary
+  // (y v z) as the scoped 3-clause [y, z, ¬d] in literal_pool_. Since
+  // ¬d is permanently F_TRI, the clause behaves as a binary via the
+  // watched-literal mechanism, but now has a ClauseOfs and scope entry.
+  //
+  // INVARIANT (load-bearing for model counting): d must remain non-active
+  // at all times. literal_values_[d.pos] = T_TRI is set once and never
+  // cleared. Any code that treats isolated variables as free must also
+  // check isActive; free(v) in this file already does. Do NOT allocate
+  // d before preprocessing — compactVariables would eliminate it and
+  // double the model count via num_free_variables_.
+  //
+  // guard_var_ == 0 means "not yet allocated"; binary UIP padding is
+  // then skipped (falls back to pre-guard behaviour: drop the binary).
+  unsigned guard_var_ = 0;
+
+  // Allocate the guard variable. Call ONCE after simplePreProcess
+  // (HardWireAndCompact) has finished, before countSATRec.
+  void allocateGuardVariable() {
+    assert(guard_var_ == 0 && "guard variable already allocated");
+    guard_var_ = variables_.size();  // new 1-based index = current size
+    variables_.push_back(Variable{});
+    literals_.resize(variables_.size());
+    literal_values_.resize(variables_.size(), X_TRI);
+    occurrence_lists_.resize(variables_.size());
+    LiteralID d_pos(guard_var_, true);
+    literal_values_[d_pos] = T_TRI;
+    literal_values_[d_pos.neg()] = F_TRI;
+    variables_[guard_var_].ante = Antecedent(NOT_A_CLAUSE);
+    variables_[guard_var_].decision_level = 0;
+  }
+
   // Clauses removed by clause branching — reference counted
   // because the same clause can be branched on at multiple levels.
   // Handled like satisfied clauses: stay in watch lists, skipped by BCP.
@@ -317,9 +357,17 @@ Antecedent Instance::addUIPConflictClause(vector<LiteralID> &literals) {
   }
 
 Antecedent Instance::addScopedUIPConflictClause(vector<LiteralID> &literals) {
-    // Only non-binary clauses get scope tracking.
-    // Binary/unit learned clauses would need scope too, but they have no
-    // ClauseOfs to key on. Skip them under scope tracking.
+    // Pad binary UIPs to 3-clauses using the guard literal (¬d,
+    // permanently F_TRI). This gives them a ClauseOfs so scope can be
+    // tracked and BCP can consult learnedClauseInScope. Without the
+    // guard we would have to drop binary UIPs to stay sound — a real
+    // learning loss. See the guard_var_ comment above.
+    if (literals.size() == 2 && guard_var_ != 0) {
+      literals.push_back(LiteralID(guard_var_, false));  // ¬d, always false
+    }
+    // Unit (size==1) still dropped — units live in unit_clauses_ and
+    // only make sense at empty scope; scoped units would need a
+    // different representation.
     if (literals.size() < 3)
       return Antecedent(NOT_A_CLAUSE);
 

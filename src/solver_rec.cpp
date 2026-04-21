@@ -220,7 +220,15 @@ SOLVER_StateT Solver::countSATRec() {
 				}
 			}
 		}
-		nd_hierarchy_.build(num_variables(), clause_list, binary_pairs);
+		// Exclude the guard variable from the hierarchy input: it has no
+		// clauses, so it contributes an isolated vertex that shifts
+		// METIS's balance and produces a structurally different
+		// decomposition. The guard's var_id is past n_vars; mapToChild
+		// already skips vars with id >= var_leaf.size().
+		int build_n_vars = (guard_var_ > 0)
+		                     ? (int)(guard_var_ - 1)
+		                     : (int)num_variables();
+		nd_hierarchy_.build(build_n_vars, clause_list, binary_pairs);
 	}
 
 	Component &root = comp_manager_.superComponentOf(stack_.top());
@@ -771,8 +779,10 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		// formula must evolve only via BCP + clause removal (which can
 		// only shrink connectivity, never grow it).
 		recordLastUIPCauses();
+		// size>=2 gate: addScopedUIPConflictClause handles size==2 via
+		// guard-padding; size<2 (empty / unit) is still dropped inside.
 		if (!from_separator
-		    && !uip_clauses_.empty() && uip_clauses_.back().size() >= 3
+		    && !uip_clauses_.empty() && uip_clauses_.back().size() >= 2
 		    && uip_clauses_.back().front() == lit.neg()) {
 			addScopedUIPConflictClause(uip_clauses_.back());
 		}

@@ -143,6 +143,13 @@ void Solver::solve(const string &file_name) {
 			statistics_.printShortFormulaInfo();
 		}
 
+		// Allocate the guard variable for scope-tracked binary UIP
+		// learning. MUST be after simplePreProcess (HardWireAndCompact
+		// would otherwise count d as a free variable and double the
+		// count via num_free_variables_). See instance.h's guard_var_
+		// comment for the full invariant.
+		allocateGuardVariable();
+
 		last_ccl_deletion_time_ = last_ccl_cleanup_time_ =
 				statistics_.getTime();
 
