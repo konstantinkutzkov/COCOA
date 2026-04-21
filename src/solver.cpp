@@ -211,6 +211,7 @@ void Solver::solve(const string &file_name) {
 	}
 
 	if (config_.analyze_clause_pool) {
+		analyzeOriginalClausePool();
 		analyzeLearnedClausePool();
 	}
 
@@ -1238,5 +1239,187 @@ void Solver::analyzeLearnedClausePool() {
 	          << " (" << (recs.empty() ? 0.0 :
 	                      100.0 * (double)subsumed_same_scope.size() / (double)recs.size())
 	          << "% of pool)\n";
+}
+
+// Scan the ORIGINAL formula's clauses (everything in literal_pool_ below
+// original_lit_pool_size_) for subsumption + SSR opportunities. Read-only
+// — does NOT modify any state. Intended to answer: would writing a
+// preprocessing pass be worthwhile? Reports:
+//   - total original clauses and length distribution
+//   - duplicates (identical literal sets)
+//   - subsumption pairs (C ⊆ D as literal sets; D is subsumable)
+//   - SSR opportunities (pairs where SSR would shorten a clause)
+//   - among SSR: how many would produce a binary clause (high-value)
+void Solver::analyzeOriginalClausePool() {
+	struct Rec {
+		ClauseOfs ofs;
+		std::vector<uint32_t> lits;  // sorted ascending
+		uint64_t sig;                // bloom-style 64-bit hash of literals
+	};
+	auto hash_lit = [](uint32_t r) {
+		r ^= r >> 16;
+		r *= 0x7feb352dU;
+		r ^= r >> 15;
+		return r;
+	};
+	auto hash_set = [](const std::vector<uint32_t> &v) {
+		uint64_t h = 0xcbf29ce484222325ULL;
+		for (uint32_t r : v) { h ^= r; h *= 0x100000001b3ULL; }
+		return h;
+	};
+
+	// Walk literal_pool_ forward, collecting original-clause offsets.
+	// Clause layout: [SENTINEL] [header x overheadInLits] [lit_1 .. lit_k]
+	// [SENTINEL] [header x overheadInLits] [lit_1 .. lit_k] [SENTINEL] ...
+	// Following the same iteration pattern as compactVariables().
+	std::vector<Rec> recs;
+	std::map<unsigned, unsigned> len_hist;
+	for (auto it_lit = literal_pool_.begin();
+	     it_lit != literal_pool_.end(); it_lit++) {
+		if (*it_lit == SENTINEL_LIT) {
+			if (it_lit + 1 == literal_pool_.end()) break;
+			it_lit += ClauseHeader::overheadInLits();
+			ClauseOfs ofs = (ClauseOfs)(it_lit + 1 - literal_pool_.begin());
+			// Only original clauses — stop once we cross into learned territory.
+			if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+			Rec r;
+			r.ofs = ofs;
+			r.sig = 0;
+			for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+				r.lits.push_back(lt->raw());
+				r.sig |= (1ULL << (hash_lit(lt->raw()) & 63));
+			}
+			std::sort(r.lits.begin(), r.lits.end());
+			// Capture length BEFORE the move — std::move leaves r.lits empty
+			// and r.lits.size() would underflow to SIZE_MAX (caught this bug
+			// during initial implementation; keep the capture to prevent
+			// regression).
+			const size_t clause_len = r.lits.size();
+			len_hist[clause_len]++;
+			recs.push_back(std::move(r));
+			// Advance so the outer loop's ++ lands at the next clause's
+			// terminating SENTINEL. If clause_len is 0 (shouldn't happen
+			// for valid clauses but defend anyway), don't advance — the
+			// outer ++ alone will move us forward.
+			if (clause_len >= 1) {
+				it_lit += (ptrdiff_t)clause_len - 1;
+			}
+		}
+	}
+
+	std::cerr << "\n=== Original-formula pool analysis ===\n";
+	std::cerr << "  total original clauses  : " << recs.size() << "\n";
+	std::cerr << "  length distribution     :";
+	for (auto &p : len_hist)
+		std::cerr << " " << p.first << ":" << p.second;
+	std::cerr << "\n";
+
+	// Duplicates.
+	std::unordered_map<uint64_t, std::vector<size_t>> by_hash;
+	for (size_t i = 0; i < recs.size(); i++)
+		by_hash[hash_set(recs[i].lits)].push_back(i);
+	unsigned dup_clauses = 0;
+	for (auto &p : by_hash) {
+		if (p.second.size() <= 1) continue;
+		auto &g = p.second;
+		std::sort(g.begin(), g.end(), [&](size_t a, size_t b) {
+			return recs[a].lits < recs[b].lits;
+		});
+		for (size_t i = 0; i < g.size();) {
+			size_t j = i + 1;
+			while (j < g.size() && recs[g[j]].lits == recs[g[i]].lits) j++;
+			if (j - i > 1) dup_clauses += (j - i);
+			i = j;
+		}
+	}
+	std::cerr << "  duplicate literal sets  : " << dup_clauses
+	          << " (" << (recs.empty() ? 0.0 :
+	                      100.0 * (double)dup_clauses / (double)recs.size())
+	          << "% of pool)\n";
+
+	// Subsumption by shorter.
+	std::map<unsigned, std::vector<size_t>> by_len;
+	for (size_t i = 0; i < recs.size(); i++)
+		by_len[recs[i].lits.size()].push_back(i);
+	std::unordered_set<size_t> subsumed;
+	for (auto &pc : by_len) {
+		unsigned k_c = pc.first;
+		for (auto &pd : by_len) {
+			unsigned k_d = pd.first;
+			if (k_d <= k_c) continue;
+			for (size_t ci : pc.second) {
+				const auto &a = recs[ci].lits;
+				uint64_t sig_c = recs[ci].sig;
+				for (size_t di : pd.second) {
+					if ((sig_c & recs[di].sig) != sig_c) continue;
+					const auto &b = recs[di].lits;
+					size_t ia = 0, ib = 0;
+					bool is_sub = true;
+					while (ia < a.size()) {
+						while (ib < b.size() && b[ib] < a[ia]) ib++;
+						if (ib >= b.size() || b[ib] != a[ia]) { is_sub = false; break; }
+						ia++; ib++;
+					}
+					if (is_sub) subsumed.insert(di);
+				}
+			}
+		}
+	}
+	std::cerr << "  subsumable (C ⊆ D)      : " << subsumed.size()
+	          << " (" << (recs.empty() ? 0.0 :
+	                      100.0 * (double)subsumed.size() / (double)recs.size())
+	          << "% of pool)\n";
+
+	// SSR opportunities: for clause C of length k_c, does there exist
+	// a clause D such that (literals(D) \ {l}) ⊆ (literals(C) \ {¬l})
+	// for some l where l ∈ D and ¬l ∈ C? If so, SSR would shorten C
+	// by stripping ¬l.
+	// Method: for each pair (C, D) with |D| ≤ |C|, check if there's
+	// exactly one literal in D whose negation is in C, and every other
+	// D literal appears in C. That one literal can be eliminated from C.
+	// We count each shortenable C once (by its ClauseOfs set).
+	std::unordered_set<size_t> ssr_shortenable;
+	std::unordered_set<size_t> ssr_to_binary;  // produces size-2 clause
+	for (size_t ci = 0; ci < recs.size(); ci++) {
+		const auto &c = recs[ci].lits;
+		if (c.size() < 3) continue;  // size-2 SSR → unit, outside our scope
+		uint64_t sig_c = recs[ci].sig;
+		for (size_t di = 0; di < recs.size(); di++) {
+			if (di == ci) continue;
+			const auto &d = recs[di].lits;
+			if (d.size() > c.size()) continue;  // need |D| ≤ |C|
+			// For SSR: d ⊆ c except one literal l ∈ d whose negation ¬l is in c.
+			// Equivalently: |d ∩ c| == |d| - 1, and the missing d-lit's negation is in c.
+			uint32_t mismatch_lit = 0;
+			int mismatches = 0;
+			size_t ic = 0, id = 0;
+			while (id < d.size() && mismatches <= 1) {
+				while (ic < c.size() && c[ic] < d[id]) ic++;
+				if (ic < c.size() && c[ic] == d[id]) {
+					ic++; id++;
+				} else {
+					mismatch_lit = d[id];
+					mismatches++;
+					id++;
+				}
+			}
+			if (mismatches != 1) continue;
+			// Check ¬mismatch_lit is in c. LiteralID::raw() flips bit 0 for neg.
+			uint32_t neg_lit = mismatch_lit ^ 1;
+			bool in_c = std::binary_search(c.begin(), c.end(), neg_lit);
+			if (!in_c) continue;
+			// Bit-sig safety: neg_lit should fall within c's bit signature.
+			if (((1ULL << (hash_lit(neg_lit) & 63)) & sig_c) == 0) continue;
+			// C can be shortened to size c.size() - 1 via SSR with D.
+			ssr_shortenable.insert(ci);
+			if (c.size() - 1 == 2) ssr_to_binary.insert(ci);
+			break;  // only need to know if any D works; move on
+		}
+	}
+	std::cerr << "  SSR-shortenable         : " << ssr_shortenable.size()
+	          << " (" << (recs.empty() ? 0.0 :
+	                      100.0 * (double)ssr_shortenable.size() / (double)recs.size())
+	          << "% of pool)\n";
+	std::cerr << "    of which → binary    : " << ssr_to_binary.size() << "\n";
 }
 

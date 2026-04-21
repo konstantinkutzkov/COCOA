@@ -313,6 +313,11 @@ private:
 	// Diagnostic: scan conflict_clauses_ at end of solve and report
 	// duplication + subsumption statistics. Read-only.
 	void analyzeLearnedClausePool();
+	// Diagnostic: scan the ORIGINAL formula (clauses in literal_pool_
+	// below original_lit_pool_size_) and report how much subsumption /
+	// SSR simplification would be available. Read-only. Intended to
+	// answer: would a preprocessing pass on F itself be worth writing?
+	void analyzeOriginalClausePool();
 
 	bool bcp();
 
