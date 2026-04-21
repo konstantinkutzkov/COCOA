@@ -116,6 +116,12 @@ struct SolverConfiguration {
   // of BCP over an expanded clause pool.
   bool     implicant_dry_run          = false;
 
+  // Diagnostic: at end of solve, scan the learned-clause pool and
+  // report duplication + subsumption statistics. Read-only — does
+  // not modify the pool. Used to decide whether implementing a live
+  // subsumption pass would actually help.
+  bool     analyze_clause_pool        = false;
+
   // Reactive METIS: when the precomputed hierarchy separator is
   // unavailable or rejected by the Phase-2 gate, compute a fresh
   // METIS separator on the current sub-component's incidence graph

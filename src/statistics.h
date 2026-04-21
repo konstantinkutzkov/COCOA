@@ -66,6 +66,9 @@ public:
 
   // number of clauses overall learned
   unsigned num_clauses_learned_ = 0;
+  // Dedup drops across ALL learning sites (conflict-UIP + implicant).
+  // See instance.h's ClauseSigFilter / maybeDedupClause.
+  unsigned long num_learned_dedup_dropped_ = 0;
 
   // Implicant learning (Phase 4). All zero unless
   // config_.perform_implicant_learning is on.

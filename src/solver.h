@@ -310,6 +310,10 @@ private:
 	// size / non-trivial / dedup filters and stops at the total cap.
 	void maybeLearnImplicants(unsigned bcp_start_ofs);
 
+	// Diagnostic: scan conflict_clauses_ at end of solve and report
+	// duplication + subsumption statistics. Read-only.
+	void analyzeLearnedClausePool();
+
 	bool bcp();
 
 	// Precomputed nested-dissection hierarchy (built once at solve start)

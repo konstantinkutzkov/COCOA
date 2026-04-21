@@ -107,6 +107,8 @@ int main(int argc, char *argv[]) {
       }
     } else if (strcmp(argv[i], "-implicantDryRun") == 0) {
       theSolver.config().implicant_dry_run = true;
+    } else if (strcmp(argv[i], "-analyzeClausePool") == 0) {
+      theSolver.config().analyze_clause_pool = true;
     } else if (strcmp(argv[i], "-implicantMinChain") == 0) {
       if (i + 1 < argc && isdigit(argv[i+1][0])) {
         theSolver.config().implicant_min_chain_depth = atoi(argv[i + 1]);

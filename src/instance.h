@@ -13,7 +13,9 @@
 #include "containers.h"
 
 #include <assert.h>
+#include <algorithm>
 #include <cstdlib>
+#include <cstdint>
 #include <iostream>
 #include <set>
 #include <unordered_map>
@@ -147,6 +149,98 @@ protected:
   // guard_var_ == 0 means "not yet allocated"; binary UIP padding is
   // then skipped (falls back to pre-guard behaviour: drop the binary).
   unsigned guard_var_ = 0;
+
+  // ------------------------------------------------------------------
+  // Learned-clause deduplication via Bloom filter.
+  //
+  // Rationale: measurement showed ~50% of learned clauses (from both
+  // implicant learning and conflict-UIP paths) are exact literal-set
+  // duplicates of existing clauses. The BCP pool inflation from those
+  // duplicates dominates the cost of learning.
+  //
+  // Bloom filter is ideal here: we don't need exact dedup (a false
+  // positive just means we skip learning a clause — sound, just an
+  // optimization loss). Fixed memory. No heap churn after construction.
+  //
+  // 2^23 bits = 1 MB, 4 hash functions via double hashing. With 100K
+  // unique items, FP rate < 1e-5; still <1% at 1M items. For typical
+  // MC2025 solves we'll be well below 100K.
+  //
+  // Signature mixes the clause's literals AND the current scope
+  // (removed_clauses_ keys, sorted for determinism), so identical
+  // literals under different clause-branching scopes get different
+  // signatures. Scope-compatible duplicates are correctly merged;
+  // scope-incompatible copies are both kept.
+  // ------------------------------------------------------------------
+  class ClauseSigFilter {
+  public:
+    static constexpr size_t kBits = size_t(1) << 23;   // 1 MB
+    static constexpr size_t kMask = kBits - 1;
+    static constexpr int kK = 4;
+
+    ClauseSigFilter() : bits_((kBits + 63) / 64, 0ULL) {}
+
+    // Returns true if `sig`'s bits were not all already set —
+    // i.e., this is (very likely) a new signature. Returns false if
+    // all bits were already set (likely duplicate).
+    bool insert(uint64_t sig) {
+      // Double hashing: derive k positions from two independent 64-bit
+      // hashes of sig.
+      uint64_t h1 = sig * 0x9E3779B97F4A7C15ULL;
+      uint64_t h2 = sig * 0xBF58476D1CE4E5B9ULL;
+      bool is_new = false;
+      for (int k = 0; k < kK; k++) {
+        size_t idx = ((h1 + (uint64_t)k * h2) >> 32) & kMask;
+        size_t w = idx >> 6, b = idx & 63;
+        uint64_t mask = (uint64_t)1 << b;
+        if (!(bits_[w] & mask)) {
+          bits_[w] |= mask;
+          is_new = true;
+        }
+      }
+      return is_new;
+    }
+
+  private:
+    std::vector<uint64_t> bits_;
+  };
+
+  ClauseSigFilter learned_clause_sig_;
+
+  // Returns true iff the clause is (very likely) new. Caller should
+  // then proceed to addClause / addScopedUIPConflictClause. On false,
+  // caller should skip the learn. Scope (removed_clauses_ keys) is
+  // mixed into the signature; scope-incompatible copies with same
+  // literals are distinguished.
+  bool maybeDedupClause(const std::vector<LiteralID> &clause) {
+    // Thread-local buffer so we don't heap-allocate per call.
+    static thread_local std::vector<uint32_t> sig_buf;
+    sig_buf.clear();
+    sig_buf.reserve(clause.size());
+    for (auto l : clause) sig_buf.push_back(l.raw());
+    std::sort(sig_buf.begin(), sig_buf.end());
+
+    // FNV-1a over sorted literal raws, then over sorted scope keys.
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (uint32_t r : sig_buf) { h ^= r; h *= 0x100000001B3ULL; }
+
+    // removed_clauses_ is an unordered_map — iteration order is not
+    // deterministic, so collect keys and sort.
+    if (!removed_clauses_.empty()) {
+      static thread_local std::vector<ClauseOfs> scope_buf;
+      scope_buf.clear();
+      scope_buf.reserve(removed_clauses_.size());
+      for (const auto &p : removed_clauses_) scope_buf.push_back(p.first);
+      std::sort(scope_buf.begin(), scope_buf.end());
+      h ^= 0xDEADBEEFCAFEBABEULL;  // separator between literals and scope
+      for (ClauseOfs c : scope_buf) {
+        h ^= (uint64_t)c;
+        h *= 0x100000001B3ULL;
+      }
+    }
+
+    return learned_clause_sig_.insert(h);
+  }
 
   // Allocate the guard variable. Call ONCE after simplePreProcess
   // (HardWireAndCompact) has finished, before countSATRec.

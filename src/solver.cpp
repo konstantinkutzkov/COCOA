@@ -8,6 +8,7 @@
 #include <deque>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <unordered_set>
 
 #include <algorithm>
@@ -207,6 +208,10 @@ void Solver::solve(const string &file_name) {
 		cout << "c verify_cache summary: forced_misses(hits_converted)=" << cc.stats_verify_checks
 		     << " verified_matches=" << cc.stats_verify_ok
 		     << " unique_stores=" << cc.stats_stores << endl;
+	}
+
+	if (config_.analyze_clause_pool) {
+		analyzeLearnedClausePool();
 	}
 
 	if (config_.perform_implicant_learning) {
@@ -540,7 +545,18 @@ bool Solver::commitFailedLiteral() {
 	// Commit only the 1-UIP (uip_clauses_.front()); committing the full
 	// chain changed counts on t1_071 and was never shown to help.
 	auto &uip = const_cast<std::vector<LiteralID>&>(uip_clauses_.front());
-	Antecedent ante = addScopedUIPConflictClause(uip);
+	// Dedup: skip storing if we've likely seen this clause before.
+	// Bloom filter — false positives just skip a learn (sound).
+	Antecedent ante(NOT_A_CLAUSE);
+	if (uip.size() >= 2 && !maybeDedupClause(uip)) {
+		statistics_.num_learned_dedup_dropped_++;
+		// Duplicate — don't store, but still force the asserting literal
+		// with an unscoped NOT_A_CLAUSE antecedent. Correct: under the
+		// current state the literal IS entailed (same reasoning as for
+		// a freshly-learned clause); we just don't persist it.
+	} else {
+		ante = addScopedUIPConflictClause(uip);
+	}
 	setLiteralIfFree(uip.front(), ante);
 	return BCP(sz);
 }
@@ -1080,5 +1096,147 @@ void Solver::recordAllUIPCauses() {
 	}
 //	if (var(curr_lit).decision_level > assertion_level_)
 //		assertion_level_ = var(curr_lit).decision_level;
+}
+
+// Read-only analysis: how much duplication / subsumption is in the
+// current learned-clause pool? Doesn't modify anything — just reports.
+// O(N^2) worst case in the pool size; practical via length-bucketing +
+// a 64-bit signature pre-filter. Intended for end-of-solve diagnostic
+// before committing to a live subsumption pass.
+void Solver::analyzeLearnedClausePool() {
+	struct Rec {
+		ClauseOfs ofs;
+		std::vector<uint32_t> lits;  // sorted ascending
+		uint64_t sig;                // bloom-style 64-bit hash of literals
+		const std::set<ClauseOfs> *scope;  // nullptr = scope-empty
+	};
+	auto hash_lit = [](uint32_t r) {
+		r ^= r >> 16;
+		r *= 0x7feb352dU;
+		r ^= r >> 15;
+		return r;
+	};
+	auto hash_set = [](const std::vector<uint32_t> &v) {
+		uint64_t h = 0xcbf29ce484222325ULL;
+		for (uint32_t r : v) { h ^= r; h *= 0x100000001b3ULL; }
+		return h;
+	};
+
+	std::vector<Rec> recs;
+	recs.reserve(conflict_clauses_.size());
+	std::map<unsigned, unsigned> len_hist;
+	for (ClauseOfs cl_ofs : conflict_clauses_) {
+		Rec r;
+		r.ofs = cl_ofs;
+		r.sig = 0;
+		for (auto lt = beginOf(cl_ofs); *lt != SENTINEL_LIT; lt++) {
+			r.lits.push_back(lt->raw());
+			r.sig |= (1ULL << (hash_lit(lt->raw()) & 63));
+		}
+		std::sort(r.lits.begin(), r.lits.end());
+		auto it = learned_clause_scope_.find(cl_ofs);
+		r.scope = (it != learned_clause_scope_.end()) ? &it->second : nullptr;
+		len_hist[r.lits.size()]++;
+		recs.push_back(std::move(r));
+	}
+
+	std::cerr << "\n=== Clause pool analysis ===\n";
+	std::cerr << "  total learned clauses   : " << recs.size() << "\n";
+	std::cerr << "  length distribution     :";
+	for (auto &p : len_hist)
+		std::cerr << " " << p.first << ":" << p.second;
+	std::cerr << "\n";
+
+	// Exact duplicates (identical literal sets, ignoring scope).
+	std::unordered_map<uint64_t, std::vector<size_t>> by_hash;
+	for (size_t i = 0; i < recs.size(); i++)
+		by_hash[hash_set(recs[i].lits)].push_back(i);
+	unsigned dup_clauses = 0;                  // # clauses in a duplicate group
+	unsigned dup_clauses_same_scope = 0;        // stronger condition
+	for (auto &p : by_hash) {
+		if (p.second.size() <= 1) continue;
+		auto &g = p.second;
+		// Verify literal sets really match (not just hash).
+		std::sort(g.begin(), g.end(), [&](size_t a, size_t b) {
+			return recs[a].lits < recs[b].lits;
+		});
+		for (size_t i = 0; i < g.size();) {
+			size_t j = i + 1;
+			while (j < g.size() && recs[g[j]].lits == recs[g[i]].lits) j++;
+			unsigned blk = j - i;
+			if (blk > 1) {
+				dup_clauses += blk;
+				// Within this literal-set block, count same-scope pairs.
+				// Group by scope: nullptr or pointer equality on the
+				// &set<ClauseOfs> — but two distinct scope entries can
+				// still be equal sets. Do content comparison.
+				// For the upper-bound reporting, count duplicates where
+				// scope pointers or contents match:
+				for (size_t a = i; a < j; a++) {
+					for (size_t b = a + 1; b < j; b++) {
+						bool same_scope =
+							(recs[g[a]].scope == nullptr && recs[g[b]].scope == nullptr) ||
+							(recs[g[a]].scope && recs[g[b]].scope &&
+							 *recs[g[a]].scope == *recs[g[b]].scope);
+						if (same_scope) dup_clauses_same_scope += 2;  // count both
+					}
+				}
+			}
+			i = j;
+		}
+	}
+	std::cerr << "  duplicate literal sets  : " << dup_clauses
+	          << " (" << (recs.empty() ? 0.0 :
+	                      100.0 * (double)dup_clauses / (double)recs.size())
+	          << "% of pool)\n";
+	std::cerr << "    of which same scope  : " << dup_clauses_same_scope << "\n";
+
+	// Subsumption: for each clause C, count clauses D (with |D|>|C|)
+	// subsumed by C. Report how many clauses are subsumed by at least
+	// one shorter clause (scope-ignoring upper bound).
+	std::map<unsigned, std::vector<size_t>> by_len;
+	for (size_t i = 0; i < recs.size(); i++)
+		by_len[recs[i].lits.size()].push_back(i);
+	std::unordered_set<size_t> subsumed;           // scope-ignoring
+	std::unordered_set<size_t> subsumed_same_scope;
+	for (auto &pc : by_len) {
+		unsigned k_c = pc.first;
+		for (auto &pd : by_len) {
+			unsigned k_d = pd.first;
+			if (k_d <= k_c) continue;
+			for (size_t ci : pc.second) {
+				const auto &a = recs[ci].lits;
+				uint64_t sig_c = recs[ci].sig;
+				for (size_t di : pd.second) {
+					if ((sig_c & recs[di].sig) != sig_c) continue;
+					const auto &b = recs[di].lits;
+					size_t ia = 0, ib = 0;
+					bool is_sub = true;
+					while (ia < a.size()) {
+						while (ib < b.size() && b[ib] < a[ia]) ib++;
+						if (ib >= b.size() || b[ib] != a[ia]) { is_sub = false; break; }
+						ia++; ib++;
+					}
+					if (is_sub) {
+						subsumed.insert(di);
+						bool scope_ok =
+							(recs[ci].scope == nullptr) ||  // C is scope-empty: always valid
+							(recs[di].scope && recs[ci].scope &&
+							 std::includes(recs[di].scope->begin(), recs[di].scope->end(),
+							               recs[ci].scope->begin(), recs[ci].scope->end()));
+						if (scope_ok) subsumed_same_scope.insert(di);
+					}
+				}
+			}
+		}
+	}
+	std::cerr << "  subsumed by shorter     : " << subsumed.size()
+	          << " (" << (recs.empty() ? 0.0 :
+	                      100.0 * (double)subsumed.size() / (double)recs.size())
+	          << "% of pool, scope-ignoring)\n";
+	std::cerr << "    scope-safe subset     : " << subsumed_same_scope.size()
+	          << " (" << (recs.empty() ? 0.0 :
+	                      100.0 * (double)subsumed_same_scope.size() / (double)recs.size())
+	          << "% of pool)\n";
 }
 

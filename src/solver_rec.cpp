@@ -35,44 +35,6 @@
 
 using namespace std;
 
-// LRU-style dedup for recently-learned implicant signatures. A signature
-// is a 64-bit hash of the sorted variable IDs + polarity bits of the
-// clause literals. Fixed-capacity ring: when full, oldest entry is evicted.
-namespace {
-constexpr size_t kImplicantDedupCap = 4096;
-struct ImplicantDedup {
-  std::unordered_set<uint64_t> set;
-  std::deque<uint64_t> order;
-  bool insert(uint64_t sig) {
-    if (set.count(sig)) return false;
-    if (set.size() >= kImplicantDedupCap) {
-      uint64_t oldest = order.front();
-      order.pop_front();
-      set.erase(oldest);
-    }
-    set.insert(sig);
-    order.push_back(sig);
-    return true;
-  }
-  void clear() { set.clear(); order.clear(); }
-};
-thread_local ImplicantDedup g_impl_dedup;
-
-static uint64_t implicantSignature(const std::vector<LiteralID> &clause) {
-  std::vector<uint32_t> raws;
-  raws.reserve(clause.size());
-  for (auto l : clause) raws.push_back(l.raw());
-  std::sort(raws.begin(), raws.end());
-  // FNV-1a
-  uint64_t h = 0xcbf29ce484222325ULL;
-  for (uint32_t r : raws) {
-    h ^= (uint64_t)r;
-    h *= 0x100000001b3ULL;
-  }
-  return h;
-}
-}  // namespace
-
 // Walk antecedent chain backward from l_star, collecting decision
 // literals (ante == NOT_A_CLAUSE, DL > 0) visited during the walk.
 // Returns empty vector if the collected set would exceed max_size
@@ -268,10 +230,12 @@ void Solver::maybeLearnImplicants(unsigned bcp_start_ofs)
       }
     }
 
-    // Dedup via signature.
-    uint64_t sig = implicantSignature(clause);
-    if (!g_impl_dedup.insert(sig)) {
+    // Dedup via shared Bloom filter (Instance::learned_clause_sig_ via
+    // maybeDedupClause). Replaces the old 4096-entry LRU that was
+    // letting ~50% of duplicates through on long solves.
+    if (!maybeDedupClause(clause)) {
       statistics_.num_implicants_dedup_dropped_++;
+      statistics_.num_learned_dedup_dropped_++;
       continue;
     }
 
@@ -1042,7 +1006,13 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		if (!from_separator
 		    && !uip_clauses_.empty() && uip_clauses_.back().size() >= 2
 		    && uip_clauses_.back().front() == lit.neg()) {
-			addScopedUIPConflictClause(uip_clauses_.back());
+			// Dedup via Bloom filter (shared with commitFailedLiteral
+			// and implicant learning). FP = skip learning = sound.
+			if (maybeDedupClause(uip_clauses_.back())) {
+				addScopedUIPConflictClause(uip_clauses_.back());
+			} else {
+				statistics_.num_learned_dedup_dropped_++;
+			}
 		}
 		result = 0;
 	} else {
