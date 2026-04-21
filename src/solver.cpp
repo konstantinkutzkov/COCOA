@@ -215,6 +215,20 @@ void Solver::solve(const string &file_name) {
 		analyzeLearnedClausePool();
 	}
 
+	if (config_.analyze_dynamic_subsumption) {
+		cout << "\n=== Dynamic-subsumption measurement ===" << endl;
+		cout << "  branches sampled     : " << statistics_.dyn_sub_branches_sampled_ << endl;
+		cout << "  affected clauses     : " << statistics_.dyn_sub_affected_clauses_ << endl;
+		cout << "  shortened clauses    : " << statistics_.dyn_sub_shortened_clauses_ << endl;
+		cout << "  subsumption events   : " << statistics_.dyn_sub_events_ << endl;
+		cout << "    of which → binary : " << statistics_.dyn_sub_events_to_binary_ << endl;
+		if (statistics_.dyn_sub_branches_sampled_ > 0) {
+			cout << "  events per sampled branch: "
+			     << (double)statistics_.dyn_sub_events_ /
+			        (double)statistics_.dyn_sub_branches_sampled_ << endl;
+		}
+	}
+
 	if (config_.perform_implicant_learning) {
 		cout << "\n=== Implicant learning summary ===" << endl;
 		cout << "  learned            : " << statistics_.num_implicants_learned_ << endl;
@@ -1436,5 +1450,180 @@ void Solver::analyzeOriginalClausePool() {
 	                      100.0 * (double)ssr_shortenable.size() / (double)recs.size())
 	          << "% of pool)\n";
 	std::cerr << "    of which → binary    : " << ssr_to_binary.size() << "\n";
+}
+
+// Dynamic subsumption measurement. Called at the end of
+// branchOnLiteral's successful BCP. Sampled to keep cost bounded.
+//
+// Method (per affected-clauses-only approach):
+//   1. Identify clauses AFFECTED by this branching: those containing
+//      a literal whose negation was just assigned true.
+//   2. For each affected clause C, compute its effective literal set
+//      (stored literals minus currently-falsified ones; skip C if it
+//      became satisfied).
+//   3. For each affected C whose effective length shrank this BCP,
+//      check if effective(C) subsumes some other clause D (looking
+//      only at D that share a literal with effective(C), bounded by
+//      the rarest-literal occurrence trick).
+//   4. Count events. Do NOT modify state.
+//
+// Guards baked in (informed by prior bug classes):
+//   - Captured sizes stored in const locals before any structural op.
+//   - Explicit F_TRI/T_TRI/X_TRI branching (no implicit assumptions).
+//   - Thread-local buffers clear()ed each call — no heap churn.
+//   - Bounds checks on occurrence_lists_ index.
+void Solver::analyzeDynamicSubsumption(unsigned bcp_start_ofs) {
+	// Sample gate: only run every Nth branch.
+	const unsigned every = std::max(1u, config_.analyze_dynamic_subsumption_every);
+	static thread_local unsigned sample_counter = 0;
+	sample_counter++;
+	if (sample_counter % every != 0) return;
+
+	// Guard: bcp_start_ofs must be within the literal stack.
+	if (bcp_start_ofs >= literal_stack_.size()) return;  // nothing forced
+
+	statistics_.dyn_sub_branches_sampled_++;
+
+	// --- Collect newly-falsified literal RAWs ---
+	// literal_stack_[i] is the TRUE literal just pushed; its negation is
+	// the newly-falsified one. Deduplicate by variable (a single variable
+	// can't be pushed twice in one BCP).
+	static thread_local std::vector<uint32_t> falsified_raws;
+	falsified_raws.clear();
+	falsified_raws.reserve(literal_stack_.size() - bcp_start_ofs);
+	for (unsigned i = bcp_start_ofs; i < literal_stack_.size(); i++) {
+		LiteralID t = literal_stack_[i];
+		LiteralID f = t.neg();
+		falsified_raws.push_back(f.raw());
+	}
+
+	// --- Collect unique affected clauses ---
+	// Each newly-falsified literal occurs in some subset of clauses
+	// (via occurrence_lists_). A single clause may contain multiple
+	// newly-falsified literals → visit it only once.
+	static thread_local std::unordered_set<ClauseOfs> affected_seen;
+	affected_seen.clear();
+	for (uint32_t raw : falsified_raws) {
+		LiteralID lit_false;
+		lit_false.copyRaw(raw);
+		// Guard: bounds on occurrence_lists_ access.
+		if (lit_false.var() >= variables_.size()) continue;
+		const auto &occ = occurrence_lists_[lit_false];
+		for (ClauseOfs C_ofs : occ) {
+			affected_seen.insert(C_ofs);
+		}
+	}
+	statistics_.dyn_sub_affected_clauses_ += affected_seen.size();
+
+	// --- For each affected C, compute effective literals. Track shrinkage.
+	// Scope of subsumption check: among other original clauses only (we
+	// stay in the stored-clause world; learned clauses don't have
+	// occurrence_lists_ entries).
+	static thread_local std::vector<uint32_t> eff_C;
+	static thread_local std::vector<uint32_t> eff_D;
+
+	// For each affected C, look for a D it subsumes.
+	for (ClauseOfs C_ofs : affected_seen) {
+		// Compute effective(C). Also measure stored length to detect
+		// "actually shortened" clauses.
+		eff_C.clear();
+		unsigned stored_len = 0;
+		bool C_satisfied = false;
+		for (auto lt = beginOf(C_ofs); *lt != SENTINEL_LIT; lt++) {
+			stored_len++;
+			TriValue v = literal_values_[*lt];
+			// Guard: literal_values must be one of the three defined
+			// tri-states. Anything else is memory corruption.
+			assert((v == T_TRI || v == F_TRI || v == X_TRI)
+			       && "literal_values_ must be tri-state");
+			if (v == T_TRI) { C_satisfied = true; break; }
+			if (v == X_TRI) eff_C.push_back(lt->raw());
+			// v == F_TRI: literal is falsified — excluded from effective form.
+		}
+		if (C_satisfied) continue;      // clause already satisfied; skip
+		if (eff_C.empty()) continue;    // empty effective clause means
+		                                // conflict; BCP would have caught it
+		if (eff_C.size() == stored_len) continue;  // not actually shortened
+
+		statistics_.dyn_sub_shortened_clauses_++;
+		// Capture size BEFORE any further ops (guard against use-after-
+		// move class of bugs).
+		const size_t eff_C_len = eff_C.size();
+		std::sort(eff_C.begin(), eff_C.end());
+
+		// Compute a bit-signature of eff_C for cheap bitwise pre-filter.
+		uint64_t sig_C = 0;
+		for (uint32_t r : eff_C) {
+			uint32_t h = r;
+			h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
+			sig_C |= (1ULL << (h & 63));
+		}
+
+		// Pick the literal in eff_C with smallest occurrence list — this
+		// bounds the number of candidate D we examine. Iterate candidates.
+		LiteralID rarest_lit;
+		size_t rarest_count = (size_t)-1;
+		for (uint32_t r : eff_C) {
+			LiteralID l;
+			l.copyRaw(r);
+			size_t cnt = occurrence_lists_[l].size();
+			if (cnt < rarest_count) {
+				rarest_count = cnt;
+				rarest_lit = l;
+			}
+		}
+		// Guard: rarest_count must be at least 1 (contains C itself).
+		if (rarest_count == 0 || rarest_count == (size_t)-1) continue;
+
+		bool found_subsumption = false;
+		for (ClauseOfs D_ofs : occurrence_lists_[rarest_lit]) {
+			if (D_ofs == C_ofs) continue;                    // skip self
+			if (isClauseRemoved(D_ofs)) continue;             // skip removed
+			// Compute effective(D).
+			eff_D.clear();
+			bool D_sat = false;
+			for (auto lt = beginOf(D_ofs); *lt != SENTINEL_LIT; lt++) {
+				TriValue v = literal_values_[*lt];
+				assert((v == T_TRI || v == F_TRI || v == X_TRI)
+				       && "literal_values_ must be tri-state");
+				if (v == T_TRI) { D_sat = true; break; }
+				if (v == X_TRI) eff_D.push_back(lt->raw());
+			}
+			if (D_sat) continue;
+			if (eff_D.size() < eff_C_len) continue;  // can't be superset
+			std::sort(eff_D.begin(), eff_D.end());
+
+			// Bit-signature pre-filter.
+			uint64_t sig_D = 0;
+			for (uint32_t r : eff_D) {
+				uint32_t h = r;
+				h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
+				sig_D |= (1ULL << (h & 63));
+			}
+			if ((sig_C & sig_D) != sig_C) continue;
+
+			// Subset check: is eff_C ⊆ eff_D?
+			size_t i = 0, j = 0;
+			bool is_sub = true;
+			while (i < eff_C_len) {
+				while (j < eff_D.size() && eff_D[j] < eff_C[i]) j++;
+				if (j >= eff_D.size() || eff_D[j] != eff_C[i]) {
+					is_sub = false;
+					break;
+				}
+				i++; j++;
+			}
+			if (is_sub) {
+				found_subsumption = true;
+				break;  // one is enough for "this C creates a subsumption event"
+			}
+		}
+		if (found_subsumption) {
+			statistics_.dyn_sub_events_++;
+			if (eff_C_len == 2) {
+				statistics_.dyn_sub_events_to_binary_++;
+			}
+		}
+	}
 }
 

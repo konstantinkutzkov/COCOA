@@ -122,6 +122,18 @@ struct SolverConfiguration {
   // subsumption pass would actually help.
   bool     analyze_clause_pool        = false;
 
+  // Diagnostic: during search, after each branchOnLiteral's BCP
+  // settles, look at the clauses AFFECTED by the branching (those
+  // containing a newly-falsified literal) and count how many have
+  // shortened effective form that would now subsume another clause.
+  // Sampled (every Nth branch) to keep cost bounded. Read-only.
+  //
+  // Measures the actually-interesting question: as the solver runs,
+  // do branches create subsumption opportunities that weren't in the
+  // static formula? The static-pool analyzer cannot answer this.
+  bool     analyze_dynamic_subsumption       = false;
+  unsigned analyze_dynamic_subsumption_every = 100;  // sample every Nth branch
+
   // Reactive METIS: when the precomputed hierarchy separator is
   // unavailable or rejected by the Phase-2 gate, compute a fresh
   // METIS separator on the current sub-component's incidence graph

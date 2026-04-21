@@ -319,6 +319,15 @@ private:
 	// answer: would a preprocessing pass on F itself be worth writing?
 	void analyzeOriginalClausePool();
 
+	// Diagnostic: after branchOnLiteral's BCP settles, scan the clauses
+	// AFFECTED by the branching (those containing a newly-falsified
+	// literal) and count how many now subsume some other clause in
+	// their effective form. Read-only; sampled by
+	// config_.analyze_dynamic_subsumption_every. Answers the dynamic
+	// question the static analyzers cannot: does branching create
+	// subsumption opportunities the stored formula doesn't show?
+	void analyzeDynamicSubsumption(unsigned bcp_start_ofs);
+
 	bool bcp();
 
 	// Precomputed nested-dissection hierarchy (built once at solve start)

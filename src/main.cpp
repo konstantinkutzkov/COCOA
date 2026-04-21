@@ -109,6 +109,13 @@ int main(int argc, char *argv[]) {
       theSolver.config().implicant_dry_run = true;
     } else if (strcmp(argv[i], "-analyzeClausePool") == 0) {
       theSolver.config().analyze_clause_pool = true;
+    } else if (strcmp(argv[i], "-analyzeDynamic") == 0) {
+      theSolver.config().analyze_dynamic_subsumption = true;
+    } else if (strcmp(argv[i], "-analyzeDynamicEvery") == 0) {
+      if (i + 1 < argc && isdigit(argv[i+1][0])) {
+        theSolver.config().analyze_dynamic_subsumption_every = atoi(argv[i + 1]);
+        i++;
+      }
     } else if (strcmp(argv[i], "-implicantMinChain") == 0) {
       if (i + 1 < argc && isdigit(argv[i+1][0])) {
         theSolver.config().implicant_min_chain_depth = atoi(argv[i + 1]);
