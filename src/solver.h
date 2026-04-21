@@ -348,6 +348,12 @@ private:
 			Antecedent ant = Antecedent(NOT_A_CLAUSE)) {
 		if (literal_values_[lit] != X_TRI)
 			return false;
+		// Guard 4: polarity invariant. Entering this branch means
+		// literal_values_[lit] == X_TRI; the opposite polarity must
+		// also be X_TRI, otherwise the two views of the same variable
+		// are desynchronised — a BCP state corruption bug.
+		assert(literal_values_[lit.neg()] == X_TRI
+		       && "literal_values_ polarity invariant: opposite must be X_TRI");
 		var(lit).decision_level = stack_.get_decision_level();
 		var(lit).ante = ant;
 		literal_stack_.push_back(lit);

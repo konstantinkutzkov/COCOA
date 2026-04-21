@@ -13,6 +13,8 @@
 #include "containers.h"
 
 #include <assert.h>
+#include <cstdlib>
+#include <iostream>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -21,6 +23,20 @@ class Instance {
 protected:
 
   void unSet(LiteralID lit) {
+    // Guard 2: the guard variable must NEVER be unset. Its T_TRI
+    // assignment at DL 0 is the invariant that makes binary-UIP padding
+    // sound. Violation would make the padding literal ¬d become free,
+    // and padded clauses would fire (or fail to fire) incorrectly,
+    // silently undercounting or overcounting. Runtime check — fires
+    // even in Release so a bug can't sneak through.
+    if (guard_var_ != 0 && lit.var() == guard_var_) {
+      std::cerr << "*** GUARD_VAR_UNSET ***\n"
+                << "  guard_var_=" << guard_var_
+                << " lit.var()=" << lit.var()
+                << " — guard must stay assigned at DL 0; see instance.h.\n";
+      std::cerr.flush();
+      std::abort();
+    }
     var(lit).ante = Antecedent(NOT_A_CLAUSE);
     var(lit).decision_level = INVALID_DL;
     literal_values_[lit] = X_TRI;
@@ -145,6 +161,20 @@ protected:
     literal_values_[d_pos.neg()] = F_TRI;
     variables_[guard_var_].ante = Antecedent(NOT_A_CLAUSE);
     variables_[guard_var_].decision_level = 0;
+    // Guard 1: position invariant — guard_var_ must equal num_variables()
+    // so padded clauses use the correct index and future allocations
+    // (if any) would corrupt the invariant.
+    assert(guard_var_ == num_variables()
+           && "guard variable must be the last variable index");
+    // Guard 6: isolation at allocation — the guard must not already
+    // appear in any clause or binary link. If this ever fires, someone
+    // moved allocateGuardVariable earlier (into preprocessing) or the
+    // resize didn't zero-initialize the new per-literal slots.
+    assert(literal(d_pos).binary_links_.size() == 1
+           && literal(d_pos.neg()).binary_links_.size() == 1
+           && occurrence_lists_[d_pos].empty()
+           && occurrence_lists_[d_pos.neg()].empty()
+           && "guard variable must be isolated at allocation");
   }
 
   // Clauses removed by clause branching — reference counted

@@ -175,6 +175,25 @@ void Solver::solve(const string &file_name) {
 		cout << endl << " FOUND UNSAT DURING PREPROCESSING " << endl;
 	}
 
+	// Guard 3: guard variable post-solve sanity — must still be assigned
+	// to true at DL 0, never flipped to active. Violation means unSet
+	// slipped through somewhere (Guard 2 should have caught it) or the
+	// initial assignment was corrupted. Runtime check: the cost of a
+	// silent undercount here is higher than a visible abort.
+	if (guard_var_ != 0) {
+		LiteralID d_pos(guard_var_, true);
+		if (literal_values_[d_pos] != T_TRI
+		    || variables_[guard_var_].decision_level != 0) {
+			std::cerr << "*** GUARD_VAR_CORRUPTED at end of solve ***\n"
+			          << "  literal_values_[d.pos]=" << (int)literal_values_[d_pos]
+			          << " (expected T_TRI=" << (int)T_TRI << ")\n"
+			          << "  decision_level=" << variables_[guard_var_].decision_level
+			          << " (expected 0)\n";
+			std::cerr.flush();
+			std::abort();
+		}
+	}
+
 	stopwatch_.stop();
 	statistics_.time_elapsed_ = stopwatch_.getElapsedSeconds();
 
