@@ -294,6 +294,17 @@ private:
 	// Select next variable to branch on within comp (highest activity score).
 	VariableIndex pickBranchVariable(Component &comp);
 
+	// Phase 4: implicant learning helpers (see solver_config.h for design).
+	// Walks the antecedent chain backward from `l_star` and collects the
+	// decision literals that appeared along the way (DL > 0). Returns an
+	// empty vector if the collected set would exceed max_size.
+	std::vector<LiteralID> deriveDecisionImplicant(
+	    LiteralID l_star, unsigned max_size);
+	// Mine implicants for literals forced during the BCP call that
+	// started at literal-stack position `bcp_start_ofs`. Applies
+	// size / non-trivial / dedup filters and stops at the total cap.
+	void maybeLearnImplicants(unsigned bcp_start_ofs);
+
 	bool bcp();
 
 	// Precomputed nested-dissection hierarchy (built once at solve start)

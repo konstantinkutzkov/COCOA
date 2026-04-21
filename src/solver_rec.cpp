@@ -28,10 +28,181 @@
 
 #include "solver.h"
 
+#include <queue>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 using namespace std;
+
+// LRU-style dedup for recently-learned implicant signatures. A signature
+// is a 64-bit hash of the sorted variable IDs + polarity bits of the
+// clause literals. Fixed-capacity ring: when full, oldest entry is evicted.
+namespace {
+constexpr size_t kImplicantDedupCap = 4096;
+struct ImplicantDedup {
+  std::unordered_set<uint64_t> set;
+  std::deque<uint64_t> order;
+  bool insert(uint64_t sig) {
+    if (set.count(sig)) return false;
+    if (set.size() >= kImplicantDedupCap) {
+      uint64_t oldest = order.front();
+      order.pop_front();
+      set.erase(oldest);
+    }
+    set.insert(sig);
+    order.push_back(sig);
+    return true;
+  }
+  void clear() { set.clear(); order.clear(); }
+};
+thread_local ImplicantDedup g_impl_dedup;
+
+static uint64_t implicantSignature(const std::vector<LiteralID> &clause) {
+  std::vector<uint32_t> raws;
+  raws.reserve(clause.size());
+  for (auto l : clause) raws.push_back(l.raw());
+  std::sort(raws.begin(), raws.end());
+  // FNV-1a
+  uint64_t h = 0xcbf29ce484222325ULL;
+  for (uint32_t r : raws) {
+    h ^= (uint64_t)r;
+    h *= 0x100000001b3ULL;
+  }
+  return h;
+}
+}  // namespace
+
+// Walk antecedent chain backward from l_star, collecting decision
+// literals (ante == NOT_A_CLAUSE, DL > 0) visited during the walk.
+// Returns empty vector if the collected set would exceed max_size
+// (bail-early signal: "too big, skip learning").
+std::vector<LiteralID> Solver::deriveDecisionImplicant(
+    LiteralID l_star, unsigned max_size)
+{
+  std::vector<LiteralID> impl;
+  std::unordered_set<unsigned> seen;
+  std::queue<LiteralID> frontier;
+  frontier.push(l_star);
+  seen.insert(l_star.var());
+
+  while (!frontier.empty()) {
+    LiteralID l = frontier.front();
+    frontier.pop();
+    int dl = var(l).decision_level;
+    if (dl <= 0) continue;  // baseline (DL 0) or not-yet-assigned — skip
+    Antecedent ante = var(l).ante;
+    if (!ante.isAnt()) {
+      // Decision. Collect in the implicant frontier.
+      if (impl.size() >= max_size) return {};  // too big — bail
+      impl.push_back(l);
+      continue;
+    }
+    if (ante.isAClause()) {
+      ClauseOfs ofs = ante.asCl();
+      for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+        if (lt->var() == l.var()) continue;
+        if (!seen.insert(lt->var()).second) continue;
+        // Stored clause contains `lt` (literal). For this clause to
+        // have forced `l`, `lt` is falsified → its negation is the
+        // currently-true trigger to walk back through.
+        frontier.push(lt->neg());
+      }
+    } else {
+      // Binary antecedent: ante.asLit() returns the falsified partner
+      // literal (see BCP at solver.cpp:285 — setLiteralIfFree(*bt,
+      // Antecedent(unLit)) where unLit is the currently-falsified
+      // literal, the "other" half of the binary clause). To walk back
+      // we need the currently-TRUE literal: that's ante.asLit().neg().
+      LiteralID other_true = ante.asLit().neg();
+      if (seen.insert(other_true.var()).second) frontier.push(other_true);
+    }
+  }
+  return impl;
+}
+
+void Solver::maybeLearnImplicants(unsigned bcp_start_ofs)
+{
+  if (!config_.perform_implicant_learning) return;
+  if (statistics_.num_implicants_learned_
+        >= config_.implicant_max_total) {
+    // Hard cap reached — count the event once (not every call) is fine:
+    // stats_implicants_quota_stop_ tracks how many literals we skipped.
+    return;
+  }
+
+  // Iterate newly-forced literals from this BCP.
+  for (unsigned i = bcp_start_ofs + 1; i < literal_stack_.size(); i++) {
+    LiteralID l = literal_stack_[i];
+    // Must have an antecedent — pure decisions (not forced) are not
+    // mine-able as implicants (their "implicant" is themselves).
+    if (!var(l).ante.isAnt()) continue;
+
+    auto impl = deriveDecisionImplicant(l, config_.implicant_max_size);
+    if (impl.empty()) {
+      statistics_.num_implicants_size_dropped_++;
+      continue;
+    }
+    // Skip size==1 (singleton implicants): a single decision that forces
+    // `l` means we'd learn a binary (¬d v l). This IS valuable — the
+    // guard-padding mechanism handles it. Keep.
+
+    // Non-trivial filter: if the derived clause's literal set equals
+    // the antecedent clause's literal set, we'd be re-storing an
+    // existing clause. Cheap check: compare sizes + content. The
+    // derived clause has `impl.size() + 1` literals; antecedent has
+    // whatever it has. If sizes match AND every impl literal appears
+    // (negated) in the antecedent, it's trivial.
+    bool trivial = false;
+    if (var(l).ante.isAClause()) {
+      ClauseOfs ofs = var(l).ante.asCl();
+      unsigned ante_len = 0;
+      for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) ante_len++;
+      if (ante_len == impl.size() + 1) {
+        // Potential trivial case. Verify each impl literal's negation
+        // appears in the antecedent.
+        std::unordered_set<uint32_t> ante_raws;
+        for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++)
+          ante_raws.insert(lt->raw());
+        bool all_match = true;
+        for (auto d : impl) {
+          if (!ante_raws.count(d.neg().raw())) { all_match = false; break; }
+        }
+        if (all_match && ante_raws.count(l.raw())) trivial = true;
+      }
+    }
+    if (trivial) {
+      statistics_.num_implicants_trivial_dropped_++;
+      continue;
+    }
+
+    // Build the learned clause: ¬d_1 ∨ ... ∨ ¬d_k ∨ l. First literal
+    // must be l (addScopedUIPConflictClause / addClause assume front
+    // is the UIP-asserting literal in the watching scheme).
+    std::vector<LiteralID> clause;
+    clause.reserve(impl.size() + 1);
+    clause.push_back(l);
+    for (auto d : impl) clause.push_back(d.neg());
+
+    // Dedup via signature.
+    uint64_t sig = implicantSignature(clause);
+    if (!g_impl_dedup.insert(sig)) {
+      statistics_.num_implicants_dedup_dropped_++;
+      continue;
+    }
+
+    // Learn via the scoped-UIP machinery: automatic scope tagging,
+    // guard-padding for size==2, correct behaviour under clause
+    // branching.
+    addScopedUIPConflictClause(clause);
+    statistics_.num_implicants_learned_++;
+    if (statistics_.num_implicants_learned_
+          >= config_.implicant_max_total) {
+      statistics_.num_implicants_quota_stop_ = 1;
+      break;
+    }
+  }
+}
 
 // Signature of a component: sorted list of sorted clauses (each clause is
 // a sorted vector of current literal ints over active variables).
@@ -788,6 +959,12 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		}
 		result = 0;
 	} else {
+		// Phase 4: mine implicants from the BCP cascade. Opt-in; no-op
+		// by default. Suppressed during separator branching (same
+		// discipline as regular clause learning at line 951-955).
+		if (!from_separator) {
+			maybeLearnImplicants(lit_save);
+		}
 		result = solveComponent(comp, separator, separator_reset, depth, nd_node,
 		                        reactive_metis_skip_until_depth);
 	}

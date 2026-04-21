@@ -209,6 +209,15 @@ void Solver::solve(const string &file_name) {
 		     << " unique_stores=" << cc.stats_stores << endl;
 	}
 
+	if (config_.perform_implicant_learning) {
+		cout << "\n=== Implicant learning summary ===" << endl;
+		cout << "  learned           : " << statistics_.num_implicants_learned_ << endl;
+		cout << "  dropped (size cap): " << statistics_.num_implicants_size_dropped_ << endl;
+		cout << "  dropped (trivial) : " << statistics_.num_implicants_trivial_dropped_ << endl;
+		cout << "  dropped (dedup)   : " << statistics_.num_implicants_dedup_dropped_ << endl;
+		cout << "  quota reached     : " << (statistics_.num_implicants_quota_stop_ ? "yes" : "no") << endl;
+	}
+
 	if (config_.use_reactive_metis && reactive_metis_calls_ > 0) {
 		cout << "\n=== Reactive-METIS summary ===" << endl;
 		cout << "  calls            : " << reactive_metis_calls_ << endl;

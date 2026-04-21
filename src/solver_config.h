@@ -85,6 +85,25 @@ struct SolverConfiguration {
   // same key. A mismatch indicates a semantic bug in the canonical key.
   bool verify_cache = false;
 
+  // Implicant learning: when BCP forces a literal l* after branching,
+  // walk the antecedent chain backward to collect the decision literals
+  // that participated in the derivation. If the resulting set is small
+  // enough, learn the clause (¬d_1 v ... v ¬d_k v l*) as a scoped
+  // conflict clause — sound by resolution, potentially reusable in
+  // distant subtrees when the same decision pattern recurs.
+  //
+  // Filters (compounding, cheap):
+  //   - size cap: implicant_max_size (reject longer sets).
+  //   - non-trivial: skip if the derived clause would equal the
+  //     antecedent clause itself (no new information).
+  //   - dedup: LRU hash of recently-learned implicant signatures.
+  //
+  // Hard total cap: once implicant_max_total learned, disable for the
+  // rest of the solve.
+  bool     perform_implicant_learning = false;
+  unsigned implicant_max_size         = 4;
+  unsigned implicant_max_total        = 100000;
+
   // Reactive METIS: when the precomputed hierarchy separator is
   // unavailable or rejected by the Phase-2 gate, compute a fresh
   // METIS separator on the current sub-component's incidence graph
