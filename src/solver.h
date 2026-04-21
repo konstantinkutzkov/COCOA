@@ -12,9 +12,7 @@
 #include "statistics.h"
 #include "instance.h"
 #include "component_management.h"
-#include "separator.h"
 #include "nd_hierarchy.h"
-#include "separator_cache.h"
 
 
 
@@ -290,9 +288,6 @@ private:
 	                          int depth = 0,
 	                          int nd_node = -1,
 	                          int reactive_metis_skip_until_depth = 0);
-	// Find separator for a component, return it (empty if none).
-	// use_metis: if true, prefer METIS over Dinic's for better balance.
-	std::vector<CutNode> findSeparatorFor(Component &comp, bool use_metis = false);
 	// Discover independent sub-components of the current formula state
 	// restricted to `super_comp`. Returns owned components.
 	std::vector<Component*> discoverComponentsOf(Component &super_comp,
@@ -324,29 +319,6 @@ private:
 	static constexpr int kReactiveBuckets = 7;
 	unsigned long long reactive_metis_bucket_count_[kReactiveBuckets] = {0};
 	double             reactive_metis_bucket_total_us_[kReactiveBuckets] = {0};
-
-	// Separator branching
-	std::vector<CutNode> separator_elements_;
-	std::vector<bool> separator_used_;
-	int separator_base_dl_ = -1;
-	bool prefer_metis_separator_ = false;  // set by findSeparatorFor
-
-	// Stack of exhausted separators (for restoration on backtrack)
-	struct SavedSeparator {
-		std::vector<CutNode> elements;
-		std::vector<bool> used;
-		int base_dl;
-	};
-	std::vector<SavedSeparator> separator_stack_;
-
-	// Separator cache with sketch-based similarity lookup
-	SeparatorCache separator_cache_;
-	FormulaInfo buildFormulaInfo(Component &comp);
-	std::vector<CutNode> sortSeparatorElements(const std::vector<CutNode> &sep);
-	bool tryInstallSeparator(Component &comp);
-	int findMatchingSeparatorElement(Component &comp);
-	void decideSeparatorVariable(VariableIndex var);
-	void clearSeparator();
 
 	 void decayActivitiesOf(Component & comp) {
 	   for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {

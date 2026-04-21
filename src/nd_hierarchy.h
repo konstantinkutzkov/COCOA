@@ -23,7 +23,25 @@
 #include <unordered_map>
 #include <set>
 #include <algorithm>
-#include "separator.h"
+
+// A node in the incidence graph: either a variable or a long-clause.
+// Binary clauses are rendered as direct var-var edges, so a separator
+// never contains a binary clause (only vars and long-clause offsets).
+struct CutNode {
+  enum Kind { VAR, CLAUSE };
+  Kind kind;
+  unsigned id;
+
+  CutNode() : kind(VAR), id(0) {}
+  CutNode(Kind k, unsigned i) : kind(k), id(i) {}
+
+  bool operator==(const CutNode &o) const { return kind == o.kind && id == o.id; }
+  bool operator!=(const CutNode &o) const { return !(*this == o); }
+  bool operator<(const CutNode &o) const {
+    if (kind != o.kind) return kind < o.kind;
+    return id < o.id;
+  }
+};
 
 struct NDHierarchy {
   int npes = 0;          // number of leaf partitions (power of 2)

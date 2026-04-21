@@ -187,10 +187,8 @@ static void dumpComponentState(
 }
 
 SOLVER_StateT Solver::countSATRec() {
-	// Build precomputed ND hierarchy if separator branching is enabled
-	// and the mode requests it (pure-Dinic mode skips this).
-	if (config_.perform_separator_branching && config_.use_nd_hierarchy &&
-	    !nd_hierarchy_.valid) {
+	// Build precomputed ND hierarchy if separator branching is enabled.
+	if (config_.perform_separator_branching && !nd_hierarchy_.valid) {
 		// Collect long clauses: (clause_ofs, list of variable IDs).
 		// We drop clauses that are already satisfied/removed from the
 		// metis input to keep the graph snug, but MUST include every
@@ -488,12 +486,6 @@ mpz_class Solver::solveComponent(Component &comp,
 						          << " R=" << R_dbg << std::endl;
 					}
 				}
-			}
-			// Reactive Dinic's fallback when hierarchy provides nothing.
-			// Covers pure-Dinic mode (hierarchy disabled) and hybrid mode
-			// (hierarchy exhausted at leaves or component maps mixed).
-			if (separator.empty() && config_.use_reactive_separator_fallback) {
-				separator = findSeparatorFor(comp, false);
 			}
 			// Reactive METIS fallback: when the precomputed hierarchy's
 			// separator is unavailable or was rejected by the Phase-2
@@ -862,20 +854,6 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 	}
 	unmarkClauseRemoved(cl_ofs);
 	stack_.pop_back();
-	return result;
-}
-
-vector<CutNode> Solver::findSeparatorFor(Component &comp, bool use_metis) {
-	vector<CutNode> result;
-	prefer_metis_separator_ = use_metis;
-	if (tryInstallSeparator(comp)) {
-		// tryInstallSeparator writes to separator_elements_ and sets
-		// separator_base_dl_. Move the elements out and reset globals.
-		result = std::move(separator_elements_);
-		separator_elements_.clear();
-		separator_used_.clear();
-		separator_base_dl_ = -1;
-	}
 	return result;
 }
 

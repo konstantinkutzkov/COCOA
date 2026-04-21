@@ -23,7 +23,6 @@ int main(int argc, char *argv[]) {
     cout << "\t -noIBCP\t turn off implicit BCP" << endl;
     cout << "\t -cb [n]\t enable clause branching (min clause length n, default 8)" << endl;
     cout << "\t -sep [n]\t enable separator branching (min active vars n, default 15)" << endl;
-    cout << "\t -sepMode m\t separator mode: metis|hybrid|dinic (default metis)" << endl;
     cout << "\t -adaptive\t use Phase-3 adaptive (τ-based) branching on the no-separator path" << endl;
     cout << "\t -adaptiveMin n\t components with fewer than n active vars skip probing (default 12)" << endl;
     cout << "\t -reactiveMetis\t enable runtime-METIS fallback at hierarchy-reject points (opt-in; measured to regress on dense sub-instances as of 2026-04-20)" << endl;
@@ -68,26 +67,6 @@ int main(int argc, char *argv[]) {
         theSolver.config().separator_min_active_vars = atoi(argv[i + 1]);
         i++;
       }
-    } else if (strcmp(argv[i], "-sepMode") == 0) {
-      if (argc <= i + 1) {
-        cout << " -sepMode needs an argument: metis|hybrid|dinic" << endl;
-        return -1;
-      }
-      string mode = argv[i + 1];
-      if (mode == "metis") {
-        theSolver.config().use_nd_hierarchy = true;
-        theSolver.config().use_reactive_separator_fallback = false;
-      } else if (mode == "hybrid") {
-        theSolver.config().use_nd_hierarchy = true;
-        theSolver.config().use_reactive_separator_fallback = true;
-      } else if (mode == "dinic") {
-        theSolver.config().use_nd_hierarchy = false;
-        theSolver.config().use_reactive_separator_fallback = true;
-      } else {
-        cout << " unknown -sepMode: " << mode << " (use metis|hybrid|dinic)" << endl;
-        return -1;
-      }
-      i++;
     } else if (strcmp(argv[i], "-rec") == 0) {
       theSolver.config().use_recursive_solver = true;
     } else if (strcmp(argv[i], "-adaptive") == 0) {

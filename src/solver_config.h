@@ -82,13 +82,6 @@ struct SolverConfiguration {
   // experiment with probing on dense instances (e.g. t1_049).
   unsigned adaptive_probing_min_vars = 60;
 
-  // Separator discovery mode:
-  //   use_nd_hierarchy=true, reactive_fallback=false -> pure METIS hierarchy
-  //   use_nd_hierarchy=true, reactive_fallback=true  -> hybrid (METIS top + Dinic's)
-  //   use_nd_hierarchy=false, reactive_fallback=true -> pure reactive Dinic's
-  bool use_nd_hierarchy = true;
-  bool use_reactive_separator_fallback = false;
-
   // Use the recursive #SAT implementation (solver_rec.cpp) instead of
   // the iterative countSAT loop.
   bool use_recursive_solver = false;
