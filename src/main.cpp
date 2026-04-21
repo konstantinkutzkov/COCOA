@@ -68,7 +68,7 @@ int main(int argc, char *argv[]) {
         i++;
       }
     } else if (strcmp(argv[i], "-rec") == 0) {
-      theSolver.config().use_recursive_solver = true;
+      // Accepted for backward compatibility; recursive is now the only solver.
     } else if (strcmp(argv[i], "-adaptive") == 0) {
       theSolver.config().perform_adaptive_branching = true;
     } else if (strcmp(argv[i], "-reactiveMetis") == 0) {

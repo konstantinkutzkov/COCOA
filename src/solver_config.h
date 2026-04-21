@@ -30,18 +30,16 @@ struct SolverConfiguration {
   bool perform_clause_branching = false;
   unsigned clause_branch_min_length = 8;
 
-  // Separator branching: use minimum vertex cut in the incidence graph
-  // to select variables and clauses for branching
+  // Separator branching: branch on elements of a precomputed METIS
+  // nested-dissection separator until the separator is exhausted in the
+  // current sub-component, then recurse on disconnected sub-components.
   bool perform_separator_branching = false;
   unsigned separator_min_active_vars = 15;
-  unsigned separator_max_size = 30;
-  unsigned separator_tries = 12;
-  unsigned separator_min_second_comp = 12;
 
   // Phase 2 / Tier 1 gating: reject a precomputed ND-hierarchy separator
   // for the current sub-component if it is too large or too imbalanced
-  // relative to the component's active variables. When rejected, the
-  // separator falls back to Dinic's (if enabled) or to variable branching.
+  // relative to the component's active variables. When rejected, we fall
+  // through to reactive METIS (if enabled) or to variable branching.
   //
   //   separator_max_ratio   = max ( |filtered_sep| / |active vars in comp| )
   //   separator_min_balance = min ( min(L,R) / (L+R) )
@@ -81,10 +79,6 @@ struct SolverConfiguration {
   // no-adaptive baseline. Lower the threshold with -adaptiveMin n to
   // experiment with probing on dense instances (e.g. t1_049).
   unsigned adaptive_probing_min_vars = 60;
-
-  // Use the recursive #SAT implementation (solver_rec.cpp) instead of
-  // the iterative countSAT loop.
-  bool use_recursive_solver = false;
 
   // Verify cache keys: lookup() always misses, and store() compares the
   // newly computed count against any previously stored count for the

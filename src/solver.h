@@ -180,7 +180,6 @@ private:
 	// further data
 	void HardWireAndCompact();
 
-	SOLVER_StateT countSAT();
 
 	// Phase 2 / Tier 1 gating: decide whether a precomputed ND-hierarchy
 	// separator is acceptable for the current sub-component. Rejects
@@ -295,9 +294,6 @@ private:
 	// Select next variable to branch on within comp (highest activity score).
 	VariableIndex pickBranchVariable(Component &comp);
 
-	void decideLiteral();
-	void decideClause(ClauseOfs cl_ofs);
-	ClauseOfs selectClauseForBranching();
 	bool bcp();
 
 	// Precomputed nested-dissection hierarchy (built once at solve start)
@@ -334,13 +330,6 @@ private:
 	// beginingg at offset start_at_stack_ofs
 	bool BCP(unsigned start_at_stack_ofs);
 
-	retStateT backtrack();
-
-	// if on the current decision level
-	// a second branch can be visited, RESOLVED is returned
-	// otherwise returns BACKTRACK
-	retStateT resolveConflict();
-
 	/////////////////////////////////////////////
 	//  BEGIN small helper functions
 	/////////////////////////////////////////////
@@ -368,9 +357,6 @@ private:
 		literal_values_[lit.neg()] = F_TRI;
 		return true;
 	}
-
-	void printOnlineStats();
-
 
 	void setConflictState(LiteralID litA, LiteralID litB) {
 		violated_clause.clear();
