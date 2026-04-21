@@ -370,10 +370,6 @@ private:
 			violated_clause.push_back(*it);
 	}
 
-	vector<LiteralID>::const_iterator TOSLiteralsBegin() {
-		return literal_stack_.begin() + stack_.top().literal_stack_ofs();
-	}
-
 	void initStack(unsigned int resSize) {
 		stack_.clear();
 		stack_.reserve(resSize);
@@ -382,19 +378,6 @@ private:
 		// initialize the stack to contain at least level zero
 		stack_.push_back(StackLevel(1, 0, 2));
 		stack_.back().changeBranch();
-	}
-
-	const LiteralID &TOS_decLit() {
-		assert(stack_.top().literal_stack_ofs() < literal_stack_.size());
-		return literal_stack_[stack_.top().literal_stack_ofs()];
-	}
-
-	void reactivateTOS() {
-		for (auto it = TOSLiteralsBegin(); it != literal_stack_.end(); it++)
-			unSet(*it);
-		comp_manager_.cleanRemainingComponentsOf(stack_.top());
-		literal_stack_.resize(stack_.top().literal_stack_ofs());
-		stack_.top().resetRemainingComps();
 	}
 
 	/////////////////////////////////////////////
