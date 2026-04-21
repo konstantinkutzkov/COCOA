@@ -298,8 +298,13 @@ private:
 	// Walks the antecedent chain backward from `l_star` and collects the
 	// decision literals that appeared along the way (DL > 0). Returns an
 	// empty vector if the collected set would exceed max_size.
+	// `out_chain_depth` receives the number of antecedent-expansion
+	// steps performed during the walk (= number of non-decision literals
+	// popped from the frontier and expanded via their antecedent). A
+	// depth of 1 means `l_star`'s ante was expanded but no recursion
+	// occurred; higher depths mean longer BCP chains.
 	std::vector<LiteralID> deriveDecisionImplicant(
-	    LiteralID l_star, unsigned max_size);
+	    LiteralID l_star, unsigned max_size, unsigned *out_chain_depth = nullptr);
 	// Mine implicants for literals forced during the BCP call that
 	// started at literal-stack position `bcp_start_ofs`. Applies
 	// size / non-trivial / dedup filters and stops at the total cap.

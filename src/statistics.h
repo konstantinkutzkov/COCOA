@@ -76,6 +76,7 @@ public:
   unsigned long num_implicants_quota_stop_     = 0;  // total cap reached
   unsigned long num_implicants_fired_          = 0;  // used in BCP
   unsigned long num_implicants_fired_outside_  = 0;  // fired in a subtree other than learn-site
+  unsigned long num_implicants_depth_dropped_  = 0;  // chain too shallow
 
 
   /* cache statistics */

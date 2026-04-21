@@ -103,6 +103,14 @@ struct SolverConfiguration {
   bool     perform_implicant_learning = false;
   unsigned implicant_max_size         = 4;
   unsigned implicant_max_total        = 100000;
+  // Chain-depth filter: require the derivation to have at least this
+  // many antecedent-expansion steps ("forced-literal pops" during the
+  // walk) before we consider the implicant worth storing. A clause
+  // with chain_depth==1 equals its own antecedent (trivial filter
+  // catches it). chain_depth==2 compresses 2 BCP hops to 1 clause.
+  // chain_depth==3+ compresses 3+ hops. Higher threshold = fewer but
+  // higher-value stored clauses, less BCP pool bloat.
+  unsigned implicant_min_chain_depth  = 2;
   // Diagnostic: do the walk + filters but skip the clause store. Lets
   // us measure the cost of the learning machinery itself vs the cost
   // of BCP over an expanded clause pool.

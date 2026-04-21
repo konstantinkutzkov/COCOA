@@ -78,13 +78,14 @@ static uint64_t implicantSignature(const std::vector<LiteralID> &clause) {
 // Returns empty vector if the collected set would exceed max_size
 // (bail-early signal: "too big, skip learning").
 std::vector<LiteralID> Solver::deriveDecisionImplicant(
-    LiteralID l_star, unsigned max_size)
+    LiteralID l_star, unsigned max_size, unsigned *out_chain_depth)
 {
   // Guard: the walk starts from a currently-true literal. If l_star
   // isn't true, the caller invoked us with a stale/unassigned literal.
   assert(literal_values_[l_star] == T_TRI
          && "deriveDecisionImplicant: l_star must be currently true");
 
+  unsigned chain_depth = 0;
   std::vector<LiteralID> impl;
   std::unordered_set<unsigned> seen;
   std::queue<LiteralID> frontier;
@@ -117,6 +118,8 @@ std::vector<LiteralID> Solver::deriveDecisionImplicant(
       impl.push_back(l);
       continue;
     }
+    // Forced literal — count this expansion step.
+    chain_depth++;
     if (ante.isAClause()) {
       ClauseOfs ofs = ante.asCl();
       for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
@@ -145,6 +148,7 @@ std::vector<LiteralID> Solver::deriveDecisionImplicant(
       if (seen.insert(other_true.var()).second) frontier.push(other_true);
     }
   }
+  if (out_chain_depth) *out_chain_depth = chain_depth;
   return impl;
 }
 
@@ -165,9 +169,20 @@ void Solver::maybeLearnImplicants(unsigned bcp_start_ofs)
     // mine-able as implicants (their "implicant" is themselves).
     if (!var(l).ante.isAnt()) continue;
 
-    auto impl = deriveDecisionImplicant(l, config_.implicant_max_size);
+    unsigned chain_depth = 0;
+    auto impl = deriveDecisionImplicant(l, config_.implicant_max_size, &chain_depth);
     if (impl.empty()) {
       statistics_.num_implicants_size_dropped_++;
+      continue;
+    }
+    // Chain-depth filter: only keep implicants whose derivation walked
+    // at least min_chain_depth antecedent-expansion steps. depth==1
+    // means the clause equals its own antecedent (redundant — trivial
+    // filter below will catch it anyway). depth==2 saves 1 BCP hop;
+    // depth==3+ saves 2+ hops. Higher threshold = fewer but
+    // higher-value stored clauses, less BCP pool bloat.
+    if (chain_depth < config_.implicant_min_chain_depth) {
+      statistics_.num_implicants_depth_dropped_++;
       continue;
     }
     // Skip size==1 (singleton implicants): a single decision that forces
