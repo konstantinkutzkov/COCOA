@@ -39,6 +39,7 @@ protected:
     }
     var(lit).ante = Antecedent(NOT_A_CLAUSE);
     var(lit).decision_level = INVALID_DL;
+    var(lit).chain_depth = 0;  // reset cached BCP-proof depth
     literal_values_[lit] = X_TRI;
     literal_values_[lit.neg()] = X_TRI;
   }

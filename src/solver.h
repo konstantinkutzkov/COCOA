@@ -372,6 +372,30 @@ private:
 		       && "literal_values_ polarity invariant: opposite must be X_TRI");
 		var(lit).decision_level = stack_.get_decision_level();
 		var(lit).ante = ant;
+		// Chain-depth caching for fast implicant-filter lookup. Only
+		// computed when implicant learning is enabled — costs ~O(k)
+		// per forcing (k = antecedent clause length) but saves the
+		// O(chain_size) walk for every literal whose depth is below
+		// the min_chain_depth threshold. Decisions have depth 0.
+		if (config_.perform_implicant_learning) {
+			uint8_t cd = 0;
+			if (ant.isAnt()) {
+				if (ant.isAClause()) {
+					ClauseOfs ofs = ant.asCl();
+					for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+						if (lt->var() == lit.var()) continue;
+						uint8_t lt_cd = variables_[lt->var()].chain_depth;
+						if (lt_cd > cd) cd = lt_cd;
+					}
+				} else {
+					// Binary antecedent: ante.asLit() is the falsified
+					// partner; its variable's chain_depth is stored.
+					cd = variables_[ant.asLit().var()].chain_depth;
+				}
+				if (cd < 255) cd++;  // saturate at 255 (max of uint8_t)
+			}
+			var(lit).chain_depth = cd;
+		}
 		literal_stack_.push_back(lit);
 		if (ant.isAClause() && ant.asCl() != NOT_A_CLAUSE)
 			getHeaderOf(ant.asCl()).increaseScore();
