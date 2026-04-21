@@ -255,8 +255,11 @@ void Solver::maybeLearnImplicants(unsigned bcp_start_ofs)
 
     // Learn via the scoped-UIP machinery: automatic scope tagging,
     // guard-padding for size==2, correct behaviour under clause
-    // branching.
-    addScopedUIPConflictClause(clause);
+    // branching. Dry-run mode skips the actual store so we can
+    // measure walk+filter overhead in isolation.
+    if (!config_.implicant_dry_run) {
+      addScopedUIPConflictClause(clause);
+    }
     statistics_.num_implicants_learned_++;
     if (statistics_.num_implicants_learned_
           >= config_.implicant_max_total) {

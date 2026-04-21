@@ -105,6 +105,8 @@ int main(int argc, char *argv[]) {
         theSolver.config().implicant_max_total = atoi(argv[i + 1]);
         i++;
       }
+    } else if (strcmp(argv[i], "-implicantDryRun") == 0) {
+      theSolver.config().implicant_dry_run = true;
     } else if (strcmp(argv[i], "-adaptiveMin") == 0) {
       if (argc <= i + 1) {
         cout << " -adaptiveMin needs a numeric argument" << endl;

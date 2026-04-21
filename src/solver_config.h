@@ -103,6 +103,10 @@ struct SolverConfiguration {
   bool     perform_implicant_learning = false;
   unsigned implicant_max_size         = 4;
   unsigned implicant_max_total        = 100000;
+  // Diagnostic: do the walk + filters but skip the clause store. Lets
+  // us measure the cost of the learning machinery itself vs the cost
+  // of BCP over an expanded clause pool.
+  bool     implicant_dry_run          = false;
 
   // Reactive METIS: when the precomputed hierarchy separator is
   // unavailable or rejected by the Phase-2 gate, compute a fresh
