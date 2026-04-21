@@ -222,9 +222,14 @@ void Solver::solve(const string &file_name) {
 		cout << "  shortened clauses    : " << statistics_.dyn_sub_shortened_clauses_ << endl;
 		cout << "  subsumption events   : " << statistics_.dyn_sub_events_ << endl;
 		cout << "    of which → binary : " << statistics_.dyn_sub_events_to_binary_ << endl;
+		cout << "  SSR events           : " << statistics_.dyn_ssr_events_ << endl;
+		cout << "    of which → binary : " << statistics_.dyn_ssr_events_to_binary_ << endl;
 		if (statistics_.dyn_sub_branches_sampled_ > 0) {
-			cout << "  events per sampled branch: "
+			cout << "  sub events / branch  : "
 			     << (double)statistics_.dyn_sub_events_ /
+			        (double)statistics_.dyn_sub_branches_sampled_ << endl;
+			cout << "  SSR events / branch  : "
+			     << (double)statistics_.dyn_ssr_events_ /
 			        (double)statistics_.dyn_sub_branches_sampled_ << endl;
 		}
 	}
@@ -1622,6 +1627,86 @@ void Solver::analyzeDynamicSubsumption(unsigned bcp_start_ofs) {
 			statistics_.dyn_sub_events_++;
 			if (eff_C_len == 2) {
 				statistics_.dyn_sub_events_to_binary_++;
+			}
+		}
+
+		// --- SSR check (opt-in extension, same infrastructure) ---
+		// For each literal l in effective(C), look for clause D with
+		// ¬l in its effective form such that (effective(C) \ {l}) ⊆
+		// (effective(D) \ {¬l}). If so, SSR would let us shorten D
+		// by stripping ¬l.
+		//
+		// Guards from prior bug lessons:
+		//   - Captured eff_C_len in a const local earlier (we reuse it
+		//     here unchanged).
+		//   - No mutation of eff_C during the loop; eff_D is reused
+		//     cleanly (clear()) per candidate.
+		//   - Tri-state assertion on every literal_values_ read.
+		//   - Bounds-checked occurrence_lists_ access via LiteralID.var().
+		bool found_ssr = false;
+		unsigned ssr_result_len = 0;
+		for (size_t li = 0; li < eff_C_len && !found_ssr; li++) {
+			LiteralID lit_in_C;
+			lit_in_C.copyRaw(eff_C[li]);
+			LiteralID neg_l = lit_in_C.neg();
+			if (neg_l.var() >= variables_.size()) continue;
+			const auto &occ_neg = occurrence_lists_[neg_l];
+			for (ClauseOfs D_ofs : occ_neg) {
+				if (D_ofs == C_ofs) continue;
+				if (isClauseRemoved(D_ofs)) continue;
+				// Compute effective(D) excluding ¬l. The stored ¬l
+				// literal must currently be X_TRI (otherwise D is
+				// satisfied or ¬l is already falsified — both
+				// uninteresting). We filter by skipping ¬l during
+				// the effective-scan.
+				eff_D.clear();
+				bool D_sat = false;
+				bool neg_l_in_D_and_free = false;
+				for (auto lt = beginOf(D_ofs); *lt != SENTINEL_LIT; lt++) {
+					TriValue v = literal_values_[*lt];
+					assert((v == T_TRI || v == F_TRI || v == X_TRI));
+					if (v == T_TRI) { D_sat = true; break; }
+					if (v == X_TRI) {
+						if (*lt == neg_l) {
+							neg_l_in_D_and_free = true;
+							// skip — we're computing effective(D) \ {¬l}
+						} else {
+							eff_D.push_back(lt->raw());
+						}
+					}
+				}
+				if (D_sat || !neg_l_in_D_and_free) continue;
+				// Size check: need |eff_C \ {l}| = eff_C_len - 1 ≤ |eff_D \ {¬l}|.
+				const size_t need_len = eff_C_len - 1;
+				if (eff_D.size() < need_len) continue;
+				std::sort(eff_D.begin(), eff_D.end());
+
+				// Subset check: eff_C \ {l} ⊆ eff_D \ {¬l}.
+				// eff_C is already sorted. We walk both, skipping
+				// eff_C[li] in the comparison.
+				size_t i = 0, j = 0;
+				bool is_sub = true;
+				while (i < eff_C_len) {
+					if (i == li) { i++; continue; }  // skip l itself
+					while (j < eff_D.size() && eff_D[j] < eff_C[i]) j++;
+					if (j >= eff_D.size() || eff_D[j] != eff_C[i]) {
+						is_sub = false;
+						break;
+					}
+					i++; j++;
+				}
+				if (is_sub) {
+					found_ssr = true;
+					// Shortened D would have eff_D.size() literals.
+					ssr_result_len = (unsigned)eff_D.size();
+					break;
+				}
+			}
+		}
+		if (found_ssr) {
+			statistics_.dyn_ssr_events_++;
+			if (ssr_result_len == 2) {
+				statistics_.dyn_ssr_events_to_binary_++;
 			}
 		}
 	}

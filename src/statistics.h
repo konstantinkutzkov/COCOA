@@ -77,6 +77,8 @@ public:
   unsigned long dyn_sub_shortened_clauses_   = 0;  // of which effectively shrank
   unsigned long dyn_sub_events_              = 0;  // pairs where shortened C subsumes some D
   unsigned long dyn_sub_events_to_binary_    = 0;  // among events: subsuming C effectively = 2 lits
+  unsigned long dyn_ssr_events_              = 0;  // pairs where SSR on some l would shorten a D
+  unsigned long dyn_ssr_events_to_binary_    = 0;  // among SSR events: result would be length 2
 
   // Implicant learning (Phase 4). All zero unless
   // config_.perform_implicant_learning is on.
