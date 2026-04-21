@@ -7,6 +7,7 @@
 #include "solver.h"
 #include <deque>
 #include <cmath>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <unordered_set>
@@ -142,6 +143,141 @@ void Solver::solve(const string &file_name) {
 
 		if (!config_.quiet) {
 			statistics_.printShortFormulaInfo();
+		}
+
+		// Preprocessing completeness guards. Two levels:
+		//   1. Unit-propagation saturation: every clause has ≥ 2 active
+		//      literals (cheap; catches missed units).
+		//   2. Failed-literal saturation: no variable has a polarity
+		//      whose BCP derives conflict (expensive but one-off here).
+		verifyUnitPropagationSaturated("post-simplePreProcess");
+		// Temporarily disabled while debugging: this call mutates clause
+		// watch structure as a side effect of BCP during probing, which
+		// appears to perturb search results on t1_011.
+		// verifyNoFailedLiterals("post-simplePreProcess");
+
+		// Diagnostic: dump the preprocessed formula as DIMACS and exit.
+		// Used to isolate preprocessing bugs by feeding the dump to an
+		// independent model counter (ganak) and comparing counts. Done
+		// BEFORE allocating the guard variable so the dump reflects only
+		// what preprocessing produced.
+		if (!config_.dump_preprocessed_path.empty()) {
+			std::ofstream out(config_.dump_preprocessed_path);
+			if (!out) {
+				cerr << "failed to open dump path: "
+				     << config_.dump_preprocessed_path << endl;
+				return;
+			}
+			// Count surviving variables and clauses.
+			unsigned n_vars = num_variables();
+			unsigned n_cls = 0;
+			// Long clauses (stored in literal_pool_ up to original_lit_pool_size_).
+			for (auto it = literal_pool_.begin();
+			     it != literal_pool_.end(); it++) {
+				if (*it == SENTINEL_LIT) {
+					if (it + 1 == literal_pool_.end()) break;
+					it += ClauseHeader::overheadInLits();
+					ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
+					if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+					// Count effective length (skip falsified lits).
+					unsigned len = 0;
+					bool sat = false;
+					for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+						if (literal_values_[*lt] == T_TRI) { sat = true; break; }
+						if (literal_values_[*lt] == X_TRI) len++;
+					}
+					if (!sat && len >= 1) n_cls++;
+					// Advance past the clause literals.
+					auto end_it = beginOf(ofs);
+					while (*end_it != SENTINEL_LIT) end_it++;
+					it = end_it - 1;  // loop ++ moves to SENTINEL next
+				}
+			}
+			// Binary clauses (from binary_links_). Deduplicate by
+			// emitting only when (lit, other) has lit.raw() < other.raw().
+			for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+				if (literal_values_[l] == T_TRI) continue;  // lit already
+				                                            // true, binaries
+				                                            // with this lit
+				                                            // are satisfied
+				const auto &bl = literal(l).binary_links_;
+				for (auto bt = bl.begin(); *bt != SENTINEL_LIT; ++bt) {
+					if (!(l.raw() < bt->raw())) continue;
+					if (literal_values_[*bt] == T_TRI) continue;
+					if (literal_values_[l] == F_TRI
+					    && literal_values_[*bt] == F_TRI) continue;  // empty
+					n_cls++;
+				}
+			}
+			// Unit clauses (assigned literals at DL 0).
+			for (auto lit : literal_stack_) {
+				if (var(lit).decision_level == 0) n_cls++;
+			}
+			out << "c post-preprocessing dump from sharpsat-separator\n";
+			out << "p cnf " << n_vars << " " << n_cls << "\n";
+			// Emit long clauses.
+			for (auto it = literal_pool_.begin();
+			     it != literal_pool_.end(); it++) {
+				if (*it == SENTINEL_LIT) {
+					if (it + 1 == literal_pool_.end()) break;
+					it += ClauseHeader::overheadInLits();
+					ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
+					if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+					bool sat = false;
+					std::vector<int> lits;
+					for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+						if (literal_values_[*lt] == T_TRI) { sat = true; break; }
+						if (literal_values_[*lt] == X_TRI) {
+							int val = (int)lt->var();
+							if (!lt->sign()) val = -val;
+							lits.push_back(val);
+						}
+					}
+					auto end_it = beginOf(ofs);
+					while (*end_it != SENTINEL_LIT) end_it++;
+					if (!sat && !lits.empty()) {
+						for (int v : lits) out << v << " ";
+						out << "0\n";
+					}
+					it = end_it - 1;
+				}
+			}
+			// Emit binaries.
+			for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+				if (literal_values_[l] == T_TRI) continue;
+				const auto &bl = literal(l).binary_links_;
+				for (auto bt = bl.begin(); *bt != SENTINEL_LIT; ++bt) {
+					if (!(l.raw() < bt->raw())) continue;
+					if (literal_values_[*bt] == T_TRI) continue;
+					bool l_false  = (literal_values_[l]  == F_TRI);
+					bool bt_false = (literal_values_[*bt] == F_TRI);
+					if (l_false && bt_false) continue;  // empty clause
+					if (!l_false) {
+						int v = (int)l.var();
+						if (!l.sign()) v = -v;
+						out << v << " ";
+					}
+					if (!bt_false) {
+						int v = (int)bt->var();
+						if (!bt->sign()) v = -v;
+						out << v << " ";
+					}
+					out << "0\n";
+				}
+			}
+			// Emit units (literals assigned at DL 0 that were originally units).
+			for (auto lit : literal_stack_) {
+				if (var(lit).decision_level == 0) {
+					int v = (int)lit.var();
+					if (!lit.sign()) v = -v;
+					out << v << " 0\n";
+				}
+			}
+			out.close();
+			cerr << "dumped preprocessed formula to "
+			     << config_.dump_preprocessed_path
+			     << " (" << n_vars << " vars, " << n_cls << " clauses)\n";
+			return;
 		}
 
 		// Allocate the guard variable for scope-tracked binary UIP
@@ -1258,6 +1394,137 @@ void Solver::analyzeLearnedClausePool() {
 	          << " (" << (recs.empty() ? 0.0 :
 	                      100.0 * (double)subsumed_same_scope.size() / (double)recs.size())
 	          << "% of pool)\n";
+}
+
+// Invariant guard: verify the formula is unit-propagation saturated.
+// See declaration in solver.h for the spec.
+//
+// Scans every long clause in literal_pool_ (both original and learned)
+// and every binary clause in binary_links_. For each clause C:
+//   - If C has any T_TRI literal: satisfied, OK.
+//   - If C is removed: skip.
+//   - Else count X_TRI literals. If exactly 1, this literal is a
+//     forced unit that BCP missed. Fire.
+//
+// Design as a reusable guard: takes a context label so we can tell
+// where in the pipeline the violation was detected. Zero allocation;
+// O(L) where L = total literal occurrences.
+void Solver::verifyUnitPropagationSaturated(const char *label) {
+	unsigned n_violations = 0;
+	LiteralID violating_free_lit;
+	ClauseOfs violating_clause = NOT_A_CLAUSE;
+	bool violating_is_binary = false;
+
+	// Long clauses.
+	for (auto it_lit = literal_pool_.begin();
+	     it_lit != literal_pool_.end(); it_lit++) {
+		if (*it_lit != SENTINEL_LIT) continue;
+		if (it_lit + 1 == literal_pool_.end()) break;
+		it_lit += ClauseHeader::overheadInLits();
+		ClauseOfs ofs = (ClauseOfs)(it_lit + 1 - literal_pool_.begin());
+		if (isClauseRemoved(ofs)) {
+			// Advance past this clause's literals to the next SENTINEL.
+			auto e = beginOf(ofs);
+			while (*e != SENTINEL_LIT) e++;
+			it_lit = e - 1;
+			continue;
+		}
+		unsigned active = 0;
+		bool satisfied = false;
+		LiteralID lone_active;
+		for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+			TriValue v = literal_values_[*lt];
+			if (v == T_TRI) { satisfied = true; break; }
+			if (v == X_TRI) { active++; lone_active = *lt; }
+		}
+		// Advance past literals.
+		auto e = beginOf(ofs);
+		while (*e != SENTINEL_LIT) e++;
+		it_lit = e - 1;
+		if (satisfied) continue;
+		if (active == 1) {
+			if (n_violations == 0) {
+				violating_free_lit = lone_active;
+				violating_clause = ofs;
+			}
+			n_violations++;
+		}
+	}
+
+	// Binary clauses (via binary_links_). Each binary is represented
+	// twice (once per endpoint); dedup by l.raw() < bt->raw().
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		// If l itself is true or false, every binary with l is
+		// satisfied (if l true) or reduces to the other literal (if
+		// l false).
+		TriValue vl = literal_values_[l];
+		const auto &bl = literal(l).binary_links_;
+		for (auto bt = bl.begin(); *bt != SENTINEL_LIT; ++bt) {
+			if (!(l.raw() < bt->raw())) continue;
+			TriValue vb = literal_values_[*bt];
+			if (vl == T_TRI || vb == T_TRI) continue;  // satisfied
+			if (vl == F_TRI && vb == F_TRI) continue;  // empty — a
+			                                            // different
+			                                            // violation
+			                                            // caught elsewhere
+			unsigned active = 0;
+			LiteralID lone;
+			if (vl == X_TRI) { active++; lone = l; }
+			if (vb == X_TRI) { active++; lone = *bt; }
+			if (active == 1) {
+				if (n_violations == 0) {
+					violating_free_lit = lone;
+					violating_clause = NOT_A_CLAUSE;
+					violating_is_binary = true;
+				}
+				n_violations++;
+			}
+		}
+	}
+
+	if (n_violations > 0) {
+		std::cerr << "\n*** UNIT_PROP_NOT_SATURATED (" << label << ") ***\n"
+		          << "  " << n_violations << " clauses have exactly one"
+		          << " active literal with all others falsified.\n"
+		          << "  First violation: "
+		          << (violating_is_binary ? "binary clause" : "long clause at ofs=")
+		          << (violating_is_binary ? "" : std::to_string(violating_clause))
+		          << " free_lit=" << violating_free_lit.toInt() << "\n"
+		          << "  This literal should have been unit-propagated.\n";
+		std::cerr.flush();
+		std::abort();
+	}
+}
+
+// Invariant guard: verify there are no failed literals. See declaration
+// in solver.h for the spec. Uses probeLiteralPassFail which performs
+// a clean save-assign-BCP-rollback cycle.
+void Solver::verifyNoFailedLiterals(const char *label) {
+	unsigned n_failed = 0;
+	LiteralID first_failed;
+	for (unsigned v = 1; v < variables_.size(); v++) {
+		if (literal_values_[LiteralID(v, true)] != X_TRI) continue;  // already assigned
+		// Try v=true.
+		if (!probeLiteralPassFail(LiteralID(v, true))) {
+			if (n_failed == 0) first_failed = LiteralID(v, true);
+			n_failed++;
+			continue;  // don't try v=false too; one is enough
+		}
+		// Try v=false.
+		if (!probeLiteralPassFail(LiteralID(v, false))) {
+			if (n_failed == 0) first_failed = LiteralID(v, false);
+			n_failed++;
+		}
+	}
+	if (n_failed > 0) {
+		std::cerr << "\n*** FAILED_LITERAL_NOT_SATURATED (" << label << ") ***\n"
+		          << "  " << n_failed << " variables have a polarity whose"
+		          << " BCP derives conflict; the opposite literal is entailed"
+		          << " and should have been forced during preprocessing.\n"
+		          << "  First failed literal: " << first_failed.toInt() << "\n";
+		std::cerr.flush();
+		std::abort();
+	}
 }
 
 // Scan the ORIGINAL formula's clauses (everything in literal_pool_ below

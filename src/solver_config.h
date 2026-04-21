@@ -8,6 +8,7 @@
 #ifndef SOLVER_CONFIG_H_
 #define SOLVER_CONFIG_H_
 
+#include <string>
 
 struct SolverConfiguration {
 
@@ -133,6 +134,12 @@ struct SolverConfiguration {
   // static formula? The static-pool analyzer cannot answer this.
   bool     analyze_dynamic_subsumption       = false;
   unsigned analyze_dynamic_subsumption_every = 100;  // sample every Nth branch
+
+  // Diagnostic: after preprocessing, dump the resulting formula as a
+  // DIMACS CNF to the given path and exit (without solving). Used to
+  // verify preprocessing soundness by feeding the dump to an
+  // independent counter (ganak) and comparing.
+  std::string dump_preprocessed_path;
 
   // Reactive METIS: when the precomputed hierarchy separator is
   // unavailable or rejected by the Phase-2 gate, compute a fresh

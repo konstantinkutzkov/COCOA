@@ -319,6 +319,33 @@ private:
 	// answer: would a preprocessing pass on F itself be worth writing?
 	void analyzeOriginalClausePool();
 
+	// Invariant guard (reusable): verify the formula is
+	// unit-propagation saturated — every clause has ≥ 2 active
+	// (X_TRI) literals, or is already satisfied (≥ 1 T_TRI literal),
+	// or is flagged as removed. If any active clause has exactly
+	// one active literal with all others falsified, preprocessing
+	// left a forced literal un-propagated; that literal should have
+	// been pushed to literal_stack_ and BCP'd to completion.
+	//
+	// Runtime check: aborts with diagnostic if the invariant is
+	// violated. Intended to be called immediately after preprocessing
+	// and optionally at each branching boundary to catch silent
+	// state corruption.
+	void verifyUnitPropagationSaturated(const char *label);
+
+	// Invariant guard: verify there are no "failed literals" remaining.
+	// A failed literal is a literal l such that setting l and running
+	// BCP derives a conflict. In that case ¬l is entailed and should
+	// have been forced during preprocessing. If this guard finds any
+	// failed literal, preprocessing's prepFailedLiteralTest was
+	// incomplete.
+	//
+	// Cost: O(n × BCP) per call. Too expensive for per-branch use;
+	// intended as a one-off check right after preprocessing. Uses
+	// the existing probeLiteralPassFail primitive which has clean
+	// state rollback.
+	void verifyNoFailedLiterals(const char *label);
+
 	// Diagnostic: after branchOnLiteral's BCP settles, scan the clauses
 	// AFFECTED by the branching (those containing a newly-falsified
 	// literal) and count how many now subsume some other clause in
