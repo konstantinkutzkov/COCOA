@@ -40,6 +40,8 @@ int main(int argc, char *argv[]) {
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-noCC") == 0)
       theSolver.config().perform_component_caching = false;
+    if (strcmp(argv[i], "-noLearn") == 0)
+      theSolver.config().perform_conflict_clause_learning = false;
     if (strcmp(argv[i], "-noIBCP") == 0)
       theSolver.config().perform_failed_lit_test = false;
     if (strcmp(argv[i], "-noPP") == 0)
@@ -112,6 +114,22 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(argv[i], "-dumpPreprocessed") == 0) {
       if (argc <= i + 1) { cout << " -dumpPreprocessed needs a path\n"; return -1; }
       theSolver.config().dump_preprocessed_path = argv[i + 1];
+      i++;
+    } else if (strcmp(argv[i], "-permClauseLits") == 0) {
+      if (argc <= i + 1) { cout << " -permClauseLits needs a seed (uint)\n"; return -1; }
+      theSolver.config().perm_clause_lits_seed = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-permBinaryLinks") == 0) {
+      if (argc <= i + 1) { cout << " -permBinaryLinks needs a seed (uint)\n"; return -1; }
+      theSolver.config().perm_binary_links_seed = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-permWatchLists") == 0) {
+      if (argc <= i + 1) { cout << " -permWatchLists needs a seed (uint)\n"; return -1; }
+      theSolver.config().perm_watch_lists_seed = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-permOccLists") == 0) {
+      if (argc <= i + 1) { cout << " -permOccLists needs a seed (uint)\n"; return -1; }
+      theSolver.config().perm_occ_lists_seed = (unsigned)atoi(argv[i + 1]);
       i++;
     } else if (strcmp(argv[i], "-analyzeDynamic") == 0) {
       theSolver.config().analyze_dynamic_subsumption = true;

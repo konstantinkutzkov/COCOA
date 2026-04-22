@@ -14,6 +14,14 @@ struct SolverConfiguration {
 
   bool perform_non_chron_back_track = true;
 
+  // Disable UIP conflict-clause learning. When off, BCP conflicts still
+  // trigger the analyze / backjump path, and the asserting literal is
+  // still forced; we just do not persist the learned clause in the
+  // clause pool, and do not force the literal via a clause antecedent
+  // (NOT_A_CLAUSE is used). Pure diagnostic — used to test whether a
+  // count discrepancy is driven by the learned-clause machinery.
+  bool perform_conflict_clause_learning = true;
+
   // TODO component caching cannot be deactivated for now!
   bool perform_component_caching = true;
   bool perform_failed_lit_test = true;
@@ -140,6 +148,32 @@ struct SolverConfiguration {
   // verify preprocessing soundness by feeding the dump to an
   // independent counter (ganak) and comparing.
   std::string dump_preprocessed_path;
+
+  // Order-sensitivity probes. Post-preprocess, before search, randomly
+  // permute a specific ordering dimension of the in-memory representation
+  // and solve. A sound counter is order-invariant; if the count flips
+  // when one of these knobs is toggled, the bug is keyed on that
+  // ordering dimension.
+  //
+  //   perm_clause_lits_seed   : shuffle stored-literal order within each
+  //                             long clause in literal_pool_. Watch list
+  //                             entries for old lits[0]/lits[1] are
+  //                             removed and re-added for new lits[0]/
+  //                             lits[1] to keep the BCP invariant intact.
+  //   perm_binary_links_seed  : shuffle binary_links_[l] for every
+  //                             literal l, preserving the trailing
+  //                             SENTINEL_LIT.
+  //   perm_watch_lists_seed   : shuffle watch_list_[l] for every literal
+  //                             l, preserving the leading SENTINEL_CL.
+  //   perm_occ_lists_seed     : shuffle occurrence_lists_[l] for every
+  //                             literal l.
+  //
+  // 0 = no permutation (default). Any non-zero seed enables that knob.
+  // Multiple knobs can be active simultaneously.
+  unsigned perm_clause_lits_seed   = 0;
+  unsigned perm_binary_links_seed  = 0;
+  unsigned perm_watch_lists_seed   = 0;
+  unsigned perm_occ_lists_seed     = 0;
 
   // Reactive METIS: when the precomputed hierarchy separator is
   // unavailable or rejected by the Phase-2 gate, compute a fresh

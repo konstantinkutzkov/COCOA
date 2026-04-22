@@ -291,6 +291,40 @@ void Solver::solve(const string &file_name) {
 			// Fall through: continue solving in memory.
 		}
 
+		// Order-sensitivity probes. Applied after preprocessing but
+		// before the guard variable is allocated and the component
+		// manager is initialized, so the probes perturb only the
+		// post-preprocess representation. Each knob is independent;
+		// setting a non-zero seed enables it.
+		if (config_.perm_clause_lits_seed != 0) {
+			std::cerr << "order-probe: permuteClauseLiteralsSafe(seed="
+			          << config_.perm_clause_lits_seed << ")\n";
+			permuteClauseLiteralsSafe(config_.perm_clause_lits_seed);
+		}
+		if (config_.perm_binary_links_seed != 0) {
+			std::cerr << "order-probe: permuteBinaryLinksOrder(seed="
+			          << config_.perm_binary_links_seed << ")\n";
+			permuteBinaryLinksOrder(config_.perm_binary_links_seed);
+		}
+		if (config_.perm_watch_lists_seed != 0) {
+			std::cerr << "order-probe: permuteWatchListsOrder(seed="
+			          << config_.perm_watch_lists_seed << ")\n";
+			permuteWatchListsOrder(config_.perm_watch_lists_seed);
+		}
+		if (config_.perm_occ_lists_seed != 0) {
+			std::cerr << "order-probe: permuteOccurrenceListsOrder(seed="
+			          << config_.perm_occ_lists_seed << ")\n";
+			permuteOccurrenceListsOrder(config_.perm_occ_lists_seed);
+		}
+		// Re-check state integrity after permutation (catches any
+		// error in the watch-list fixup path of permuteClauseLiteralsSafe).
+		if (config_.perm_clause_lits_seed != 0
+		    || config_.perm_binary_links_seed != 0
+		    || config_.perm_watch_lists_seed != 0
+		    || config_.perm_occ_lists_seed != 0) {
+			verifyStateIntegrity("post-order-probe");
+		}
+
 		// Allocate the guard variable for scope-tracked binary UIP
 		// learning. MUST be after simplePreProcess (HardWireAndCompact
 		// would otherwise count d as a free variable and double the
@@ -715,7 +749,11 @@ bool Solver::commitFailedLiteral() {
 	// Dedup: skip storing if we've likely seen this clause before.
 	// Bloom filter — false positives just skip a learn (sound).
 	Antecedent ante(NOT_A_CLAUSE);
-	if (uip.size() >= 2 && !maybeDedupClause(uip)) {
+	if (!config_.perform_conflict_clause_learning) {
+		// Learning disabled for diagnosis: skip storing, still force the
+		// asserting literal with NOT_A_CLAUSE antecedent (same
+		// reasoning as the dedup-duplicate path below — sound).
+	} else if (uip.size() >= 2 && !maybeDedupClause(uip)) {
 		statistics_.num_learned_dedup_dropped_++;
 		// Duplicate — don't store, but still force the asserting literal
 		// with an unscoped NOT_A_CLAUSE antecedent. Correct: under the
@@ -1786,6 +1824,83 @@ void Solver::_permuteClauseLiteralsForTest(unsigned seed) {
 		while (*end != SENTINEL_LIT) end++;
 		std::shuffle(start, end, rng);
 		it = end;
+	}
+}
+
+// --- Order-sensitivity probes -----------------------------------------
+//
+// All four operate on the post-preprocess in-memory representation. They
+// are applied in solve() right after the clean-slate + state-integrity
+// guards, before allocateGuardVariable and before comp_manager_
+// initialization. A sound counter should produce the SAME count with any
+// combination of these knobs on or off.
+
+void Solver::permuteClauseLiteralsSafe(unsigned seed) {
+	std::mt19937 rng(seed);
+	auto it = literal_pool_.begin();
+	while (it != literal_pool_.end()) {
+		if (*it != SENTINEL_LIT) { it++; continue; }
+		if (it + 1 == literal_pool_.end()) break;
+		it += ClauseHeader::overheadInLits();
+		ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+		auto start = literal_pool_.begin() + ofs;
+		auto end = start;
+		while (*end != SENTINEL_LIT) end++;
+		unsigned len = (unsigned)(end - start);
+		if (len < 2) { it = end; continue; }
+		LiteralID old_w0 = *start;
+		LiteralID old_w1 = *(start + 1);
+		std::shuffle(start, end, rng);
+		LiteralID new_w0 = *start;
+		LiteralID new_w1 = *(start + 1);
+		// Fix watch lists: remove from old watchers (if they're no
+		// longer among the new front pair) and add to new watchers (if
+		// they weren't already watching).
+		auto is_in_new_front = [&](LiteralID l) {
+			return l == new_w0 || l == new_w1;
+		};
+		auto is_in_old_front = [&](LiteralID l) {
+			return l == old_w0 || l == old_w1;
+		};
+		if (!is_in_new_front(old_w0)) literal(old_w0).removeWatchLinkTo(ofs);
+		if (!is_in_new_front(old_w1) && !(old_w1 == old_w0))
+			literal(old_w1).removeWatchLinkTo(ofs);
+		if (!is_in_old_front(new_w0)) literal(new_w0).addWatchLinkTo(ofs);
+		if (!is_in_old_front(new_w1) && !(new_w1 == new_w0))
+			literal(new_w1).addWatchLinkTo(ofs);
+		it = end;
+	}
+}
+
+void Solver::permuteBinaryLinksOrder(unsigned seed) {
+	std::mt19937 rng(seed);
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		auto &bl = literal(l).binary_links_;
+		// Layout: [e1, e2, ..., e_k, SENTINEL_LIT]. Preserve the trailing
+		// sentinel by shuffling [begin, end - 1).
+		if (bl.size() <= 2) continue;  // 0 or 1 real entries: nothing to do
+		std::shuffle(bl.begin(), bl.end() - 1, rng);
+	}
+}
+
+void Solver::permuteWatchListsOrder(unsigned seed) {
+	std::mt19937 rng(seed);
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		auto &wl = literal(l).watch_list_;
+		// Layout: [SENTINEL_CL, e1, e2, ..., e_k]. Preserve the leading
+		// sentinel by shuffling [begin + 1, end).
+		if (wl.size() <= 2) continue;
+		std::shuffle(wl.begin() + 1, wl.end(), rng);
+	}
+}
+
+void Solver::permuteOccurrenceListsOrder(unsigned seed) {
+	std::mt19937 rng(seed);
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		auto &ol = occurrence_lists_[l];
+		if (ol.size() <= 1) continue;
+		std::shuffle(ol.begin(), ol.end(), rng);
 	}
 }
 

@@ -164,6 +164,35 @@ public:
 	// a one-shot perturbation BEFORE search starts.
 	void _permuteClauseLiteralsForTest(unsigned seed);
 
+	// Order-sensitivity probes (post-preprocess, pre-search). See
+	// SolverConfiguration for the purpose. Each is idempotent and
+	// operates on the current in-memory representation; applying
+	// multiple probes composes (seeds are independent).
+
+	// Shuffle stored-literal order within each long clause AND
+	// maintain the watch invariant (remove ofs from old
+	// lits[0]/lits[1]'s watch lists, add ofs to new lits[0]/lits[1]'s
+	// watch lists). Safe for a subsequent full solve.
+	void permuteClauseLiteralsSafe(unsigned seed);
+
+	// Shuffle binary_links_[l] for every literal l, preserving the
+	// trailing SENTINEL_LIT. BCP over binary_links_ is order-sensitive
+	// in the sense of "which implied literal gets pushed first", so
+	// this probe tests whether that ordering affects the final count.
+	void permuteBinaryLinksOrder(unsigned seed);
+
+	// Shuffle watch_list_[l] for every literal l, preserving the
+	// leading SENTINEL_CL (position 0). The solver iterates via
+	// .rbegin() so shuffling changes the clause traversal order
+	// during BCP.
+	void permuteWatchListsOrder(unsigned seed);
+
+	// Shuffle occurrence_lists_[l] for every literal l. Component
+	// analysis iterates occurrence_lists_ to find clauses containing
+	// each variable; if that iteration order matters for correctness
+	// (it shouldn't, for a sound counter), this probe will expose it.
+	void permuteOccurrenceListsOrder(unsigned seed);
+
 	// Test-support: prepare the solver for key-building without
 	// starting a full solve (parse file, preprocess, init component
 	// manager). Does NOT allocate the guard variable — tests that
