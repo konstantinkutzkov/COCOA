@@ -359,6 +359,44 @@ private:
 	// state corruption.
 	void verifyUnitPropagationSaturated(const char *label);
 
+	// Invariant guard: verify the solver's in-memory representational
+	// state is consistent with the formula. Checks:
+	//   - literal_values_[lit] and literal_values_[lit.neg()] are
+	//     polar opposites (both X_TRI, or one T/other F).
+	//   - For each clause in literal_pool_, the two currently-stored
+	//     front literals are in their respective watch lists.
+	//   - binary_links_ is symmetric: if l2 is in binary_links_[l1]
+	//     then l1 is in binary_links_[l2].
+	//   - occurrence_lists_[lit] references only clauses that actually
+	//     contain lit (original clauses only; learned clauses are not
+	//     tracked by occurrence_lists_).
+	//
+	// O(total literal occurrences) per call — affordable as a one-off
+	// check immediately after preprocessing, not per branch. Aborts
+	// with diagnostic if any invariant is violated.
+	void verifyStateIntegrity(const char *label);
+
+	// Invariant guard: verify the solver is at a true clean slate after
+	// preprocessing. Every per-variable/per-literal scratch field, every
+	// search-scoped collection, and every counter that search will
+	// accumulate into must be at its default-constructed value — no
+	// residue from the first BCP or the failed-literal probing phase.
+	//
+	// Motivation (2026-04-22 t1_011 investigation): the in-memory solve
+	// on the original CNF produces an undercount, but a DIMACS dump of
+	// the post-preprocess state fed back to a fresh solver produces the
+	// correct count. Something that isn't preserved by the DIMACS dump
+	// differs between the two entry points. This guard + the
+	// resetPostPreprocessScratch() reset below rule out "residue from
+	// preprocessing" as the cause.
+	void verifyPostPreprocessCleanSlate(const char *label);
+
+	// Explicit, one-shot reset of every search-scoped field. Idempotent.
+	// Called from HardWireAndCompact; anything it clears is cheap
+	// (empty containers) or a primitive zero. See
+	// verifyPostPreprocessCleanSlate for the invariant it enforces.
+	void resetPostPreprocessScratch();
+
 	// Invariant guard: verify there are no "failed literals" remaining.
 	// A failed literal is a literal l such that setting l and running
 	// BCP derives a conflict. In that case ¬l is entailed and should

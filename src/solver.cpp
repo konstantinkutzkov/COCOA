@@ -121,6 +121,12 @@ void Solver::HardWireAndCompact() {
 			unit_clauses_.size();
 	initStack(num_variables());
 	original_lit_pool_size_ = literal_pool_.size();
+
+	// Full clean-slate reset of all search-scoped state. After this
+	// point, every field the search phase will accumulate into is at
+	// its default-constructed value. verifyPostPreprocessCleanSlate
+	// (called in solve()) enforces the invariant.
+	resetPostPreprocessScratch();
 }
 
 void Solver::solve(const string &file_name) {
@@ -146,22 +152,26 @@ void Solver::solve(const string &file_name) {
 			statistics_.printShortFormulaInfo();
 		}
 
-		// Preprocessing completeness guards. Two levels:
+		// Preprocessing completeness + state integrity guards.
 		//   1. Unit-propagation saturation: every clause has ≥ 2 active
 		//      literals (cheap; catches missed units).
-		//   2. Failed-literal saturation: no variable has a polarity
-		//      whose BCP derives conflict (expensive but one-off here).
+		//   2. State integrity: the solver's in-memory representation
+		//      is internally consistent (polarity, watches, binaries,
+		//      occurrences).
+		//   3. Failed-literal saturation: no variable has a polarity
+		//      whose BCP derives conflict. DISABLED because BCP probing
+		//      mutates watches and hides the t1_011 bug.
 		verifyUnitPropagationSaturated("post-simplePreProcess");
-		// Temporarily disabled while debugging: this call mutates clause
-		// watch structure as a side effect of BCP during probing, which
-		// appears to perturb search results on t1_011.
+		verifyStateIntegrity("post-simplePreProcess");
+		verifyPostPreprocessCleanSlate("post-simplePreProcess");
 		// verifyNoFailedLiterals("post-simplePreProcess");
 
-		// Diagnostic: dump the preprocessed formula as DIMACS and exit.
-		// Used to isolate preprocessing bugs by feeding the dump to an
-		// independent model counter (ganak) and comparing counts. Done
-		// BEFORE allocating the guard variable so the dump reflects only
-		// what preprocessing produced.
+		// Diagnostic: dump the preprocessed formula as DIMACS, then
+		// CONTINUE solving. If the buggy in-memory solve is faithful to
+		// the dumped state, a fresh solver invocation on the dump should
+		// reproduce the same (wrong) count. Done BEFORE allocating the
+		// guard variable so the dump reflects only what preprocessing
+		// produced.
 		if (!config_.dump_preprocessed_path.empty()) {
 			std::ofstream out(config_.dump_preprocessed_path);
 			if (!out) {
@@ -278,7 +288,7 @@ void Solver::solve(const string &file_name) {
 			cerr << "dumped preprocessed formula to "
 			     << config_.dump_preprocessed_path
 			     << " (" << n_vars << " vars, " << n_cls << " clauses)\n";
-			return;
+			// Fall through: continue solving in memory.
 		}
 
 		// Allocate the guard variable for scope-tracked binary UIP
@@ -1494,6 +1504,266 @@ void Solver::verifyUnitPropagationSaturated(const char *label) {
 		          << "  This literal should have been unit-propagated.\n";
 		std::cerr.flush();
 		std::abort();
+	}
+}
+
+// Invariant guard: verify internal representational integrity after
+// preprocessing (or any other boundary where state should be clean).
+// See declaration in solver.h for the full contract.
+void Solver::verifyStateIntegrity(const char *label) {
+	auto fire = [&](const std::string &msg) {
+		std::cerr << "\n*** STATE_INTEGRITY (" << label << "): "
+		          << msg << " ***\n";
+		std::cerr.flush();
+		std::abort();
+	};
+
+	// Check 1: literal-values polarity.
+	for (unsigned v = 1; v < variables_.size(); v++) {
+		TriValue pos = literal_values_[LiteralID(v, true)];
+		TriValue neg = literal_values_[LiteralID(v, false)];
+		if (pos == T_TRI && neg != F_TRI) fire("var " + std::to_string(v)
+		    + " has literal_values_[pos]=T but neg != F");
+		if (pos == F_TRI && neg != T_TRI) fire("var " + std::to_string(v)
+		    + " has literal_values_[pos]=F but neg != T");
+		if (pos == X_TRI && neg != X_TRI) fire("var " + std::to_string(v)
+		    + " has literal_values_[pos]=X but neg != X");
+	}
+
+	// Check 2: watch-list correctness for long clauses.
+	// For every clause C in literal_pool_, the two literals at positions
+	// 0 and 1 must have this clause in their watch_list_.
+	std::unordered_set<uint64_t> expected_watches;  // (lit.raw(), ofs) pairs
+	for (auto it = literal_pool_.begin(); it != literal_pool_.end(); it++) {
+		if (*it != SENTINEL_LIT) continue;
+		if (it + 1 == literal_pool_.end()) break;
+		it += ClauseHeader::overheadInLits();
+		ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
+		auto p0 = literal_pool_.begin() + ofs;
+		auto p1 = p0 + 1;
+		if (*p0 == SENTINEL_LIT) continue;  // empty clause; skip
+		if (*p1 == SENTINEL_LIT) continue;  // length-1 stored clause;
+		                                     // unexpected but skip
+		expected_watches.insert(((uint64_t)p0->raw() << 32) | ofs);
+		expected_watches.insert(((uint64_t)p1->raw() << 32) | ofs);
+		// Advance past rest of clause literals.
+		auto e = p0;
+		while (*e != SENTINEL_LIT) e++;
+		it = e - 1;
+	}
+	// Collect actual watches. Note: watch_list_ layout is
+	// [SENTINEL_CL, ofs1, ofs2, ...] — sentinel at position 0, real
+	// entries appended after. Solver iterates via .rbegin() for this
+	// reason; we do the same.
+	std::unordered_set<uint64_t> actual_watches;
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		const auto &wl = literal(l).watch_list_;
+		for (auto wt = wl.rbegin(); *wt != SENTINEL_CL; ++wt) {
+			actual_watches.insert(((uint64_t)l.raw() << 32) | (uint64_t)*wt);
+		}
+	}
+	if (expected_watches != actual_watches) {
+		unsigned n_missing = 0, n_stale = 0;
+		LiteralID first_missing_lit, first_stale_lit;
+		ClauseOfs first_missing_ofs = 0, first_stale_ofs = 0;
+		std::vector<int> first_missing_clause_lits, first_stale_clause_lits;
+		auto dump_clause = [&](ClauseOfs ofs, std::vector<int> &out) {
+			for (auto lt = literal_pool_.begin() + ofs;
+			     *lt != SENTINEL_LIT; lt++) {
+				out.push_back(lt->toInt());
+			}
+		};
+		for (uint64_t e : expected_watches) {
+			if (!actual_watches.count(e)) {
+				if (n_missing == 0) {
+					first_missing_lit.copyRaw((uint32_t)(e >> 32));
+					first_missing_ofs = (ClauseOfs)(e & 0xFFFFFFFF);
+					dump_clause(first_missing_ofs, first_missing_clause_lits);
+				}
+				n_missing++;
+			}
+		}
+		for (uint64_t a : actual_watches) {
+			if (!expected_watches.count(a)) {
+				if (n_stale == 0) {
+					first_stale_lit.copyRaw((uint32_t)(a >> 32));
+					first_stale_ofs = (ClauseOfs)(a & 0xFFFFFFFF);
+					dump_clause(first_stale_ofs, first_stale_clause_lits);
+				}
+				n_stale++;
+			}
+		}
+		std::cerr << "\n*** STATE_INTEGRITY (" << label << "): watch-list mismatch ***\n"
+		          << "  expected watches (lit, ofs) total: " << expected_watches.size() << "\n"
+		          << "  actual   watches (lit, ofs) total: " << actual_watches.size() << "\n"
+		          << "  missing (expected, not actual): " << n_missing << "\n"
+		          << "  stale   (actual, not expected): " << n_stale << "\n";
+		if (n_missing > 0) {
+			std::cerr << "  first missing: lit=" << first_missing_lit.toInt()
+			          << " clause ofs=" << first_missing_ofs
+			          << " clause lits:";
+			for (int l : first_missing_clause_lits) std::cerr << " " << l;
+			std::cerr << "\n";
+		}
+		if (n_stale > 0) {
+			std::cerr << "  first stale: lit=" << first_stale_lit.toInt()
+			          << " clause ofs=" << first_stale_ofs
+			          << " clause lits:";
+			for (int l : first_stale_clause_lits) std::cerr << " " << l;
+			std::cerr << "\n";
+		}
+		std::cerr.flush();
+		std::abort();
+	}
+
+	// Check 3: binary-links symmetry.
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		const auto &bl = literal(l).binary_links_;
+		for (auto bt = bl.begin(); *bt != SENTINEL_LIT; ++bt) {
+			// Does *bt's list contain l?
+			const auto &back = literal(*bt).binary_links_;
+			bool found = false;
+			for (auto bt2 = back.begin(); *bt2 != SENTINEL_LIT; ++bt2) {
+				if (*bt2 == l) { found = true; break; }
+			}
+			if (!found) {
+				fire("binary_links_ asymmetry: lit " + std::to_string(l.toInt())
+				     + " links to " + std::to_string(bt->toInt())
+				     + " but reverse link missing");
+			}
+		}
+	}
+
+	// Check 4: occurrence-list consistency (original clauses only —
+	// occurrence_lists_ is populated from long original clauses in
+	// compactClauses; learned clauses are not tracked there).
+	// For each clause C in literal_pool_ below original_lit_pool_size_,
+	// every literal in C should have ofs in its occurrence_lists_[lit].
+	for (auto it = literal_pool_.begin(); it != literal_pool_.end(); it++) {
+		if (*it != SENTINEL_LIT) continue;
+		if (it + 1 == literal_pool_.end()) break;
+		it += ClauseHeader::overheadInLits();
+		ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+		for (auto lt = literal_pool_.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
+			const auto &ol = occurrence_lists_[*lt];
+			bool found = false;
+			for (ClauseOfs o : ol) if (o == ofs) { found = true; break; }
+			if (!found) {
+				fire("occurrence_lists_ missing: lit " + std::to_string(lt->toInt())
+				     + " appears in clause ofs=" + std::to_string(ofs)
+				     + " but that clause isn't in occurrence_lists_[lit]");
+			}
+		}
+		auto e = literal_pool_.begin() + ofs;
+		while (*e != SENTINEL_LIT) e++;
+		it = e - 1;
+	}
+	// Reverse direction: every ofs in occurrence_lists_[lit] should
+	// contain lit.
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		for (ClauseOfs ofs : occurrence_lists_[l]) {
+			if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+			bool found = false;
+			for (auto lt = literal_pool_.begin() + ofs;
+			     *lt != SENTINEL_LIT; lt++) {
+				if (*lt == l) { found = true; break; }
+			}
+			if (!found) {
+				fire("occurrence_lists_ stale: lit " + std::to_string(l.toInt())
+				     + " claims clause ofs=" + std::to_string(ofs)
+				     + " contains it, but that clause doesn't have lit");
+			}
+		}
+	}
+}
+
+// Explicit clean-slate reset for everything the search phase will
+// accumulate into. Called at the tail of HardWireAndCompact. See
+// verifyPostPreprocessCleanSlate for the invariant this establishes.
+void Solver::resetPostPreprocessScratch() {
+	// Instance-level search-scoped containers.
+	conflict_clauses_.clear();
+	unit_clauses_.clear();
+	removed_clauses_.clear();
+	learned_clause_scope_.clear();
+	// Bloom filter: force-re-init to zeros (re-initializing the member
+	// in place). Using a fresh default-constructed filter is the
+	// cheapest way to reset the bitset without exposing a reset method.
+	learned_clause_sig_ = ClauseSigFilter();
+
+	// Solver-level search-scoped state.
+	uip_clauses_.clear();
+	violated_clause.clear();
+	assertion_level_ = 0;
+	last_ccl_deletion_time_ = 0;
+	last_ccl_cleanup_time_ = 0;
+
+	// Per-variable residue. compactVariables default-constructs every
+	// Variable (ante = Antecedent(), decision_level = INVALID_DL,
+	// chain_depth = 0) so this is defensive: belt-and-suspenders in
+	// case a future refactor changes that.
+	for (unsigned v = 1; v < variables_.size(); v++) {
+		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
+		variables_[v].decision_level = INVALID_DL;
+		variables_[v].chain_depth = 0;
+	}
+}
+
+void Solver::verifyPostPreprocessCleanSlate(const char *label) {
+	auto fire = [&](const std::string &msg) {
+		std::cerr << "\n*** CLEAN_SLATE (" << label << "): "
+		          << msg << " ***\n";
+		std::cerr.flush();
+		std::abort();
+	};
+
+	if (!conflict_clauses_.empty())
+		fire("conflict_clauses_ not empty (size="
+		     + std::to_string(conflict_clauses_.size()) + ")");
+	if (!unit_clauses_.empty())
+		fire("unit_clauses_ not empty (size="
+		     + std::to_string(unit_clauses_.size()) + ")");
+	if (!removed_clauses_.empty())
+		fire("removed_clauses_ not empty (size="
+		     + std::to_string(removed_clauses_.size()) + ")");
+	if (!learned_clause_scope_.empty())
+		fire("learned_clause_scope_ not empty (size="
+		     + std::to_string(learned_clause_scope_.size()) + ")");
+
+	if (!uip_clauses_.empty())
+		fire("uip_clauses_ not empty (size="
+		     + std::to_string(uip_clauses_.size()) + ")");
+	if (!violated_clause.empty())
+		fire("violated_clause not empty (size="
+		     + std::to_string(violated_clause.size()) + ")");
+	if (assertion_level_ != 0)
+		fire("assertion_level_ != 0 (= "
+		     + std::to_string(assertion_level_) + ")");
+	if (last_ccl_deletion_time_ != 0)
+		fire("last_ccl_deletion_time_ != 0");
+	if (last_ccl_cleanup_time_ != 0)
+		fire("last_ccl_cleanup_time_ != 0");
+
+	// literal_stack_ must be empty (initStack cleared it).
+	if (!literal_stack_.empty())
+		fire("literal_stack_ not empty (size="
+		     + std::to_string(literal_stack_.size()) + ")");
+
+	// Per-variable: every Variable at its default-constructed state.
+	// v=0 is unused (1-based indexing).
+	for (unsigned v = 1; v < variables_.size(); v++) {
+		if (variables_[v].ante.isAnt())
+			fire("var " + std::to_string(v) + " has non-default ante");
+		if (variables_[v].decision_level != INVALID_DL)
+			fire("var " + std::to_string(v)
+			     + " has decision_level="
+			     + std::to_string(variables_[v].decision_level)
+			     + " (expected INVALID_DL)");
+		if (variables_[v].chain_depth != 0)
+			fire("var " + std::to_string(v)
+			     + " has chain_depth="
+			     + std::to_string((int)variables_[v].chain_depth));
 	}
 }
 
