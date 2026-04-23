@@ -150,6 +150,11 @@ protected:
   // then skipped (falls back to pre-guard behaviour: drop the binary).
   unsigned guard_var_ = 0;
 
+  // Inverse of compactVariables()'s var_map: compact_to_orig_[c] gives the
+  // original variable number that compacted var c refers to. Populated at
+  // the end of compactVariables(). Empty if compactVariables has not run.
+  std::vector<unsigned> compact_to_orig_;
+
   // ------------------------------------------------------------------
   // Learned-clause deduplication via Bloom filter.
   //
@@ -385,7 +390,17 @@ protected:
   // If the learned clause would be binary (size < 3), this is a no-op: we
   // can't key scope onto binary clauses (they have no ClauseOfs). The caller
   // should check uip_clauses_.back().size() >= 3 if they want a scoped learn.
-  inline Antecedent addScopedUIPConflictClause(vector<LiteralID> &literals);
+  //
+  // `pad_binary`: when true and a guard_var_ is allocated, binary UIPs are
+  // padded with ¬guard to give them a ClauseOfs. When false, binary UIPs
+  // are dropped. Pass false to isolate the padding mechanism for bug hunting.
+  //
+  // `record_scope`: when true, records removed_clauses_ as the clause's
+  // scope (default). When false, the clause is treated as unscoped — sound
+  // only when removed_clauses_ stays empty across the clause's lifetime.
+  inline Antecedent addScopedUIPConflictClause(vector<LiteralID> &literals,
+                                                bool pad_binary = true,
+                                                bool record_scope = true);
 
   inline bool addBinaryClause(LiteralID litA, LiteralID litB);
 
@@ -448,6 +463,7 @@ ClauseIndex Instance::addClause(vector<LiteralID> &literals) {
     addBinaryClause(literals[0], literals[1]);
     return 0;
   }
+
   for (unsigned i = 0; i < ClauseHeader::overheadInLits(); i++)
     literal_pool_.push_back(0);
   ClauseOfs cl_ofs = literal_pool_.size();
@@ -481,13 +497,15 @@ Antecedent Instance::addUIPConflictClause(vector<LiteralID> &literals) {
     return ante;
   }
 
-Antecedent Instance::addScopedUIPConflictClause(vector<LiteralID> &literals) {
+Antecedent Instance::addScopedUIPConflictClause(vector<LiteralID> &literals,
+                                                 bool pad_binary,
+                                                 bool record_scope) {
     // Pad binary UIPs to 3-clauses using the guard literal (¬d,
     // permanently F_TRI). This gives them a ClauseOfs so scope can be
     // tracked and BCP can consult learnedClauseInScope. Without the
     // guard we would have to drop binary UIPs to stay sound — a real
     // learning loss. See the guard_var_ comment above.
-    if (literals.size() == 2 && guard_var_ != 0) {
+    if (pad_binary && literals.size() == 2 && guard_var_ != 0) {
       literals.push_back(LiteralID(guard_var_, false));  // ¬d, always false
     }
     // Unit (size==1) still dropped — units live in unit_clauses_ and
@@ -504,7 +522,7 @@ Antecedent Instance::addScopedUIPConflictClause(vector<LiteralID> &literals) {
       getHeaderOf(cl_ofs).set_length(literals.size());
       ante = Antecedent(cl_ofs);
       // Record scope = current removed_clauses_ key set.
-      if (!removed_clauses_.empty()) {
+      if (record_scope && !removed_clauses_.empty()) {
         std::set<ClauseOfs> scope;
         for (const auto &p : removed_clauses_) scope.insert(p.first);
         learned_clause_scope_.emplace(cl_ofs, std::move(scope));

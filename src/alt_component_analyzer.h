@@ -97,10 +97,17 @@ public:
     if (search_stack_.size() == 1) {
       archetype_.stack_level().includeSolution(2);
       archetype_.setVar_in_other_comp(v);
+      isolated_peeled_count_++;
       return false;
     }
     return true;
   }
+
+  // Reset and read the "isolated vars peeled off" counter. Used by
+  // discoverComponentsOf to enforce the accounting invariant:
+  // #active_vars(super_comp) == Σ #active_vars(sub_i) + #isolated_peeled.
+  void resetIsolatedPeeledCount() { isolated_peeled_count_ = 0; }
+  unsigned isolatedPeeledCount() const { return isolated_peeled_count_; }
 
 
   inline Component *makeComponentFromArcheType(){
@@ -175,6 +182,8 @@ private:
   ComponentArchetype  archetype_;
 
   vector<VariableIndex> search_stack_;
+
+  unsigned isolated_peeled_count_ = 0;
 
   bool isResolved(const LiteralID lit) {
     return literal_values_[lit] == F_TRI;

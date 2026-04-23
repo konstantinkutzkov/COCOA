@@ -15,6 +15,7 @@
 #include <chrono>
 #include <queue>
 #include <functional>
+#include <utility>
 
 using namespace std;
 
@@ -173,6 +174,55 @@ void NDHierarchy::build(
     work.push({all_verts, root_id});
   }
 
+  // Helper: turn a WorkItem into a leaf. All its vertices land in one
+  // partition; next_leaf is consumed.
+  auto make_leaf = [&](const WorkItem &item) {
+    int leaf_id = next_leaf++;
+    leaf_lo[item.tree_node] = leaf_id;
+    leaf_hi[item.tree_node] = leaf_id;
+    for (int v : item.vertices) {
+      CutNode nd = gidx_to_cutnode(v);
+      if (nd.kind == CutNode::VAR)
+        var_leaf[nd.id] = leaf_id;
+      else
+        clause_leaf[nd.id] = leaf_id;
+    }
+  };
+
+  // Helper: connected components of the subgraph induced by `verts`,
+  // using `full_adj` restricted to those vertices. O(|V|+|E|) per call.
+  // Returns one vector per component; each component is a list of
+  // full-graph vertex indices.
+  vector<bool> in_set_buf(n_full, false);
+  vector<bool> visited_buf(n_full, false);
+  auto connected_components = [&](const vector<int> &verts)
+      -> vector<vector<int>> {
+    for (int v : verts) in_set_buf[v] = true;
+    // visited_buf is reused across calls — only touch entries in verts.
+    vector<vector<int>> comps;
+    for (int start : verts) {
+      if (visited_buf[start]) continue;
+      vector<int> comp;
+      std::queue<int> q;
+      q.push(start);
+      visited_buf[start] = true;
+      while (!q.empty()) {
+        int v = q.front(); q.pop();
+        comp.push_back(v);
+        for (int u : full_adj[v]) {
+          if (in_set_buf[u] && !visited_buf[u]) {
+            visited_buf[u] = true;
+            q.push(u);
+          }
+        }
+      }
+      comps.push_back(std::move(comp));
+    }
+    // Clean up the two scratch bitmaps so they're zero for the next call.
+    for (int v : verts) { in_set_buf[v] = false; visited_buf[v] = false; }
+    return comps;
+  };
+
   while (!work.empty()) {
     auto item = work.front();
     work.pop();
@@ -184,20 +234,47 @@ void NDHierarchy::build(
 
     if (nv < min_sep_vars) {
       // Too small — make this a leaf
-      int leaf_id = next_leaf++;
-      leaf_lo[item.tree_node] = leaf_id;
-      leaf_hi[item.tree_node] = leaf_id;
-      for (int v : item.vertices) {
-        CutNode nd = gidx_to_cutnode(v);
-        if (nd.kind == CutNode::VAR)
-          var_leaf[nd.id] = leaf_id;
-        else
-          clause_leaf[nd.id] = leaf_id;
-      }
+      make_leaf(item);
       continue;
     }
 
-    // Build subgraph
+    // Connectivity split: if the induced subgraph is disconnected, we
+    // must NOT pass it to METIS. METIS_ComputeVertexSeparator can return
+    // METIS_OK with sepsize=0 on a disconnected graph (the two components
+    // are already separated — no separator vertex needed). That zero-sep
+    // "success" leaves us with an internal node whose separator is empty
+    // but whose children have real subtrees — a "pass-through" state.
+    //
+    // Pass-throughs are represented explicitly: the current node gets
+    // empty separator and two children — LEFT covers the first connected
+    // component, RIGHT covers the union of the rest. If the rest is
+    // still disconnected, it will split itself again on the next
+    // dequeue. Consumers use (left_child<0 && right_child<0) as the
+    // leaf test rather than separator-emptiness.
+    auto comps = connected_components(item.vertices);
+    if (comps.size() >= 2) {
+      int lc = alloc_node();
+      int rc = alloc_node();
+      left_child[item.tree_node] = lc;
+      right_child[item.tree_node] = rc;
+      // separator[item.tree_node] stays empty: this is a pass-through.
+
+      // LEFT = first connected component.
+      work.push({std::move(comps[0]), lc});
+
+      // RIGHT = union of the remaining components.
+      vector<int> rest;
+      size_t rest_size = 0;
+      for (size_t i = 1; i < comps.size(); i++)
+        rest_size += comps[i].size();
+      rest.reserve(rest_size);
+      for (size_t i = 1; i < comps.size(); i++)
+        for (int v : comps[i]) rest.push_back(v);
+      work.push({std::move(rest), rc});
+      continue;
+    }
+
+    // Connected — safe to call METIS for a real vertex separator.
     Subgraph sg;
     sg.vertices = item.vertices;
     sg.adj.resize(n_full);  // sparse: only entries for vertices in sg
@@ -210,16 +287,7 @@ void NDHierarchy::build(
 
     if (!ok) {
       // Bisection failed — make leaf
-      int leaf_id = next_leaf++;
-      leaf_lo[item.tree_node] = leaf_id;
-      leaf_hi[item.tree_node] = leaf_id;
-      for (int v : item.vertices) {
-        CutNode nd = gidx_to_cutnode(v);
-        if (nd.kind == CutNode::VAR)
-          var_leaf[nd.id] = leaf_id;
-        else
-          clause_leaf[nd.id] = leaf_id;
-      }
+      make_leaf(item);
       continue;
     }
 
@@ -249,8 +317,12 @@ void NDHierarchy::build(
   int dfs_leaf_id = 0;
   std::function<void(int)> dfs = [&](int node) {
     if (node < 0) return;
-    if (separator[node].empty()) {
-      // Leaf: remap its single leaf_id
+    // Leafness is determined by having no children, NOT by having an
+    // empty separator. Pass-through nodes (inserted for disconnected
+    // subgraphs) have empty separator but real children; they must
+    // recurse, not remap.
+    bool is_leaf = (left_child[node] < 0 && right_child[node] < 0);
+    if (is_leaf) {
       int old_id = leaf_lo[node];
       if (old_id >= 0 && old_id < (int)old_to_new.size()) {
         if (old_to_new[old_id] < 0)
@@ -277,8 +349,11 @@ void NDHierarchy::build(
   }
 
   // Post-pass 2: propagate leaf ranges up from leaves to root (bottom-up).
+  // Process internal nodes (including pass-throughs with empty separator)
+  // — only genuine leaves are already done and must be skipped.
   for (int i = next_node - 1; i >= 0; i--) {
-    if (separator[i].empty()) continue;  // leaf — already set above
+    bool is_leaf = (left_child[i] < 0 && right_child[i] < 0);
+    if (is_leaf) continue;  // leaf — already set above
     int lc = left_child[i];
     int rc = right_child[i];
     if (lc >= 0 && rc >= 0 && leaf_lo[lc] >= 0 && leaf_lo[rc] >= 0) {
@@ -292,6 +367,7 @@ void NDHierarchy::build(
       leaf_hi[i] = leaf_hi[rc];
     }
     // Assign separator vertices to leaf_lo of this node's subtree.
+    // Empty for pass-through nodes; the loop is then a no-op.
     int assigned_leaf = (leaf_lo[i] >= 0) ? leaf_lo[i] : 0;
     for (const auto &nd : separator[i]) {
       if (nd.kind == CutNode::VAR) {
@@ -306,12 +382,20 @@ void NDHierarchy::build(
   n_nodes = next_node;
   valid = true;
 
-  // Summary
-  int total_sep = 0, internal = 0;
-  for (int i = 0; i < next_node; i++)
-    if (!separator[i].empty()) { total_sep += separator[i].size(); internal++; }
-  fprintf(stderr, "NDHierarchy: %d tree nodes, %d internal (sep), %d leaves, "
-          "%d total sep elements\n", next_node, internal, next_leaf, total_sep);
+  // Summary. Classify each node:
+  //   leaf        = no children
+  //   passthrough = has children, empty separator (connectivity split)
+  //   internal    = has children, non-empty separator (METIS bisection)
+  int total_sep = 0, internal = 0, passthrough = 0;
+  for (int i = 0; i < next_node; i++) {
+    bool is_leaf = (left_child[i] < 0 && right_child[i] < 0);
+    if (is_leaf) continue;
+    if (separator[i].empty()) passthrough++;
+    else { total_sep += separator[i].size(); internal++; }
+  }
+  fprintf(stderr, "NDHierarchy: %d tree nodes, %d internal (sep), "
+          "%d passthrough, %d leaves, %d total sep elements\n",
+          next_node, internal, passthrough, next_leaf, total_sep);
 }
 
 vector<CutNode> NDHierarchy::lookupSeparator(

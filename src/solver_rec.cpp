@@ -1,3 +1,5 @@
+#include <fstream>
+
 /*
  * solver_rec.cpp
  *
@@ -244,7 +246,13 @@ void Solver::maybeLearnImplicants(unsigned bcp_start_ofs)
     // branching. Dry-run mode skips the actual store so we can
     // measure walk+filter overhead in isolation.
     if (!config_.implicant_dry_run) {
-      addScopedUIPConflictClause(clause);
+      const int L = config_.learn_level;
+      Antecedent a = addScopedUIPConflictClause(
+          clause,
+          /*pad_binary=*/  L >= 4,
+          /*record_scope=*/L >= 3);
+      if (a.isAnt() && a.isAClause())
+        logLearnTrace(a.asCl(), clause);
     }
     statistics_.num_implicants_learned_++;
     if (statistics_.num_implicants_learned_
@@ -453,6 +461,81 @@ SOLVER_StateT Solver::countSATRec() {
 		nd_hierarchy_.build(build_n_vars, clause_list, binary_pairs);
 	}
 
+	// Diagnostic: dump ND-hierarchy state and exit before search.
+	if (!config_.dump_nd_and_exit_path.empty()) {
+		std::ofstream out(config_.dump_nd_and_exit_path);
+		if (out) {
+			out << "# ND hierarchy dump\n";
+			out << "valid " << nd_hierarchy_.valid << "\n";
+			out << "n_nodes " << nd_hierarchy_.n_nodes << "\n";
+			out << "npes " << nd_hierarchy_.npes << "\n";
+			out << "root " << nd_hierarchy_.root() << "\n";
+			for (int i = 0; i < nd_hierarchy_.n_nodes; i++) {
+				out << "node " << i
+				    << " lc=" << nd_hierarchy_.left_child[i]
+				    << " rc=" << nd_hierarchy_.right_child[i]
+				    << " leaf_lo=" << nd_hierarchy_.leaf_lo[i]
+				    << " leaf_hi=" << nd_hierarchy_.leaf_hi[i]
+				    << " sep_size=" << nd_hierarchy_.separator[i].size()
+				    << "\n";
+			}
+			// Compact var IDs → leaf
+			for (size_t v = 1; v < nd_hierarchy_.var_leaf.size(); v++) {
+				unsigned orig = (v < compact_to_orig_.size() && !compact_to_orig_.empty())
+				                ? compact_to_orig_[v] : (unsigned)v;
+				out << "var_leaf compact=" << v
+				    << " orig=" << orig
+				    << " leaf=" << nd_hierarchy_.var_leaf[v]
+				    << "\n";
+			}
+			// Clause leaves
+			for (auto &p : nd_hierarchy_.clause_leaf) {
+				out << "clause_leaf ofs=" << p.first << " leaf=" << p.second << "\n";
+			}
+			// Every active binary in binary_links_ (compacted)
+			for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+				const auto &bl = literal(l).binary_links_;
+				for (auto bt = bl.begin(); *bt != SENTINEL_LIT; ++bt) {
+					if (!(l.raw() < bt->raw())) continue;  // dedup
+					unsigned a_v = l.var(), b_v = bt->var();
+					unsigned a_orig = (a_v < compact_to_orig_.size() && !compact_to_orig_.empty())
+					                    ? compact_to_orig_[a_v] : a_v;
+					unsigned b_orig = (b_v < compact_to_orig_.size() && !compact_to_orig_.empty())
+					                    ? compact_to_orig_[b_v] : b_v;
+					int a_leaf = (a_v < nd_hierarchy_.var_leaf.size())
+					               ? nd_hierarchy_.var_leaf[a_v] : -1;
+					int b_leaf = (b_v < nd_hierarchy_.var_leaf.size())
+					               ? nd_hierarchy_.var_leaf[b_v] : -1;
+					out << "binary compact=" << l.toInt() << "," << bt->toInt()
+					    << " orig=" << (l.sign() ? (int)a_orig : -(int)a_orig)
+					    << "," << (bt->sign() ? (int)b_orig : -(int)b_orig)
+					    << " leaves=" << a_leaf << "," << b_leaf << "\n";
+				}
+			}
+			// Every active original long clause in the root comp
+			Component &rc = comp_manager_.superComponentOf(stack_.top());
+			for (auto it = rc.clsBegin(); *it != varsSENTINEL; it++) {
+				ClauseOfs ofs = comp_manager_.clauseOfsOf(*it);
+				if (ofs >= original_lit_pool_size_) continue;
+				out << "clause ofs=" << ofs << " lits=";
+				for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+					unsigned v = lt->var();
+					unsigned orig = (v < compact_to_orig_.size() && !compact_to_orig_.empty())
+					                  ? compact_to_orig_[v] : v;
+					int signed_orig = lt->sign() ? (int)orig : -(int)orig;
+					int leaf = (v < nd_hierarchy_.var_leaf.size())
+					             ? nd_hierarchy_.var_leaf[v] : -1;
+					out << signed_orig << "(leaf=" << leaf << "),";
+				}
+				int cleaf = nd_hierarchy_.clause_leaf.count(ofs)
+				              ? nd_hierarchy_.clause_leaf.at(ofs) : -1;
+				out << " clause_leaf=" << cleaf << "\n";
+			}
+			std::cerr << "ND hierarchy dumped to " << config_.dump_nd_and_exit_path << "\n";
+		}
+		std::exit(0);
+	}
+
 	Component &root = comp_manager_.superComponentOf(stack_.top());
 	int start_node = nd_hierarchy_.valid ? nd_hierarchy_.root() : -1;
 	mpz_class result = solveComponent(root, {}, true, 0, start_node);
@@ -485,8 +568,32 @@ mpz_class Solver::solveComponent(Component &comp,
 		cerr << "calls=" << call_count << " depth=" << rec_depth << endl;
 	}
 
-	// Decompose step: separator exhausted without a reset — factor into components.
-	if (!separator_reset && separator.empty()) {
+	// (Diagnostic guard `verifyUnitPropagationSaturated` was tested at
+	// every solveComponent entry on /tmp/t1_011_rev.cnf, 2026-04-22.
+	// It DID fire — BCP saturation is not maintained on learned clauses
+	// after chronological backtracking when their pos-1 watcher is
+	// already F_TRI. However, the count produced by the solver is
+	// identical with and without acting on those firings: the analyzer
+	// treats the unforced var as having two polarities, BCP catches the
+	// bad polarity via watch on the asserting lit, and the sum is
+	// correct. So the unsaturated state is an efficiency loss only,
+	// not a soundness defect. Guard removed to avoid per-call cost.)
+
+	// Decompose step: factor the super-component into its connected components.
+	// Enter this path in two situations:
+	//   (a) separator exhausted without a reset — the classical path after a
+	//       sequence of separator-branch consumptions.
+	//   (b) we're at a pass-through ND-hierarchy node. A pass-through tells us
+	//       this region was disconnected at build time and has no separator to
+	//       branch on. Falling through to variable branching would burn a
+	//       decision level before `discoverComponentsOf` catches the
+	//       disconnection in the sub-call — wasteful given we already know.
+	bool at_passthrough = (nd_node >= 0 && nd_hierarchy_.valid
+	                       && nd_hierarchy_.isPassthrough(nd_node));
+	if ((!separator_reset && separator.empty()) || at_passthrough) {
+		// Consume the reset flag so the branches below don't re-enter the
+		// separator-lookup block for this same node.
+		separator_reset = false;
 		mpz_class trivial_factor = 1;
 		vector<Component*> subcomps = discoverComponentsOf(comp, trivial_factor);
 		mpz_class result = trivial_factor;
@@ -508,22 +615,96 @@ mpz_class Solver::solveComponent(Component &comp,
 						sub_vars.push_back(*it);
 				int mt = nd_hierarchy_.mapToChild(nd_node, sub_vars);
 				if (mt == -2) {
+					int lc = nd_hierarchy_.left_child[nd_node];
+					int rc = nd_hierarchy_.right_child[nd_node];
+					int L_lo = nd_hierarchy_.leaf_lo[lc], L_hi = nd_hierarchy_.leaf_hi[lc];
+					int R_lo = nd_hierarchy_.leaf_lo[rc], R_hi = nd_hierarchy_.leaf_hi[rc];
+					auto side = [&](int leaf) -> char {
+						if (leaf < 0) return 'X';
+						if (leaf >= L_lo && leaf <= L_hi) return 'L';
+						if (leaf >= R_lo && leaf <= R_hi) return 'R';
+						return '?';
+					};
 					std::cerr << "\n*** SEPARATOR_INVARIANT_VIOLATED ***\n"
 					          << "  nd_node=" << nd_node
 					          << " sub_vars.size()=" << sub_vars.size()
 					          << " removed_clauses=" << removed_clauses_.size()
-					          << "\n  sub_vars leaves:";
-					for (unsigned v : sub_vars) {
-						int l = ((size_t)v < nd_hierarchy_.var_leaf.size())
-						        ? nd_hierarchy_.var_leaf[v] : -1;
-						std::cerr << " " << v << "(leaf=" << l << ")";
+					          << "\n  child subtrees:"
+					          << " left=[" << L_lo << ".." << L_hi << "]"
+					          << " right=[" << R_lo << ".." << R_hi << "]\n";
+
+					// Build set of active sub_vars for fast membership
+					std::unordered_set<unsigned> sub_var_set(sub_vars.begin(), sub_vars.end());
+
+					// Dump ALL clauses whose active lits in this sub-comp bridge L and R.
+					// We iterate the sub-comp's clause IDs (original) + conflict_clauses_ (learned).
+					auto emit_clause_if_bridging = [&](ClauseOfs ofs, bool is_learned) {
+						int nL = 0, nR = 0, nX = 0;
+						std::vector<std::pair<int,int>> active_lits;  // (signed_compact_lit, leaf)
+						for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+							unsigned var = lt->var();
+							if (!sub_var_set.count(var)) continue;  // not in this sub-comp
+							if (!isActive(*lt)) continue;  // lit resolved
+							int leaf = (var < nd_hierarchy_.var_leaf.size())
+							             ? nd_hierarchy_.var_leaf[var] : -1;
+							active_lits.push_back({lt->toInt(), leaf});
+							char s = side(leaf);
+							if (s == 'L') nL++;
+							else if (s == 'R') nR++;
+							else nX++;
+						}
+						if (nL > 0 && nR > 0) {
+							std::cerr << "  BRIDGE_CLAUSE ofs=" << ofs
+							          << " kind=" << (is_learned ? "LEARNED" : "ORIGINAL")
+							          << " nL=" << nL << " nR=" << nR << " nX=" << nX
+							          << " lits=";
+							for (auto &p : active_lits) {
+								int leaf = p.second;
+								char s = side(leaf);
+								std::cerr << p.first << "(" << s << "/" << leaf << "),";
+							}
+							std::cerr << "\n";
+						}
+					};
+
+					// Walk ALL clauses in the sub-component that the component
+					// analyzer sees — both original and learned.
+					Component &c = const_cast<Component&>(comp);
+					for (auto ci = c.clsBegin(); *ci != clsSENTINEL; ci++) {
+						ClauseOfs ofs = comp_manager_.clauseOfsOf(*ci);
+						bool is_learned = (ofs >= original_lit_pool_size_);
+						emit_clause_if_bridging(ofs, is_learned);
 					}
-					std::cerr << "\n  child subtrees:"
-					          << " left=[" << nd_hierarchy_.leaf_lo[nd_hierarchy_.left_child[nd_node]]
-					          << ".." << nd_hierarchy_.leaf_hi[nd_hierarchy_.left_child[nd_node]] << "]"
-					          << " right=[" << nd_hierarchy_.leaf_lo[nd_hierarchy_.right_child[nd_node]]
-					          << ".." << nd_hierarchy_.leaf_hi[nd_hierarchy_.right_child[nd_node]] << "]"
-					          << std::endl;
+					// Also dump any bridging binaries in binary_links_
+					std::cerr << "  (binary_links_ bridges):\n";
+					int bin_bridges = 0;
+					for (unsigned v : sub_vars) {
+						for (int sign = 0; sign <= 1; sign++) {
+							LiteralID l(v, sign == 0);
+							const auto &bl = literal(l).binary_links_;
+							for (auto bt = bl.begin(); *bt != SENTINEL_LIT; ++bt) {
+								if (!(l.raw() < bt->raw())) continue;  // dedup
+								unsigned other = bt->var();
+								if (!sub_var_set.count(other)) continue;
+								int la = (v < nd_hierarchy_.var_leaf.size())
+								           ? nd_hierarchy_.var_leaf[v] : -1;
+								int lb = (other < nd_hierarchy_.var_leaf.size())
+								           ? nd_hierarchy_.var_leaf[other] : -1;
+								char sa = side(la), sb = side(lb);
+								if ((sa == 'L' && sb == 'R') || (sa == 'R' && sb == 'L')) {
+									std::cerr << "    BIN_BRIDGE lits=" << l.toInt()
+									          << "," << bt->toInt()
+									          << " leaves=" << la << "(" << sa << ")"
+									          << "," << lb << "(" << sb << ")\n";
+									bin_bridges++;
+									if (bin_bridges >= 20) break;
+								}
+							}
+							if (bin_bridges >= 20) break;
+						}
+						if (bin_bridges >= 20) break;
+					}
+					std::cerr << "  total binary bridges (first 20 shown)=" << bin_bridges << "\n";
 					std::cerr.flush();
 					std::abort();
 				}
@@ -611,8 +792,75 @@ mpz_class Solver::solveComponent(Component &comp,
 				    literal_values_, comp_manager_.getAnalyzer().clauseIdToOfs(),
 				    rm, original_lit_pool_size_);
 			}
+			// Snapshot H's decision-only path when sub-component matches the
+			// user-specified target var set (path_trace_comp_vars).
+			if (config_.path_trace_ofs != 0 &&
+			    !config_.path_trace_comp_vars.empty() &&
+			    !config_.learn_trace_path.empty()) {
+				extern bool g_path_recording;
+				if (g_path_recording) {
+					std::vector<unsigned> avars;
+					for (auto it2 = sub->varsBegin(); *it2 != varsSENTINEL; it2++)
+						if (isActive(LiteralID(*it2, true))) avars.push_back(*it2);
+					std::vector<unsigned> target;
+					const std::string &s = config_.path_trace_comp_vars;
+					size_t start = 0;
+					while (start < s.size()) {
+						size_t c = s.find(',', start);
+						if (c == std::string::npos) c = s.size();
+						target.push_back((unsigned)atoi(s.substr(start, c - start).c_str()));
+						start = c + 1;
+					}
+					std::sort(avars.begin(), avars.end());
+					std::sort(target.begin(), target.end());
+					if (avars == target) {
+						std::ofstream tr(config_.learn_trace_path, std::ios::app);
+						tr << "H_SNAPSHOT: depth=" << (depth + 1)
+						   << " nvars=" << avars.size() << "\n";
+						tr << "  decisions (DL ordered):\n";
+						for (auto l : literal_stack_) {
+							if (!var(l).ante.isAnt())
+								tr << "    DL=" << var(l).decision_level
+								   << " " << l.toInt() << "\n";
+						}
+						tr << "  full stack length=" << literal_stack_.size() << "\n";
+						tr << "=== PATH RECORDING END ===\n";
+						g_path_recording = false;
+					}
+				}
+			}
 			sub_count = solveComponent(*sub, {}, true, depth + 1, child_nd_node,
 			                           reactive_metis_skip_until_depth);
+
+			// Diagnostic: if -dumpCompDir is set, dump this sub-component's
+			// sub-problem as a DIMACS CNF and log our computed count. A
+			// post-process script can then run ganak on each dumped file
+			// to find the smallest sub-problem where our count is wrong —
+			// a minimal in-tree reproducer of any correctness bug.
+			if (!config_.dump_comp_dir.empty()) {
+				static long long comp_dump_id = 0;
+				unsigned comp_active_nvars = 0;
+				// Pre-count to avoid dumping if outside window.
+				for (auto it = sub->varsBegin(); *it != varsSENTINEL; it++)
+					if (isActive(LiteralID(*it, true))) comp_active_nvars++;
+				if (comp_active_nvars >= config_.dump_comp_min_vars
+				    && comp_active_nvars <= config_.dump_comp_max_vars) {
+					long long my_id = comp_dump_id++;
+					std::string path = config_.dump_comp_dir + "/comp_"
+					                 + std::to_string(my_id) + ".cnf";
+					unsigned real_nv = 0;
+					if (dumpSubComponentCnf(*sub, path, &real_nv)) {
+						std::ofstream log(config_.dump_comp_dir + "/log.txt",
+						                  std::ios::app);
+						log << "id=" << my_id
+						    << " depth=" << (depth + 1)
+						    << " nvars=" << real_nv
+						    << " count=" << sub_count
+						    << " path=" << path << "\n";
+					}
+				}
+			}
+
 			if (config_.perform_component_caching && sub->num_variables() >= 3) {
 				if (config_.verify_cache && g_first_sig.find(key.hash) == g_first_sig.end()) {
 					g_first_sig[key.hash] = pre_sig;
@@ -786,24 +1034,32 @@ mpz_class Solver::solveComponent(Component &comp,
 					//     to discriminate.
 					bool accept = r.ok;
 					if (accept) {
-						// Gate 1: structural bisection quality.
-						double g1_ratio = (double)r.separator.size()
-						                   / (double)n_active_quick;
+						// Gate 1: structural bisection quality. Uses the
+						// same size gate as precomputed-separator path
+						// (separatorSizeAcceptable: min(0.5*n, 32)) so
+						// both paths agree on what "reasonable" means.
+						// Balance gate is retained as-is.
+						bool size_ok = separatorSizeAcceptable(
+						    (unsigned)r.separator.size(),
+						    n_active_quick);
 						unsigned Ltot = r.left_vars + r.right_vars;
 						double g1_balance = (Ltot > 0)
 						    ? (double)std::min(r.left_vars, r.right_vars)
 						      / (double)Ltot
 						    : 0.0;
-						if (g1_ratio > config_.separator_max_ratio
+						if (!size_ok
 						    || g1_balance < config_.separator_min_balance) {
 							accept = false;
 							reactive_metis_gate1_rej_++;
 							if (config_.verbose) {
+								unsigned allowed = std::min(
+								    (unsigned)(0.3 * (double)n_active_quick),
+								    20u);
 								std::cerr << "  SEP_REJECT_REACTIVE gate=1"
 								          << " depth=" << depth
 								          << " sep=" << r.separator.size()
 								          << " n=" << n_active_quick
-								          << " ratio=" << g1_ratio
+								          << " allowed=" << allowed
 								          << " balance=" << g1_balance << std::endl;
 							}
 						}
@@ -926,20 +1182,50 @@ mpz_class Solver::solveComponent(Component &comp,
 	// adaptive picker which also commits failed literals as unconditional
 	// progress (see pickBranchVariableAdaptive). Otherwise fall back to the
 	// legacy activity-score picker.
-	VariableIndex v;
-	if (config_.perform_adaptive_branching) {
-		bool comp_unsat = false;
-		v = pickBranchVariableAdaptive(comp, comp_unsat);
-		if (comp_unsat) return 0;
-	} else {
-		v = pickBranchVariable(comp);
+	VariableIndex v = 0;
+	bool forced_polarity_pos = false;
+	bool used_forced = false;
+
+	// Scripted decision override. Use the next forced literal IFF the
+	// literal's variable is active AND is a member of the current comp.
+	if (!config_.forced_decisions.empty()) {
+		static size_t forced_idx = 0;
+		while (forced_idx < config_.forced_decisions.size()) {
+			int fl = config_.forced_decisions[forced_idx];
+			VariableIndex fv = (VariableIndex)std::abs(fl);
+			if (!isActive(LiteralID(fv, true))) { forced_idx++; continue; }
+			bool in_comp = false;
+			for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++)
+				if (*it == fv) { in_comp = true; break; }
+			if (!in_comp) break;  // forced var not in this comp — fall through
+			v = fv;
+			forced_polarity_pos = (fl > 0);
+			used_forced = true;
+			forced_idx++;
+			break;
+		}
+	}
+
+	if (!used_forced) {
+		if (config_.perform_adaptive_branching) {
+			bool comp_unsat = false;
+			v = pickBranchVariableAdaptive(comp, comp_unsat);
+			if (comp_unsat) return 0;
+		} else {
+			v = pickBranchVariable(comp);
+		}
 	}
 	if (v == 0) {
 		return 1;
 	}
 	LiteralID lit_t(v, true), lit_f(v, false);
-	bool t_first = literal(lit_t).activity_score_ >
-	               literal(lit_f).activity_score_;
+	bool t_first;
+	if (used_forced) {
+		t_first = forced_polarity_pos;
+	} else {
+		t_first = literal(lit_t).activity_score_ >
+		          literal(lit_f).activity_score_;
+	}
 	// Non-separator variable branching: learning IS allowed here.
 	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth, -1,
 	                              /*from_separator=*/false,
@@ -975,9 +1261,46 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 	stack_.push_back(StackLevel(1, lit_save,
 	                            comp_manager_.component_stack_size()));
 
+	static long long bol_call = 0;
+	bol_call++;
+	long long my_id = bol_call;
+	if (config_.log_branches) {
+		// Emit the decision path from root to this branch. Each lit is
+		// a decision (ante-less) on the current literal_stack_.
+		auto to_orig_lit = [&](LiteralID l) -> int {
+			unsigned v = l.var();
+			int orig = (v < compact_to_orig_.size() && !compact_to_orig_.empty())
+			             ? (int)compact_to_orig_[v] : (int)v;
+			return l.sign() ? orig : -orig;
+		};
+		std::cerr << "BRANCH_ENTER id=" << my_id
+		          << " lit=" << lit.toInt()
+		          << " lit_orig=" << to_orig_lit(lit)
+		          << " DL=" << stack_.get_decision_level()
+		          << " path=";
+		for (auto l : literal_stack_)
+			if (!var(l).ante.isAnt())
+				std::cerr << l.toInt() << ",";
+		std::cerr << " path_orig=";
+		for (auto l : literal_stack_)
+			if (!var(l).ante.isAnt())
+				std::cerr << to_orig_lit(l) << ",";
+		std::cerr << "\n";
+	}
+
 	setLiteralIfFree(lit);
 
 	bool bcp_ok = BCP(lit_save);
+
+	// Stop-and-dump point: after BCP at the requested branch id, write
+	// the current formula state as CNF and exit. The two-file pair of
+	// such dumps at the same id from two runs forms a smaller reproducer.
+	if (config_.stop_at_branch == my_id && !config_.stop_at_branch_path.empty()) {
+		std::cerr << "STOP_AT_BRANCH id=" << my_id
+		          << " bcp_ok=" << bcp_ok << "\n";
+		dumpPreprocessedCnf(config_.stop_at_branch_path);
+		std::exit(0);
+	}
 
 	mpz_class result;
 	if (!bcp_ok) {
@@ -1001,15 +1324,29 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		// formula must evolve only via BCP + clause removal (which can
 		// only shrink connectivity, never grow it).
 		recordLastUIPCauses();
-		// size>=2 gate: addScopedUIPConflictClause handles size==2 via
-		// guard-padding; size<2 (empty / unit) is still dropped inside.
+		// Learning ladder (see solver_config.h::learn_level):
+		//   level 0 → don't learn at all
+		//   level 1 → learn but skip dedup
+		//   level 2 → + dedup (no scope)
+		//   level 3 → + scope (no binary padding)
+		//   level 4 → + binary padding
+		//   level 5 → + minimization (handled in minimizeAndStoreUIPClause)
+		const int L = config_.learn_level;
 		if (!from_separator
+		    && config_.perform_conflict_clause_learning
+		    && L >= 1
 		    && !uip_clauses_.empty() && uip_clauses_.back().size() >= 2
 		    && uip_clauses_.back().front() == lit.neg()) {
 			// Dedup via Bloom filter (shared with commitFailedLiteral
 			// and implicant learning). FP = skip learning = sound.
-			if (maybeDedupClause(uip_clauses_.back())) {
-				addScopedUIPConflictClause(uip_clauses_.back());
+			bool go = (L <= 1) || maybeDedupClause(uip_clauses_.back());
+			if (go) {
+				Antecedent a = addScopedUIPConflictClause(
+				    uip_clauses_.back(),
+				    /*pad_binary=*/  L >= 4,
+				    /*record_scope=*/L >= 3);
+				if (a.isAnt() && a.isAClause())
+					logLearnTrace(a.asCl(), uip_clauses_.back());
 			} else {
 				statistics_.num_learned_dedup_dropped_++;
 			}
@@ -1033,6 +1370,17 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		                        reactive_metis_skip_until_depth);
 	}
 
+	if (config_.log_branches) {
+		// Emit the decision path at exit for matching across runs.
+		std::cerr << "BRANCH_EXIT id=" << my_id
+		          << " lit=" << lit.toInt()
+		          << " result=" << result
+		          << " path=";
+		for (auto l : literal_stack_)
+			if (!var(l).ante.isAnt())
+				std::cerr << l.toInt() << ",";
+		std::cerr << "\n";
+	}
 	while (literal_stack_.size() > lit_save) {
 		unSet(literal_stack_.back());
 		literal_stack_.pop_back();
@@ -1128,6 +1476,12 @@ vector<Component*> Solver::discoverComponentsOf(Component &super_comp,
 	tmp.includeSolution(1);
 
 	ana.setupAnalysisContext(tmp, super_comp);
+	ana.resetIsolatedPeeledCount();
+
+	// Count active vars in super_comp BEFORE decomposition.
+	unsigned super_active = 0;
+	for (auto vt = super_comp.varsBegin(); *vt != varsSENTINEL; vt++)
+		if (isActive(LiteralID(*vt, true))) super_active++;
 
 	for (auto vt = super_comp.varsBegin(); *vt != varsSENTINEL; vt++) {
 		if (ana.isUnseenAndActive(*vt)) {
@@ -1137,6 +1491,29 @@ vector<Component*> Solver::discoverComponentsOf(Component &super_comp,
 			}
 			// trivial components are counted via includeSolution(2) on tmp
 		}
+	}
+
+	// INVARIANT: every active var of super_comp must land in EXACTLY
+	// one of: a non-trivial sub-component, or the isolated-peel counter.
+	// If a var is silently dropped, we lose a factor of 2 in the count —
+	// a concrete undercount bug. Check it here.
+	unsigned total_sub_active = 0;
+	for (Component *sub : result) {
+		for (auto vt = sub->varsBegin(); *vt != varsSENTINEL; vt++)
+			if (isActive(LiteralID(*vt, true))) total_sub_active++;
+	}
+	unsigned isolated = ana.isolatedPeeledCount();
+	if (total_sub_active + isolated != super_active) {
+		std::cerr << "\n*** COMPONENT_ACCOUNTING_VIOLATED ***\n"
+		          << "  super_active   = " << super_active << "\n"
+		          << "  sum sub_active = " << total_sub_active
+		          << "  (across " << result.size() << " sub-comps)\n"
+		          << "  isolated peel  = " << isolated << "\n"
+		          << "  missing        = "
+		          << ((long)super_active - (long)total_sub_active - (long)isolated)
+		          << "\n";
+		std::cerr.flush();
+		std::abort();
 	}
 
 	trivial_factor = tmp.getTotalModelCount();

@@ -21,6 +21,8 @@ int main(int argc, char *argv[]) {
     cout << "\t -noCC  \t turn off component caching" << endl;
     cout << "\t -cs [n]\t set max cache size to n MB" << endl;
     cout << "\t -noIBCP\t turn off implicit BCP" << endl;
+    cout << "\t -learnLevel n\t learning feature ladder (default 4: no minimization; 5=full w/ rewritten minimize, 3=no bin-pad, 2=no scope, 1=no dedup, 0=no learn)" << endl;
+    cout << "\t -verifyLearn\t replay the resolution chain after each minimization for an end-to-end sanity check (opt-in, slow)" << endl;
     cout << "\t -cb [n]\t enable clause branching (min clause length n, default 8)" << endl;
     cout << "\t -sep [n]\t enable separator branching (min active vars n, default 15)" << endl;
     cout << "\t -adaptive\t use Phase-3 adaptive (τ-based) branching on the no-separator path" << endl;
@@ -74,6 +76,15 @@ int main(int argc, char *argv[]) {
       }
     } else if (strcmp(argv[i], "-rec") == 0) {
       // Accepted for backward compatibility; recursive is now the only solver.
+    } else if (strcmp(argv[i], "-learnLevel") == 0) {
+      if (i + 1 >= argc) { cout << "-learnLevel needs a number 0..5\n"; return -1; }
+      int lvl = atoi(argv[i + 1]);
+      if (lvl < 0) lvl = 0;
+      if (lvl > 5) lvl = 5;
+      theSolver.config().learn_level = lvl;
+      i++;
+    } else if (strcmp(argv[i], "-verifyLearn") == 0) {
+      theSolver.config().verify_learn = true;
     } else if (strcmp(argv[i], "-adaptive") == 0) {
       theSolver.config().perform_adaptive_branching = true;
     } else if (strcmp(argv[i], "-reactiveMetis") == 0) {
@@ -115,6 +126,10 @@ int main(int argc, char *argv[]) {
       if (argc <= i + 1) { cout << " -dumpPreprocessed needs a path\n"; return -1; }
       theSolver.config().dump_preprocessed_path = argv[i + 1];
       i++;
+    } else if (strcmp(argv[i], "-dumpNDAndExit") == 0) {
+      if (argc <= i + 1) { cout << " -dumpNDAndExit needs a path\n"; return -1; }
+      theSolver.config().dump_nd_and_exit_path = argv[i + 1];
+      i++;
     } else if (strcmp(argv[i], "-permClauseLits") == 0) {
       if (argc <= i + 1) { cout << " -permClauseLits needs a seed (uint)\n"; return -1; }
       theSolver.config().perm_clause_lits_seed = (unsigned)atoi(argv[i + 1]);
@@ -130,6 +145,61 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(argv[i], "-permOccLists") == 0) {
       if (argc <= i + 1) { cout << " -permOccLists needs a seed (uint)\n"; return -1; }
       theSolver.config().perm_occ_lists_seed = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-sortBinaryLinks") == 0) {
+      theSolver.config().sort_binary_links = true;
+    } else if (strcmp(argv[i], "-sortWatchLists") == 0) {
+      theSolver.config().sort_watch_lists = true;
+    } else if (strcmp(argv[i], "-sortOccLists") == 0) {
+      theSolver.config().sort_occ_lists = true;
+    } else if (strcmp(argv[i], "-sortClauseLits") == 0) {
+      theSolver.config().sort_clause_lits = true;
+    } else if (strcmp(argv[i], "-sortClausePool") == 0) {
+      theSolver.config().sort_clause_pool = true;
+    } else if (strcmp(argv[i], "-learnTrace") == 0) {
+      if (argc <= i + 1) { cout << " -learnTrace needs a path\n"; return -1; }
+      theSolver.config().learn_trace_path = argv[i + 1];
+      i++;
+    } else if (strcmp(argv[i], "-pathTraceOfs") == 0) {
+      if (argc <= i + 1) { cout << " -pathTraceOfs needs a clause ofs\n"; return -1; }
+      theSolver.config().path_trace_ofs = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-pathTraceCompVars") == 0) {
+      if (argc <= i + 1) { cout << " -pathTraceCompVars needs a csv var list\n"; return -1; }
+      theSolver.config().path_trace_comp_vars = argv[i + 1];
+      i++;
+    } else if (strcmp(argv[i], "-logBranches") == 0) {
+      theSolver.config().log_branches = true;
+    } else if (strcmp(argv[i], "-logConflicts") == 0) {
+      theSolver.config().log_conflicts = true;
+    } else if (strcmp(argv[i], "-forceDecisions") == 0) {
+      if (argc <= i + 1) { cout << " -forceDecisions needs comma-sep literals\n"; return -1; }
+      std::string s = argv[i + 1];
+      size_t start = 0;
+      while (start < s.size()) {
+        size_t c = s.find(',', start);
+        if (c == std::string::npos) c = s.size();
+        std::string tok = s.substr(start, c - start);
+        if (!tok.empty()) theSolver.config().forced_decisions.push_back(atoi(tok.c_str()));
+        start = c + 1;
+      }
+      i++;
+    } else if (strcmp(argv[i], "-stopAtBranch") == 0) {
+      if (argc <= i + 2) { cout << " -stopAtBranch needs N and path\n"; return -1; }
+      theSolver.config().stop_at_branch = atoll(argv[i + 1]);
+      theSolver.config().stop_at_branch_path = argv[i + 2];
+      i += 2;
+    } else if (strcmp(argv[i], "-dumpCompDir") == 0) {
+      if (argc <= i + 1) { cout << " -dumpCompDir needs a path\n"; return -1; }
+      theSolver.config().dump_comp_dir = argv[i + 1];
+      i++;
+    } else if (strcmp(argv[i], "-dumpCompMinVars") == 0) {
+      if (argc <= i + 1) { cout << " -dumpCompMinVars needs a number\n"; return -1; }
+      theSolver.config().dump_comp_min_vars = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-dumpCompMaxVars") == 0) {
+      if (argc <= i + 1) { cout << " -dumpCompMaxVars needs a number\n"; return -1; }
+      theSolver.config().dump_comp_max_vars = (unsigned)atoi(argv[i + 1]);
       i++;
     } else if (strcmp(argv[i], "-analyzeDynamic") == 0) {
       theSolver.config().analyze_dynamic_subsumption = true;

@@ -105,6 +105,20 @@ struct NDHierarchy {
   // active variable IDs, determine which child node to use next.
   int mapToChild(int parent_node,
                  const std::vector<unsigned> &active_var_ids) const;
+
+  // Pass-through node: internal (has children) but empty separator.
+  // These are inserted by the build when a subgraph is already
+  // disconnected — the two children cover independent connected
+  // components, no separator vertex is needed. The solver should
+  // decompose immediately at such nodes rather than attempt
+  // separator-branching (returns nothing) and then waste a
+  // variable-branch level before the runtime component analyzer
+  // catches the disconnection.
+  bool isPassthrough(int node) const {
+    return node >= 0 && node < n_nodes
+        && separator[node].empty()
+        && (left_child[node] >= 0 || right_child[node] >= 0);
+  }
 };
 
 // ---------------------------------------------------------------

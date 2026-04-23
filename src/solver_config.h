@@ -22,6 +22,45 @@ struct SolverConfiguration {
   // count discrepancy is driven by the learned-clause machinery.
   bool perform_conflict_clause_learning = true;
 
+  // Learning-feature ladder (for bug hunting). Removing features from
+  // the top of the stack one at a time lets us pinpoint which learning
+  // feature is unsound. Enable conditions (a feature runs iff the
+  // current level is >= the threshold):
+  //
+  //   5 (default) = full: minimization + padding + scope + dedup + learn.
+  //   4           = drop minimization.
+  //   3           = drop binary-UIP padding (size<3 UIPs dropped on the
+  //                 spot; scope tracking still records for size>=3).
+  //   2           = drop scope tracking (learned clauses are unscoped —
+  //                 sound only when removed_clauses_ stays empty, i.e.
+  //                 no -cb / no -sep).
+  //   1           = drop bloom-filter dedup (always attempt to learn).
+  //   0           = no learning at all (same as perform_conflict_clause_
+  //                 learning=false; the asserting literal is still
+  //                 forced with NOT_A_CLAUSE antecedent, but no clause
+  //                 is persisted).
+  //
+  // Activity updates remain on throughout — they influence branching
+  // heuristics, not correctness.
+  //
+  // Default is 4 (no minimization): the naive minimization historically
+  // implemented in minimizeAndStoreUIPClause checked `seen[var()]`, a
+  // stale flag that did not reflect drops made during the same pass —
+  // producing unsound learned clauses on some formulas (observed on
+  // t1_011 as a pool-order-dependent 2^17 undercount). Level 5 still
+  // exists but uses a rewritten iterative-fixed-point implementation
+  // with live in_clause[] state and structural guards; enable
+  // explicitly via -learnLevel 5 once the rewrite is known good.
+  int learn_level = 4;
+
+  // When true, run the extra end-of-minimization resolution-replay
+  // verification (opt-in, expensive). For each literal dropped during
+  // minimization we stored the antecedent clause used; the replay
+  // re-derives the final clause by resolution and asserts it matches.
+  // Catches any further bugs in the minimization machinery; too
+  // expensive for default use.
+  bool verify_learn = false;
+
   // TODO component caching cannot be deactivated for now!
   bool perform_component_caching = true;
   bool perform_failed_lit_test = true;
@@ -149,6 +188,16 @@ struct SolverConfiguration {
   // independent counter (ganak) and comparing.
   std::string dump_preprocessed_path;
 
+  // Diagnostic: after building the ND-hierarchy (just before the
+  // first call to solveComponent), dump a static snapshot to this
+  // path and exit. Contents: leaf-range per internal tree node,
+  // var_leaf[v] for every compacted var, and the compacted->original
+  // mapping so external analysis scripts can reason in original
+  // variable space. Used to test whether the root partition is
+  // self-consistent w.r.t. the current active formula before any
+  // learning has happened.
+  std::string dump_nd_and_exit_path;
+
   // Order-sensitivity probes. Post-preprocess, before search, randomly
   // permute a specific ordering dimension of the in-memory representation
   // and solve. A sound counter is order-invariant; if the count flips
@@ -174,6 +223,75 @@ struct SolverConfiguration {
   unsigned perm_binary_links_seed  = 0;
   unsigned perm_watch_lists_seed   = 0;
   unsigned perm_occ_lists_seed     = 0;
+
+  // Canonicalize (sort) each order-sensitive structure. When the bug
+  // depends on iteration order, toggling one of these ON should make
+  // the wrong and correct files produce the same count. The toggle
+  // that fixes the bug pinpoints which ordering dimension matters.
+  bool sort_binary_links   = false;
+  bool sort_watch_lists    = false;
+  bool sort_occ_lists      = false;
+  bool sort_clause_lits    = false;
+  // Rewrite literal_pool_ with original clauses in canonical (sorted)
+  // order. Required for FULL canonicalization: different line orders in
+  // the input file produce different clause ofs values, which propagate
+  // into watch_list_ and occurrence_list_ contents even after those are
+  // sorted. Only this rewrite normalizes the ofs values themselves.
+  bool sort_clause_pool    = false;
+
+  // Dump each sub-component visited during search to <dump_comp_dir>/comp_<id>.cnf
+  // and log (id, depth, num_vars, num_clauses, our_count) to
+  // <dump_comp_dir>/log.txt at solveComponent return. A post-process script
+  // can run ganak on each CNF and find the smallest sub-component whose
+  // count our solver gets wrong. Empty string disables.
+  //
+  // Only dumps sub-components with num_vars in [min, max] to keep volume
+  // bounded. Defaults catch small-to-medium components.
+  // When non-empty, append a line per learned clause to this path at
+  // learn time. Each line contains:
+  //   LEARN ofs=<ofs> size=<n> DL=<dl> scope_size=<k>
+  //         clause: <lit lit lit ...>
+  //         stack (DL: lit ante):
+  //           <for each lit on literal_stack_>
+  //         scope: <ofs1 ofs2 ...>
+  // Used to trace the provenance of a specific learned clause when the
+  // solver's in-memory solve produces an undercount.
+  std::string learn_trace_path;
+
+  // G-to-H path capture. Recording turns ON when the clause at this ofs
+  // is learned (G), and turns OFF when solveComponent is entered with
+  // active vars equal to this set (H). Only events between G and H are
+  // written. This is the unique tree-path between the two nodes.
+  unsigned    path_trace_ofs = 0;   // 0 = disabled
+  std::string path_trace_comp_vars; // CSV ints, e.g. "61,183,184,..."
+
+  // Forced decision sequence. Each entry is a DIMACS literal (signed int).
+  // When non-empty, the solver's variable branching path uses these
+  // decisions in order instead of the activity-score heuristic. After
+  // the list is exhausted (or the next forced var isn't active in the
+  // current component), falls back to the heuristic.
+  std::vector<int> forced_decisions;
+
+  // Log each branchOnLiteral entry + exit with its returned count.
+  // Purpose: by diffing the traces of two runs on different line
+  // orderings, find the first branch where sub-counts diverge.
+  bool         log_branches        = false;
+
+  // At every BCP conflict, log the current literal_stack_'s DECISION
+  // literals (ante-less ones). Post-process: for each conflict, add
+  // those decisions as units to F and run a SAT solver. If SAT, that
+  // conflict is SPURIOUS — the solver wrongly declared UNSAT.
+  bool         log_conflicts       = false;
+  // When > 0: at the Nth branchOnLiteral entry (after BCP), dump the
+  // current in-memory formula state as a DIMACS CNF and exit 0. This
+  // extracts a smaller reproducer at the divergence point found by
+  // comparing logs.
+  long long    stop_at_branch      = 0;
+  std::string  stop_at_branch_path;
+
+  std::string dump_comp_dir;
+  unsigned    dump_comp_min_vars = 5;
+  unsigned    dump_comp_max_vars = 80;
 
   // Reactive METIS: when the precomputed hierarchy separator is
   // unavailable or rejected by the Phase-2 gate, compute a fresh

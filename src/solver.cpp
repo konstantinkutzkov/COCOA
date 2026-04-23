@@ -164,132 +164,17 @@ void Solver::solve(const string &file_name) {
 		verifyUnitPropagationSaturated("post-simplePreProcess");
 		verifyStateIntegrity("post-simplePreProcess");
 		verifyPostPreprocessCleanSlate("post-simplePreProcess");
+
+		// Diagnostic: dump all binaries from binary_links_ after preprocessing
+		// so we can externally verify each is F-entailed. Disabled unless
+		// the user provides -dumpBinaries <path>.
+		{
+			const char *bin_path = std::getenv("SHARPSAT_DUMP_BINARIES");
+			if (bin_path) dumpBinariesAfterPreprocess(bin_path);
+		}
 		// verifyNoFailedLiterals("post-simplePreProcess");
 
-		// Diagnostic: dump the preprocessed formula as DIMACS, then
-		// CONTINUE solving. If the buggy in-memory solve is faithful to
-		// the dumped state, a fresh solver invocation on the dump should
-		// reproduce the same (wrong) count. Done BEFORE allocating the
-		// guard variable so the dump reflects only what preprocessing
-		// produced.
-		if (!config_.dump_preprocessed_path.empty()) {
-			std::ofstream out(config_.dump_preprocessed_path);
-			if (!out) {
-				cerr << "failed to open dump path: "
-				     << config_.dump_preprocessed_path << endl;
-				return;
-			}
-			// Count surviving variables and clauses.
-			unsigned n_vars = num_variables();
-			unsigned n_cls = 0;
-			// Long clauses (stored in literal_pool_ up to original_lit_pool_size_).
-			for (auto it = literal_pool_.begin();
-			     it != literal_pool_.end(); it++) {
-				if (*it == SENTINEL_LIT) {
-					if (it + 1 == literal_pool_.end()) break;
-					it += ClauseHeader::overheadInLits();
-					ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
-					if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
-					// Count effective length (skip falsified lits).
-					unsigned len = 0;
-					bool sat = false;
-					for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
-						if (literal_values_[*lt] == T_TRI) { sat = true; break; }
-						if (literal_values_[*lt] == X_TRI) len++;
-					}
-					if (!sat && len >= 1) n_cls++;
-					// Advance past the clause literals.
-					auto end_it = beginOf(ofs);
-					while (*end_it != SENTINEL_LIT) end_it++;
-					it = end_it - 1;  // loop ++ moves to SENTINEL next
-				}
-			}
-			// Binary clauses (from binary_links_). Deduplicate by
-			// emitting only when (lit, other) has lit.raw() < other.raw().
-			for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
-				if (literal_values_[l] == T_TRI) continue;  // lit already
-				                                            // true, binaries
-				                                            // with this lit
-				                                            // are satisfied
-				const auto &bl = literal(l).binary_links_;
-				for (auto bt = bl.begin(); *bt != SENTINEL_LIT; ++bt) {
-					if (!(l.raw() < bt->raw())) continue;
-					if (literal_values_[*bt] == T_TRI) continue;
-					if (literal_values_[l] == F_TRI
-					    && literal_values_[*bt] == F_TRI) continue;  // empty
-					n_cls++;
-				}
-			}
-			// Unit clauses (assigned literals at DL 0).
-			for (auto lit : literal_stack_) {
-				if (var(lit).decision_level == 0) n_cls++;
-			}
-			out << "c post-preprocessing dump from sharpsat-separator\n";
-			out << "p cnf " << n_vars << " " << n_cls << "\n";
-			// Emit long clauses.
-			for (auto it = literal_pool_.begin();
-			     it != literal_pool_.end(); it++) {
-				if (*it == SENTINEL_LIT) {
-					if (it + 1 == literal_pool_.end()) break;
-					it += ClauseHeader::overheadInLits();
-					ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
-					if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
-					bool sat = false;
-					std::vector<int> lits;
-					for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
-						if (literal_values_[*lt] == T_TRI) { sat = true; break; }
-						if (literal_values_[*lt] == X_TRI) {
-							int val = (int)lt->var();
-							if (!lt->sign()) val = -val;
-							lits.push_back(val);
-						}
-					}
-					auto end_it = beginOf(ofs);
-					while (*end_it != SENTINEL_LIT) end_it++;
-					if (!sat && !lits.empty()) {
-						for (int v : lits) out << v << " ";
-						out << "0\n";
-					}
-					it = end_it - 1;
-				}
-			}
-			// Emit binaries.
-			for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
-				if (literal_values_[l] == T_TRI) continue;
-				const auto &bl = literal(l).binary_links_;
-				for (auto bt = bl.begin(); *bt != SENTINEL_LIT; ++bt) {
-					if (!(l.raw() < bt->raw())) continue;
-					if (literal_values_[*bt] == T_TRI) continue;
-					bool l_false  = (literal_values_[l]  == F_TRI);
-					bool bt_false = (literal_values_[*bt] == F_TRI);
-					if (l_false && bt_false) continue;  // empty clause
-					if (!l_false) {
-						int v = (int)l.var();
-						if (!l.sign()) v = -v;
-						out << v << " ";
-					}
-					if (!bt_false) {
-						int v = (int)bt->var();
-						if (!bt->sign()) v = -v;
-						out << v << " ";
-					}
-					out << "0\n";
-				}
-			}
-			// Emit units (literals assigned at DL 0 that were originally units).
-			for (auto lit : literal_stack_) {
-				if (var(lit).decision_level == 0) {
-					int v = (int)lit.var();
-					if (!lit.sign()) v = -v;
-					out << v << " 0\n";
-				}
-			}
-			out.close();
-			cerr << "dumped preprocessed formula to "
-			     << config_.dump_preprocessed_path
-			     << " (" << n_vars << " vars, " << n_cls << " clauses)\n";
-			// Fall through: continue solving in memory.
-		}
+		// (Dump moved below; see dumpPreprocessedCnf call after perm block.)
 
 		// Order-sensitivity probes. Applied after preprocessing but
 		// before the guard variable is allocated and the component
@@ -316,13 +201,56 @@ void Solver::solve(const string &file_name) {
 			          << config_.perm_occ_lists_seed << ")\n";
 			permuteOccurrenceListsOrder(config_.perm_occ_lists_seed);
 		}
+		// Canonicalization (sorting) probes. Order matters:
+		// 1. sort lits within clauses first (makes canonical-comparison key).
+		// 2. sort clause order in pool (rewrites literal_pool_, resets
+		//    watch_list_ and occurrence_list_).
+		// 3. sort binary_links_.
+		// 4. sort watch_list_ (by new ofs values).
+		// 5. sort occurrence_list_ (by new ofs values).
+		if (config_.sort_clause_lits) {
+			std::cerr << "order-probe: sortClauseLiteralsSafe()\n";
+			sortClauseLiteralsSafe();
+		}
+		if (config_.sort_clause_pool) {
+			std::cerr << "order-probe: sortClausePoolOrder()\n";
+			sortClausePoolOrder();
+		}
+		if (config_.sort_binary_links) {
+			std::cerr << "order-probe: sortBinaryLinksOrder()\n";
+			sortBinaryLinksOrder();
+		}
+		if (config_.sort_watch_lists) {
+			std::cerr << "order-probe: sortWatchListsOrder()\n";
+			sortWatchListsOrder();
+		}
+		if (config_.sort_occ_lists) {
+			std::cerr << "order-probe: sortOccurrenceListsOrder()\n";
+			sortOccurrenceListsOrder();
+		}
 		// Re-check state integrity after permutation (catches any
 		// error in the watch-list fixup path of permuteClauseLiteralsSafe).
 		if (config_.perm_clause_lits_seed != 0
 		    || config_.perm_binary_links_seed != 0
 		    || config_.perm_watch_lists_seed != 0
-		    || config_.perm_occ_lists_seed != 0) {
+		    || config_.perm_occ_lists_seed != 0
+		    || config_.sort_binary_links
+		    || config_.sort_watch_lists
+		    || config_.sort_occ_lists
+		    || config_.sort_clause_lits
+		    || config_.sort_clause_pool) {
 			verifyStateIntegrity("post-order-probe");
+		}
+
+		// Emit CNF reproducer AFTER order-probe perturbations so a
+		// perm+dump run produces a self-contained file that a fresh
+		// solver run can re-parse. Bug-hunt use-case: generate a dump
+		// whose binary/clause order reproduces the undercount when
+		// re-fed through the solver.
+		if (!config_.dump_preprocessed_path.empty()) {
+			if (!dumpPreprocessedCnf(config_.dump_preprocessed_path))
+				return;
+			// Fall through: continue solving in memory.
 		}
 
 		// Allocate the guard variable for scope-tracked binary UIP
@@ -479,6 +407,37 @@ bool Solver::bcp() {
 	return bSucceeded;
 }
 
+// Identify the tracked clause by content: length == 33 AND contains var 1153.
+// Unique on /tmp/t1_011_pp_shuf23.cnf. First call caches the ofs; subsequent
+// calls lookup by offset. Returns true iff the given ofs matches.
+static bool isTrackedClause(ClauseOfs ofs, const std::vector<LiteralID> &pool) {
+	static ClauseOfs cached = NOT_A_CLAUSE;
+	if (cached != NOT_A_CLAUSE) return ofs == cached;
+	// Scan pool once to find the matching clause.
+	auto it = pool.begin();
+	while (it != pool.end()) {
+		if (*it != SENTINEL_LIT) { it++; continue; }
+		if (it + 1 == pool.end()) break;
+		it += ClauseHeader::overheadInLits();
+		ClauseOfs o = (ClauseOfs)(it + 1 - pool.begin());
+		unsigned len = 0;
+		bool has1153 = false;
+		for (auto lt = pool.begin() + o; *lt != SENTINEL_LIT; lt++) {
+			len++;
+			if (lt->var() == 1153) has1153 = true;
+		}
+		if (len == 33 && has1153) {
+			cached = o;
+			std::cerr << "tracking clause at ofs=" << o << " (len=33, var 1153 present)\n";
+			return ofs == cached;
+		}
+		auto e = pool.begin() + o;
+		while (*e != SENTINEL_LIT) e++;
+		it = e;
+	}
+	return false;
+}
+
 bool Solver::BCP(unsigned start_at_stack_ofs) {
 	for (unsigned int i = start_at_stack_ofs; i < literal_stack_.size(); i++) {
 		LiteralID unLit = literal_stack_[i].neg();
@@ -486,6 +445,14 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 		for (auto bt = literal(unLit).binary_links_.begin();
 				*bt != SENTINEL_LIT; bt++) {
 			if (isResolved(*bt)) {
+				if (config_.log_conflicts) {
+					std::cerr << "CONFLICT_BIN clause=[" << unLit.toInt()
+					          << "," << bt->toInt() << "] DL="
+					          << stack_.get_decision_level() << " decisions=";
+					for (auto l : literal_stack_)
+						if (!var(l).ante.isAnt()) std::cerr << l.toInt() << ",";
+					std::cerr << "\n";
+				}
 				setConflictState(unLit, *bt);
 				return false;
 			}
@@ -498,8 +465,21 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 			auto p_watchLit = beginOf(*itcl) + 1 - isLitA;
 			auto p_otherLit = beginOf(*itcl) + isLitA;
 
-			if (isSatisfied(*p_otherLit) || isClauseRemoved(*itcl))
+			bool _trk = isTrackedClause(*itcl, literal_pool_);
+			if (_trk) {
+				std::cerr << "BCP visit: ofs=" << *itcl
+				          << " unLit=" << unLit.toInt()
+				          << " p0=" << beginOf(*itcl)->toInt()
+				          << " p1=" << (beginOf(*itcl) + 1)->toInt()
+				          << " other=" << p_otherLit->toInt()
+				          << " other_v=" << (int)literal_values_[*p_otherLit]
+				          << " DL=" << stack_.get_decision_level() << "\n";
+			}
+
+			if (isSatisfied(*p_otherLit) || isClauseRemoved(*itcl)) {
+				if (_trk) std::cerr << "  → skip (satisfied/removed)\n";
 				continue;
+			}
 			// Scope check for learned clauses: if a learned clause was
 			// derived when some clauses C were removed, it's only sound
 			// in contexts where all of C are still removed. Otherwise
@@ -513,6 +493,9 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 				itL++;
 			// either we found a free or satisfied lit
 			if (*itL != SENTINEL_LIT) {
+				if (_trk)
+					std::cerr << "  → move watch: old_watcher=" << unLit.toInt()
+					          << " new_watcher=" << itL->toInt() << "\n";
 				literal(*itL).addWatchLinkTo(*itcl);
 				swap(*itL, *p_watchLit);
 				*itcl = literal(unLit).watch_list_.back();
@@ -522,9 +505,31 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 				// and we have hence no free literal left
 				// for p_otherLit remain poss: Active or Resolved
 				if (setLiteralIfFree(*p_otherLit, Antecedent(*itcl))) { // implication
+					if (_trk)
+						std::cerr << "  → implication: force lit=" << p_otherLit->toInt() << "\n";
 					if (isLitA)
 						swap(*p_otherLit, *p_watchLit);
 				} else {
+					if (_trk) {
+						std::cerr << "  → CONFLICT via this clause\n";
+						std::cerr << "    lits in clause (lit/val at DL):";
+						for (auto lt = beginOf(*itcl); *lt != SENTINEL_LIT; lt++) {
+							std::cerr << " " << lt->toInt();
+							int dl = var(*lt).decision_level;
+							TriValue v = literal_values_[*lt];
+							const char *tag = (v == T_TRI) ? "=T" : (v == F_TRI) ? "=F" : "=X";
+							std::cerr << tag << "@DL" << dl;
+						}
+						std::cerr << "\n";
+					}
+					if (config_.log_conflicts) {
+						std::cerr << "CONFLICT_CL ofs=" << *itcl
+						          << " DL=" << stack_.get_decision_level()
+						          << " decisions=";
+						for (auto l : literal_stack_)
+							if (!var(l).ante.isAnt()) std::cerr << l.toInt() << ",";
+						std::cerr << "\n";
+					}
 					if (config_.verbose)
 						cout << "  CONFLICT_CL=" << *itcl
 							 << " unLit=" << unLit.toInt()
@@ -749,18 +754,24 @@ bool Solver::commitFailedLiteral() {
 	// Dedup: skip storing if we've likely seen this clause before.
 	// Bloom filter — false positives just skip a learn (sound).
 	Antecedent ante(NOT_A_CLAUSE);
-	if (!config_.perform_conflict_clause_learning) {
+	const int L = config_.learn_level;
+	if (!config_.perform_conflict_clause_learning || L < 1) {
 		// Learning disabled for diagnosis: skip storing, still force the
 		// asserting literal with NOT_A_CLAUSE antecedent (same
 		// reasoning as the dedup-duplicate path below — sound).
-	} else if (uip.size() >= 2 && !maybeDedupClause(uip)) {
+	} else if (L >= 2 && uip.size() >= 2 && !maybeDedupClause(uip)) {
 		statistics_.num_learned_dedup_dropped_++;
 		// Duplicate — don't store, but still force the asserting literal
 		// with an unscoped NOT_A_CLAUSE antecedent. Correct: under the
 		// current state the literal IS entailed (same reasoning as for
 		// a freshly-learned clause); we just don't persist it.
 	} else {
-		ante = addScopedUIPConflictClause(uip);
+		ante = addScopedUIPConflictClause(
+		    uip,
+		    /*pad_binary=*/  L >= 4,
+		    /*record_scope=*/L >= 3);
+		if (ante.isAnt() && ante.isAClause())
+			logLearnTrace(ante.asCl(), uip);
 	}
 	setLiteralIfFree(uip.front(), ante);
 	return BCP(sz);
@@ -773,17 +784,16 @@ bool Solver::hierarchySeparatorAcceptable(int nd_node,
 	if (filtered_sep_size == 0) return true;
 	if (nd_node < 0 || !nd_hierarchy_.valid) return true;
 
-	// Ratio gate: |filtered_sep| / |active vars in comp|.
+	// Size gate: shared with reactive METIS via separatorSizeAcceptable.
 	unsigned n_active = comp.num_variables();
 	if (n_active == 0) return true;
-	double ratio = (double)filtered_sep_size / (double)n_active;
-	if (ratio > config_.separator_max_ratio) {
+	if (!separatorSizeAcceptable(filtered_sep_size, n_active)) {
 		if (config_.verbose) {
+			unsigned allowed = std::min((unsigned)(0.3 * (double)n_active), 20u);
 			std::cout << "  TIER1_REJECT nd=" << nd_node
-			          << " reason=ratio sep=" << filtered_sep_size
+			          << " reason=size sep=" << filtered_sep_size
 			          << " n=" << n_active
-			          << " ratio=" << ratio
-			          << " max=" << config_.separator_max_ratio << std::endl;
+			          << " allowed=" << allowed << std::endl;
 		}
 		return false;
 	}
@@ -1087,45 +1097,270 @@ bool Solver::initForTesting(const std::string &file_name) {
 // BEGIN module conflictAnalyzer
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
+// ---------------------------------------------------------------
+// UIP clause minimization (+ invariant guards)
+// ---------------------------------------------------------------
+// Takes the raw 1-UIP clause (uipLit + tmp_clause) and optionally
+// shortens it by resolving out literals whose antecedent clauses only
+// reference variables already in the current surviving clause. This
+// is a classical 1-UIP minimization step; the subtle bit is that the
+// soundness criterion must be checked against the CURRENT surviving
+// clause, not against a stale flag.
+//
+// Historical bug (fixed here): the previous implementation checked
+// `seen[var()]`, which was set when a variable was visited during the
+// 1-UIP walk and never cleared when a subsequent minimization step
+// dropped that variable's literal. A drop decision could therefore
+// rely on a literal that itself was (or would be) dropped — producing
+// a clause that is NOT entailed by F, silently pruning models.
+//
+// Current implementation: maintain a live `in_clause[v]` bitmap that
+// is flipped off every time a literal is dropped. Iterate the drop
+// pass to fixed point. Each drop's soundness is verified at the
+// moment of drop against the CURRENT in_clause state.
+//
+// Structural guards below are always on (Release). An opt-in
+// resolution-replay guard (config_.verify_learn) additionally
+// reconstructs the final clause from the recorded drop chain and
+// asserts bit-equality.
 void Solver::minimizeAndStoreUIPClause(LiteralID uipLit,
-		vector<LiteralID> & tmp_clause, bool seen[]) {
+		vector<LiteralID> & tmp_clause, bool /*seen_stale*/[]) {
 	static deque<LiteralID> clause;
 	clause.clear();
 	assertion_level_ = 0;
-	for (auto lit : tmp_clause) {
-		if (existsUnitClauseOf(lit.var()))
-			continue;
-		bool resolve_out = false;
-		if (hasAntecedent(lit)) {
-			resolve_out = true;
-			if (getAntecedent(lit).isAClause()) {
-				for (auto it = beginOf(getAntecedent(lit).asCl()) + 1;
-						*it != SENTINEL_CL; it++)
-					if (!seen[it->var()]) {
-						resolve_out = false;
-						break;
-					}
-			} else if (!seen[getAntecedent(lit).asLit().var()]) {
-				resolve_out = false;
-			}
-		}
 
-		if (!resolve_out) {
-			// uipLit should be the sole literal of this Decision Level
-			if (var(lit).decision_level >= assertion_level_) {
-				assertion_level_ = var(lit).decision_level;
-				clause.push_front(lit);
-			} else
-				clause.push_back(lit);
+	// learn_level >= 5 attempts minimization. NOTE: the iterative
+	// implementation below maintains live in_clause[] state and each
+	// drop is locally sound resolution, yet on t1_011's shrunken
+	// reproducer (latest_correct.cnf) it still produces a 2^17
+	// undercount. A subtler unsoundness remains — possibly cascade
+	// through learned-clause antecedents. Until the correct derivation
+	// is identified, default is learn_level=4 (no minimization).
+	const bool do_minimize = (config_.learn_level >= 5);
+
+	// --- Guard 1 (pre): every tmp_clause literal must be F_TRI at
+	// learn time (BCP-consistent 1-UIP candidate). ----------
+	for (auto lit : tmp_clause) {
+		if (existsUnitClauseOf(lit.var())) continue;
+		if (literal_values_[lit] != F_TRI) {
+			std::cerr << "\n*** LEARN_CANDIDATE_NOT_FALSIFIED ***\n"
+			          << "  tmp_clause lit=" << lit.toInt()
+			          << " value=" << (int)literal_values_[lit]
+			          << " (expected F_TRI=" << (int)F_TRI << ")\n";
+			std::cerr.flush();
+			std::abort();
 		}
 	}
 
-	if(uipLit.var())
-	 assert(var(uipLit).decision_level == stack_.get_decision_level());
+	// --- in_clause[v]: live "is variable v in the current surviving
+	// clause?" bitmap. Reset per call via .assign, reused thread-local
+	// to avoid heap alloc per conflict. -------------------------
+	static std::vector<bool> in_clause;
+	in_clause.assign(num_variables() + 2, false);
+	for (auto lit : tmp_clause) {
+		if (!existsUnitClauseOf(lit.var()))
+			in_clause[lit.var()] = true;
+	}
+	// NOTE: intentionally NOT including uipLit in in_clause. The old
+	// implementation didn't, and experimentation showed that including
+	// it reintroduces the t1_011 undercount. Hypothesis: at the moment
+	// minimization runs, uipLit.var() is also current-DL, so its
+	// polarity is the one forced by THIS conflict's BCP chain. Using
+	// it to justify dropping lower-DL lits produces a resolvent that
+	// depends on the current-DL decision — which, after backjumping,
+	// changes polarity. The clause would then no longer be entailed.
+	// Keep the conservative behaviour: only lower-DL vars in tmp_clause
+	// can justify drops.
 
-	//assert(uipLit.var() != 0);
-	if (uipLit.var() != 0)
+	// --- track which tmp_clause positions survive + why they were
+	// dropped (for the resolution-replay verifier). --------------
+	std::vector<bool> survives(tmp_clause.size(), true);
+	// Pre-filter: variables that exist as DL-0 units are always safe
+	// to drop (their value is globally fixed, the clause is never
+	// needed to pin them down).
+	for (unsigned i = 0; i < tmp_clause.size(); i++) {
+		if (existsUnitClauseOf(tmp_clause[i].var()))
+			survives[i] = false;
+	}
+
+	// Drop-chain record for optional replay: (position in tmp_clause,
+	// antecedent). Ordered in the sequence drops happened.
+	struct DropRec { unsigned pos; Antecedent ante; };
+	std::vector<DropRec> drop_log;
+
+	// --- helper: would dropping `lit` be sound against the CURRENT
+	// in_clause state? lit must have an antecedent (else can't drop).
+	auto ante_all_in_clause = [&](LiteralID lit) -> bool {
+		if (!hasAntecedent(lit)) return false;
+		if (getAntecedent(lit).isAClause()) {
+			for (auto it = beginOf(getAntecedent(lit).asCl()) + 1;
+					*it != SENTINEL_CL; it++) {
+				if (it->var() == lit.var()) continue;
+				if (!in_clause[it->var()]) return false;
+			}
+			return true;
+		} else {
+			LiteralID a = getAntecedent(lit).asLit();
+			if (a.var() == lit.var()) return false;
+			return in_clause[a.var()];
+		}
+	};
+
+	// --- Iterative minimization to fixed point. Drop a literal only
+	// when its antecedent's OTHER literals are all in the CURRENT
+	// in_clause. At drop time, remove the literal's variable from
+	// in_clause so subsequent iterations see the updated state. ----
+	if (do_minimize) {
+		bool changed = true;
+		while (changed) {
+			changed = false;
+			for (unsigned i = 0; i < tmp_clause.size(); i++) {
+				if (!survives[i]) continue;
+				LiteralID lit = tmp_clause[i];
+
+				// --- Guard 2 (per-drop precondition): at this moment
+				// the lit must be in in_clause (it survives). -------
+				assert(in_clause[lit.var()]
+				       && "in_clause must agree with survives[]");
+
+				if (ante_all_in_clause(lit)) {
+					survives[i] = false;
+					in_clause[lit.var()] = false;
+					drop_log.push_back({i, getAntecedent(lit)});
+					changed = true;
+				}
+			}
+		}
+	}
+
+	// --- Guard 3 (post): structural invariants of the final clause.
+	// We do this before assembling `clause` so the final composition
+	// step has a clean input to work with.
+	{
+		unsigned n_per_var_check_cap = num_variables() + 2;
+		static std::vector<bool> seen_var;
+		seen_var.assign(n_per_var_check_cap, false);
+
+		auto check_lit = [&](LiteralID lit) {
+			if (lit.var() >= n_per_var_check_cap) {
+				std::cerr << "\n*** LEARN_VAR_OUT_OF_RANGE ***\n"
+				          << "  lit=" << lit.toInt() << "\n";
+				std::abort();
+			}
+			if (seen_var[lit.var()]) {
+				std::cerr << "\n*** LEARN_DUPLICATE_VAR ***\n"
+				          << "  var=" << lit.var() << " appears twice\n";
+				std::abort();
+			}
+			seen_var[lit.var()] = true;
+			if (literal_values_[lit] == T_TRI) {
+				std::cerr << "\n*** LEARN_SATISFIED_LIT ***\n"
+				          << "  lit=" << lit.toInt()
+				          << " is T_TRI in learned clause\n";
+				std::abort();
+			}
+		};
+
+		if (uipLit.var()) {
+			if (var(uipLit).decision_level != stack_.get_decision_level()) {
+				std::cerr << "\n*** LEARN_UIP_WRONG_DL ***\n"
+				          << "  uipLit=" << uipLit.toInt()
+				          << " DL=" << var(uipLit).decision_level
+				          << " current DL=" << stack_.get_decision_level() << "\n";
+				std::abort();
+			}
+			check_lit(uipLit);
+		}
+
+		int current_dl = stack_.get_decision_level();
+		for (unsigned i = 0; i < tmp_clause.size(); i++) {
+			if (!survives[i]) continue;
+			LiteralID lit = tmp_clause[i];
+			check_lit(lit);
+			if (var(lit).decision_level >= current_dl) {
+				std::cerr << "\n*** LEARN_NONUIP_AT_CURRENT_DL ***\n"
+				          << "  lit=" << lit.toInt()
+				          << " DL=" << var(lit).decision_level
+				          << " current DL=" << current_dl << "\n";
+				std::abort();
+			}
+			if (!in_clause[lit.var()]) {
+				std::cerr << "\n*** LEARN_IN_CLAUSE_INCONSISTENT ***\n"
+				          << "  surviving lit=" << lit.toInt()
+				          << " not marked in in_clause\n";
+				std::abort();
+			}
+		}
+	}
+
+	// --- Guard 4 (optional, opt-in via -verifyLearn): replay the
+	// resolution chain. Start from the original tmp_clause ∪ {uipLit}
+	// as a set-of-variables, then for each recorded drop verify the
+	// antecedent's other-vars are in the current set, apply the drop
+	// (remove this var), and at the end assert the set equals the
+	// final clause's var set. This catches any divergence between the
+	// iterative fix and a direct resolution replay. ----------------
+	if (do_minimize && config_.verify_learn && !drop_log.empty()) {
+		std::vector<bool> replay_set(num_variables() + 2, false);
+		for (auto lit : tmp_clause)
+			if (!existsUnitClauseOf(lit.var()))
+				replay_set[lit.var()] = true;
+		if (uipLit.var()) replay_set[uipLit.var()] = true;
+
+		for (const auto &dr : drop_log) {
+			LiteralID lit = tmp_clause[dr.pos];
+			Antecedent a = dr.ante;
+			// Verify antecedent's other vars are in replay_set.
+			bool ok = true;
+			if (a.isAClause()) {
+				for (auto it = beginOf(a.asCl()) + 1;
+						*it != SENTINEL_CL; it++) {
+					if (it->var() == lit.var()) continue;
+					if (!replay_set[it->var()]) { ok = false; break; }
+				}
+			} else {
+				ok = (a.asLit().var() != lit.var()
+				      && replay_set[a.asLit().var()]);
+			}
+			if (!ok) {
+				std::cerr << "\n*** VERIFY_LEARN_REPLAY_FAILED ***\n"
+				          << "  drop of lit=" << lit.toInt()
+				          << " did not satisfy resolution precondition"
+				          << " at replay time\n";
+				std::abort();
+			}
+			replay_set[lit.var()] = false;
+		}
+		// Final set must equal { surviving tmp_clause vars } ∪ {uipLit.var}.
+		std::vector<bool> expected(num_variables() + 2, false);
+		for (unsigned i = 0; i < tmp_clause.size(); i++)
+			if (survives[i]) expected[tmp_clause[i].var()] = true;
+		if (uipLit.var()) expected[uipLit.var()] = true;
+		for (unsigned v = 0; v < replay_set.size(); v++) {
+			if (replay_set[v] != expected[v]) {
+				std::cerr << "\n*** VERIFY_LEARN_REPLAY_MISMATCH ***\n"
+				          << "  replay and surviving disagree at var=" << v << "\n";
+				std::abort();
+			}
+		}
+	}
+
+	// --- assemble the final clause: highest-DL lit at front (after
+	// uipLit) for the watcher scheme.
+	for (unsigned i = 0; i < tmp_clause.size(); i++) {
+		if (!survives[i]) continue;
+		LiteralID lit = tmp_clause[i];
+		if (var(lit).decision_level >= assertion_level_) {
+			assertion_level_ = var(lit).decision_level;
+			clause.push_front(lit);
+		} else {
+			clause.push_back(lit);
+		}
+	}
+	if (uipLit.var() != 0) {
+		assert(var(uipLit).decision_level == stack_.get_decision_level());
 		clause.push_front(uipLit);
+	}
 	uip_clauses_.push_back(vector<LiteralID>(clause.begin(), clause.end()));
 }
 
@@ -1471,7 +1706,15 @@ void Solver::verifyUnitPropagationSaturated(const char *label) {
 		if (it_lit + 1 == literal_pool_.end()) break;
 		it_lit += ClauseHeader::overheadInLits();
 		ClauseOfs ofs = (ClauseOfs)(it_lit + 1 - literal_pool_.begin());
-		if (isClauseRemoved(ofs)) {
+		bool skip = isClauseRemoved(ofs);
+		// Out-of-scope learned clauses are NOT used by BCP (it skips them
+		// via the learnedClauseInScope check). They may legitimately have
+		// only one active literal under the current state without that
+		// being a BCP-saturation violation.
+		if (!skip && ofs >= (ClauseOfs)original_lit_pool_size_
+		    && !learnedClauseInScope(ofs))
+			skip = true;
+		if (skip) {
 			// Advance past this clause's literals to the next SENTINEL.
 			auto e = beginOf(ofs);
 			while (*e != SENTINEL_LIT) e++;
@@ -1538,8 +1781,22 @@ void Solver::verifyUnitPropagationSaturated(const char *label) {
 		          << "  First violation: "
 		          << (violating_is_binary ? "binary clause" : "long clause at ofs=")
 		          << (violating_is_binary ? "" : std::to_string(violating_clause))
-		          << " free_lit=" << violating_free_lit.toInt() << "\n"
-		          << "  This literal should have been unit-propagated.\n";
+		          << " free_lit=" << violating_free_lit.toInt() << "\n";
+		if (!violating_is_binary) {
+			std::cerr << "  is_learned=" << (violating_clause >= (ClauseOfs)original_lit_pool_size_ ? 1 : 0)
+			          << " is_removed=" << (isClauseRemoved(violating_clause) ? 1 : 0)
+			          << " in_scope=" << (learnedClauseInScope(violating_clause) ? 1 : 0)
+			          << " removed_clauses_size=" << removed_clauses_.size() << "\n";
+			std::cerr << "  clause literals (lit:val):";
+			for (auto lt = beginOf(violating_clause); *lt != SENTINEL_LIT; lt++) {
+				const char *tag =
+				    (literal_values_[*lt] == T_TRI) ? "(T)" :
+				    (literal_values_[*lt] == F_TRI) ? "(F)" : "(X)";
+				std::cerr << " " << lt->toInt() << tag;
+			}
+			std::cerr << "\n";
+		}
+		std::cerr << "  This literal should have been unit-propagated.\n";
 		std::cerr.flush();
 		std::abort();
 	}
@@ -1714,6 +1971,372 @@ void Solver::verifyStateIntegrity(const char *label) {
 			}
 		}
 	}
+}
+
+// Emit the current post-preprocess in-memory formula as DIMACS CNF.
+// Iteration order for binaries reflects the current binary_links_
+// layout (so a post-permBinaryLinks dump captures the permuted order
+// in the file). Long clauses emit in literal_pool_ layout order; the
+// first two stored literals come out first, preserving the watched
+// positions across re-parse.
+bool Solver::dumpPreprocessedCnf(const std::string &path) {
+	std::ofstream out(path);
+	if (!out) {
+		std::cerr << "failed to open dump path: " << path << std::endl;
+		return false;
+	}
+	// Count surviving variables and clauses.
+	unsigned n_vars = num_variables();
+	unsigned n_cls = 0;
+	for (auto it = literal_pool_.begin(); it != literal_pool_.end(); it++) {
+		if (*it != SENTINEL_LIT) continue;
+		if (it + 1 == literal_pool_.end()) break;
+		it += ClauseHeader::overheadInLits();
+		ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+		unsigned len = 0;
+		bool sat = false;
+		for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+			if (literal_values_[*lt] == T_TRI) { sat = true; break; }
+			if (literal_values_[*lt] == X_TRI) len++;
+		}
+		if (!sat && len >= 1) n_cls++;
+		auto end_it = beginOf(ofs);
+		while (*end_it != SENTINEL_LIT) end_it++;
+		it = end_it - 1;
+	}
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		if (literal_values_[l] == T_TRI) continue;
+		const auto &bl = literal(l).binary_links_;
+		for (auto bt = bl.begin(); *bt != SENTINEL_LIT; ++bt) {
+			if (!(l.raw() < bt->raw())) continue;
+			if (literal_values_[*bt] == T_TRI) continue;
+			if (literal_values_[l] == F_TRI
+			    && literal_values_[*bt] == F_TRI) continue;
+			n_cls++;
+		}
+	}
+	for (auto lit : literal_stack_) {
+		if (var(lit).decision_level == 0) n_cls++;
+	}
+
+	out << "c post-preprocessing dump from sharpsat-separator\n";
+	out << "p cnf " << n_vars << " " << n_cls << "\n";
+	for (auto it = literal_pool_.begin(); it != literal_pool_.end(); it++) {
+		if (*it != SENTINEL_LIT) continue;
+		if (it + 1 == literal_pool_.end()) break;
+		it += ClauseHeader::overheadInLits();
+		ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+		bool sat = false;
+		std::vector<int> lits;
+		for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
+			if (literal_values_[*lt] == T_TRI) { sat = true; break; }
+			if (literal_values_[*lt] == X_TRI) {
+				int val = (int)lt->var();
+				if (!lt->sign()) val = -val;
+				lits.push_back(val);
+			}
+		}
+		auto end_it = beginOf(ofs);
+		while (*end_it != SENTINEL_LIT) end_it++;
+		if (!sat && !lits.empty()) {
+			for (int v : lits) out << v << " ";
+			out << "0\n";
+		}
+		it = end_it - 1;
+	}
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		if (literal_values_[l] == T_TRI) continue;
+		const auto &bl = literal(l).binary_links_;
+		for (auto bt = bl.begin(); *bt != SENTINEL_LIT; ++bt) {
+			if (!(l.raw() < bt->raw())) continue;
+			if (literal_values_[*bt] == T_TRI) continue;
+			bool l_false  = (literal_values_[l]  == F_TRI);
+			bool bt_false = (literal_values_[*bt] == F_TRI);
+			if (l_false && bt_false) continue;
+			if (!l_false) {
+				int v = (int)l.var();
+				if (!l.sign()) v = -v;
+				out << v << " ";
+			}
+			if (!bt_false) {
+				int v = (int)bt->var();
+				if (!bt->sign()) v = -v;
+				out << v << " ";
+			}
+			out << "0\n";
+		}
+	}
+	for (auto lit : literal_stack_) {
+		if (var(lit).decision_level == 0) {
+			int v = (int)lit.var();
+			if (!lit.sign()) v = -v;
+			out << v << " 0\n";
+		}
+	}
+	out.close();
+	std::cerr << "dumped preprocessed formula to " << path
+	          << " (" << n_vars << " vars, " << n_cls << " clauses)\n";
+	return true;
+}
+
+// Helper: walk literal_pool_ once and emit learned clauses whose
+// literals all fall within the given active-variable set (so the
+// dump is a self-contained CNF on that variable set). Skip clauses
+// with any literal on an outside variable.
+static void emitLearnedClausesInSubComp(
+    const std::vector<LiteralID> &literal_pool,
+    unsigned original_lit_pool_size,
+    const LiteralIndexedVector<TriValue> &literal_values,
+    const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
+    const std::unordered_map<unsigned, int> &var_map,
+    std::vector<std::vector<int>> &out_clauses) {
+	auto it = literal_pool.begin();
+	while (it != literal_pool.end()) {
+		if (*it != SENTINEL_LIT) { it++; continue; }
+		if (it + 1 == literal_pool.end()) break;
+		it += ClauseHeader::overheadInLits();
+		ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool.begin());
+		if (ofs < (ClauseOfs)original_lit_pool_size) {
+			// original: advance past and skip
+			auto e = literal_pool.begin() + ofs;
+			while (*e != SENTINEL_LIT) e++;
+			it = e;
+			continue;
+		}
+		// learned clause
+		if (!removed_clauses.count(ofs)) {
+			bool all_in = true;
+			bool satisfied = false;
+			std::vector<int> clause;
+			for (auto lt = literal_pool.begin() + ofs;
+			     *lt != SENTINEL_LIT; lt++) {
+				if (literal_values[*lt] == T_TRI) { satisfied = true; break; }
+				if (literal_values[*lt] == F_TRI) continue;  // drop
+				auto vi = var_map.find(lt->var());
+				if (vi == var_map.end()) { all_in = false; break; }
+				int v = vi->second;
+				clause.push_back(lt->sign() ? v : -v);
+			}
+			if (!satisfied && all_in && clause.size() >= 1)
+				out_clauses.push_back(clause);
+		}
+		auto e = literal_pool.begin() + ofs;
+		while (*e != SENTINEL_LIT) e++;
+		it = e;
+	}
+}
+
+// Global G-to-H recording flag. Turns ON at LEARN ofs == path_trace_ofs.
+// Turns OFF at COMP_ENTER with vars matching path_trace_comp_vars.
+// External-linkage so solver_rec.cpp can reference it.
+bool g_path_recording = false;
+
+void Solver::logLearnTrace(ClauseOfs cl_ofs, const std::vector<LiteralID> &clause) {
+	if (config_.learn_trace_path.empty() || cl_ofs == 0) return;
+
+	// Path-trace mode: emit ONE G_SNAPSHOT at the target learn and arm the
+	// g_path_recording flag so the matching H_SNAPSHOT (in solver_rec) will
+	// also fire. No per-event spam in between.
+	if (config_.path_trace_ofs != 0) {
+		if (cl_ofs != (ClauseOfs)config_.path_trace_ofs) return;
+		g_path_recording = true;
+		std::ofstream out(config_.learn_trace_path, std::ios::app);
+		out << "G_SNAPSHOT: LEARN ofs=" << cl_ofs
+		    << " size=" << clause.size()
+		    << " DL=" << stack_.get_decision_level() << "\n";
+		out << "  clause:";
+		for (auto l : clause) out << " " << l.toInt();
+		out << "\n";
+		out << "  decisions (DL ordered):\n";
+		for (auto l : literal_stack_) {
+			if (!var(l).ante.isAnt())
+				out << "    DL=" << var(l).decision_level
+				    << " " << l.toInt() << "\n";
+		}
+		out << "  full stack length=" << literal_stack_.size() << "\n";
+		return;
+	}
+
+	// Legacy full-trace mode (for every learn — large output). Only reached
+	// when path_trace_ofs is 0.
+	std::ofstream out(config_.learn_trace_path, std::ios::app);
+	if (!out) return;
+	int DL = stack_.get_decision_level();
+	out << "LEARN ofs=" << cl_ofs
+	    << " size=" << clause.size()
+	    << " DL=" << DL
+	    << " scope_size=" << removed_clauses_.size() << "\n";
+	out << "  clause:";
+	for (auto l : clause) out << " " << l.toInt();
+	out << "\n";
+	out << "  stack (" << literal_stack_.size() << " lits):\n";
+	for (auto l : literal_stack_) {
+		int dl = var(l).decision_level;
+		const char *atype = "dec";
+		if (var(l).ante.isAnt()) {
+			atype = var(l).ante.isAClause() ? "cl" : "bin";
+		}
+		out << "    DL=" << dl << " " << l.toInt() << " (" << atype << ")\n";
+	}
+	out << "  scope (clauses removed):";
+	for (const auto &p : removed_clauses_) out << " " << p.first;
+	out << "\n";
+}
+
+void Solver::dumpBinariesAfterPreprocess(const std::string &path) {
+	std::ofstream out(path);
+	if (!out) return;
+	unsigned count = 0;
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		const auto &bl = literal(l).binary_links_;
+		for (auto bt = bl.begin(); *bt != SENTINEL_LIT; bt++) {
+			if (!(l.raw() < bt->raw())) continue;  // dedup
+			out << l.toInt() << " " << bt->toInt() << "\n";
+			count++;
+		}
+	}
+	std::cerr << "dumped " << count << " binaries to " << path << "\n";
+}
+
+bool Solver::dumpSubComponentCnf(Component &comp, const std::string &path,
+                                  unsigned *out_nvars) {
+	// Collect active vars in component
+	std::vector<unsigned> vars;
+	for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
+		if (isActive(LiteralID(*it, true))) vars.push_back(*it);
+	}
+	std::sort(vars.begin(), vars.end());
+	if (out_nvars) *out_nvars = (unsigned)vars.size();
+	if (vars.empty()) return false;
+
+	// Compact var remap 1..N
+	std::unordered_map<unsigned, int> var_map;
+	for (size_t i = 0; i < vars.size(); i++) var_map[vars[i]] = (int)(i + 1);
+	unsigned nv = (unsigned)vars.size();
+
+	std::vector<std::vector<int>> out_clauses;
+
+	// Long clauses from comp via clause_id_to_ofs
+	const auto &cmap = comp_manager_.getAnalyzer().clauseIdToOfs();
+	for (auto it = comp.clsBegin(); *it != clsSENTINEL; it++) {
+		ClauseOfs ofs = cmap[*it];
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;  // skip learned
+		if (removed_clauses_.count(ofs)) continue;
+		std::vector<int> clause;
+		bool satisfied = false;
+		for (auto lt = literal_pool_.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
+			if (literal_values_[*lt] == T_TRI) { satisfied = true; break; }
+			if (literal_values_[*lt] == X_TRI) {
+				auto vi = var_map.find(lt->var());
+				if (vi == var_map.end()) continue;
+				int v = vi->second;
+				clause.push_back(lt->sign() ? v : -v);
+			}
+		}
+		if (!satisfied && clause.size() >= 2) out_clauses.push_back(clause);
+	}
+
+	// Binary clauses among active component vars. Each binary emitted once.
+	for (unsigned v : vars) {
+		for (int s = 0; s <= 1; s++) {
+			LiteralID lit(v, s == 1);
+			if (literal_values_[lit] != X_TRI) continue;
+			unsigned orig_count = literals_[lit].original_binary_link_count_;
+			unsigned idx = 0;
+			for (auto bt = literals_[lit].binary_links_.begin();
+			     *bt != SENTINEL_LIT; bt++, idx++) {
+				if (idx >= orig_count) break;  // skip learned binaries
+				unsigned other_v = bt->var();
+				if (other_v <= v) continue;  // dedup each binary once
+				auto vi = var_map.find(other_v);
+				if (vi == var_map.end()) continue;
+				if (literal_values_[*bt] == T_TRI) continue;  // satisfied
+				if (literal_values_[*bt] == F_TRI) continue;  // degenerate unit
+				int a = lit.sign() ? var_map[v] : -var_map[v];
+				int b = bt->sign() ? vi->second : -vi->second;
+				out_clauses.push_back({a, b});
+			}
+		}
+	}
+
+	// Include learned clauses whose literals are all within this
+	// sub-component. These are the "carried-in" state from the parent
+	// search that DIMACS would otherwise miss. If a learned clause is
+	// unsound (not truly entailed by F), including it in the dump may
+	// reproduce the wrong count on a fresh re-run.
+	size_t n_original_clauses = out_clauses.size();
+	std::vector<std::string> raw_learned_lines;
+	// Collect raw learned clauses (original var IDs, including F_TRI
+	// lits) for diagnostic comments.
+	{
+		auto it2 = literal_pool_.begin();
+		while (it2 != literal_pool_.end()) {
+			if (*it2 != SENTINEL_LIT) { it2++; continue; }
+			if (it2 + 1 == literal_pool_.end()) break;
+			it2 += ClauseHeader::overheadInLits();
+			ClauseOfs ofs = (ClauseOfs)(it2 + 1 - literal_pool_.begin());
+			if (ofs < (ClauseOfs)original_lit_pool_size_) {
+				auto e = literal_pool_.begin() + ofs;
+				while (*e != SENTINEL_LIT) e++;
+				it2 = e;
+				continue;
+			}
+			// learned
+			if (!removed_clauses_.count(ofs)) {
+				bool all_in = true;
+				bool sat = false;
+				std::string raw = "c raw-learned ofs=" + std::to_string(ofs) + ":";
+				std::string projected = " projected:";
+				for (auto lt = literal_pool_.begin() + ofs;
+				     *lt != SENTINEL_LIT; lt++) {
+					int v = lt->sign() ? (int)lt->var() : -(int)lt->var();
+					const char *tag =
+					    (literal_values_[*lt] == T_TRI) ? "(T)" :
+					    (literal_values_[*lt] == F_TRI) ? "(F)" : "";
+					raw += " ";
+					raw += std::to_string(v);
+					raw += tag;
+					if (literal_values_[*lt] == T_TRI) sat = true;
+					else if (literal_values_[*lt] == X_TRI) {
+						auto vi = var_map.find(lt->var());
+						if (vi == var_map.end()) all_in = false;
+						else {
+							projected += " ";
+							projected += std::to_string(lt->sign() ? vi->second : -vi->second);
+						}
+					}
+				}
+				if (!sat && all_in) raw += projected;
+				raw_learned_lines.push_back(raw);
+			}
+			auto e = literal_pool_.begin() + ofs;
+			while (*e != SENTINEL_LIT) e++;
+			it2 = e;
+		}
+	}
+	emitLearnedClausesInSubComp(literal_pool_, original_lit_pool_size_,
+	                            literal_values_, removed_clauses_,
+	                            var_map, out_clauses);
+	size_t n_learned = out_clauses.size() - n_original_clauses;
+
+	std::ofstream out(path);
+	if (!out) return false;
+	out << "c sub-component dump from sharpsat-separator\n";
+	out << "c  original clauses: " << n_original_clauses
+	    << "  learned clauses (confined to this comp): " << n_learned << "\n";
+	out << "c var mapping (local -> original):\n";
+	for (size_t i = 0; i < vars.size(); i++)
+		out << "c   " << (i + 1) << " -> " << vars[i] << "\n";
+	out << "c raw learned clauses (original vars, annotated with T/F of assigned lits):\n";
+	for (const auto &line : raw_learned_lines) out << line << "\n";
+	out << "p cnf " << nv << " " << out_clauses.size() << "\n";
+	for (auto &c : out_clauses) {
+		for (int l : c) out << l << " ";
+		out << "0\n";
+	}
+	return true;
 }
 
 // Explicit clean-slate reset for everything the search phase will
@@ -1901,6 +2524,130 @@ void Solver::permuteOccurrenceListsOrder(unsigned seed) {
 		auto &ol = occurrence_lists_[l];
 		if (ol.size() <= 1) continue;
 		std::shuffle(ol.begin(), ol.end(), rng);
+	}
+}
+
+// Canonicalize binary_links_[l] for every literal l by ascending raw value
+// of the partner literal. Preserves the trailing SENTINEL_LIT.
+void Solver::sortBinaryLinksOrder() {
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		auto &bl = literal(l).binary_links_;
+		if (bl.size() <= 2) continue;
+		std::sort(bl.begin(), bl.end() - 1,
+		          [](LiteralID a, LiteralID b) { return a.raw() < b.raw(); });
+	}
+}
+
+// Canonicalize watch_list_[l] by ascending ClauseOfs. Layout keeps
+// SENTINEL_CL at position 0; sort [begin+1, end).
+void Solver::sortWatchListsOrder() {
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		auto &wl = literal(l).watch_list_;
+		if (wl.size() <= 2) continue;
+		std::sort(wl.begin() + 1, wl.end());
+	}
+}
+
+// Canonicalize occurrence_lists_[l] by ascending ClauseOfs.
+void Solver::sortOccurrenceListsOrder() {
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		auto &ol = occurrence_lists_[l];
+		if (ol.size() <= 1) continue;
+		std::sort(ol.begin(), ol.end());
+	}
+}
+
+// Rewrite literal_pool_ so original clauses appear in canonical (sorted)
+// order. Each clause's literals must already be sorted (call
+// sortClauseLiteralsSafe first). Rebuilds watch_list_ and occurrence_lists_
+// against the new ofs values. Call post-preprocess, before any learned
+// clauses exist in the pool.
+void Solver::sortClausePoolOrder() {
+	struct OC { std::vector<LiteralID> lits; };
+	std::vector<OC> clauses;
+	auto it = literal_pool_.begin();
+	while (it != literal_pool_.end()) {
+		if (*it != SENTINEL_LIT) { it++; continue; }
+		if (it + 1 == literal_pool_.end()) break;
+		it += ClauseHeader::overheadInLits();
+		ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+		OC c;
+		auto p = literal_pool_.begin() + ofs;
+		while (*p != SENTINEL_LIT) { c.lits.push_back(*p); p++; }
+		clauses.push_back(std::move(c));
+		it = p;
+	}
+
+	// Canonical comparison: compare by the sorted literal multiset (as ints).
+	std::sort(clauses.begin(), clauses.end(), [](const OC &a, const OC &b) {
+		std::vector<int> sa, sb;
+		sa.reserve(a.lits.size());
+		sb.reserve(b.lits.size());
+		for (auto l : a.lits) sa.push_back(l.toInt());
+		for (auto l : b.lits) sb.push_back(l.toInt());
+		std::sort(sa.begin(), sa.end());
+		std::sort(sb.begin(), sb.end());
+		return sa < sb;
+	});
+
+	// Reset watch lists and occurrence lists; rebuild as we write.
+	for (auto l = LiteralID(0, false); l != literals_.end_lit(); l.inc()) {
+		literal(l).resetWatchList();
+	}
+	occurrence_lists_.clear();
+	occurrence_lists_.resize(variables_.size());
+
+	std::vector<LiteralID> new_pool;
+	new_pool.reserve(literal_pool_.size());
+	new_pool.push_back(SENTINEL_LIT);
+	for (auto &c : clauses) {
+		if (c.lits.size() < 2) continue;  // shouldn't happen for long clauses
+		for (unsigned i = 0; i < ClauseHeader::overheadInLits(); i++)
+			new_pool.push_back(LiteralID(0, false));
+		ClauseOfs new_ofs = (ClauseOfs)new_pool.size();
+		for (auto l : c.lits) {
+			new_pool.push_back(l);
+			occurrence_lists_[l].push_back(new_ofs);
+		}
+		new_pool.push_back(SENTINEL_LIT);
+		literal(c.lits[0]).addWatchLinkTo(new_ofs);
+		literal(c.lits[1]).addWatchLinkTo(new_ofs);
+	}
+	literal_pool_ = std::move(new_pool);
+	original_lit_pool_size_ = literal_pool_.size();
+}
+
+// Canonicalize literal order within each long clause in literal_pool_ by
+// ascending raw value. Maintains watch-list invariants (re-places watches
+// on new first-two-lits).
+void Solver::sortClauseLiteralsSafe() {
+	auto it = literal_pool_.begin();
+	while (it != literal_pool_.end()) {
+		if (*it != SENTINEL_LIT) { it++; continue; }
+		if (it + 1 == literal_pool_.end()) break;
+		it += ClauseHeader::overheadInLits();
+		ClauseOfs ofs = (ClauseOfs)(it + 1 - literal_pool_.begin());
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+		auto start = literal_pool_.begin() + ofs;
+		auto end = start;
+		while (*end != SENTINEL_LIT) end++;
+		unsigned len = (unsigned)(end - start);
+		if (len < 2) { it = end; continue; }
+		LiteralID old_w0 = *start, old_w1 = *(start + 1);
+		std::sort(start, end, [](LiteralID a, LiteralID b) {
+			return a.raw() < b.raw();
+		});
+		LiteralID new_w0 = *start, new_w1 = *(start + 1);
+		auto is_new = [&](LiteralID l) { return l == new_w0 || l == new_w1; };
+		auto is_old = [&](LiteralID l) { return l == old_w0 || l == old_w1; };
+		if (!is_new(old_w0)) literal(old_w0).removeWatchLinkTo(ofs);
+		if (!is_new(old_w1) && !(old_w1 == old_w0))
+			literal(old_w1).removeWatchLinkTo(ofs);
+		if (!is_old(new_w0)) literal(new_w0).addWatchLinkTo(ofs);
+		if (!is_old(new_w1) && !(new_w1 == new_w0))
+			literal(new_w1).addWatchLinkTo(ofs);
+		it = end;
 	}
 }
 

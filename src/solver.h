@@ -193,6 +193,22 @@ public:
 	// (it shouldn't, for a sound counter), this probe will expose it.
 	void permuteOccurrenceListsOrder(unsigned seed);
 
+	// Canonicalize (sort) each order-sensitive structure. Each function
+	// sorts its target by a deterministic key and preserves structural
+	// invariants (SENTINEL_LIT/CL in the right positions, watches on
+	// first-two-stored lits of each clause).
+	void sortBinaryLinksOrder();
+	void sortWatchListsOrder();
+	void sortOccurrenceListsOrder();
+	void sortClauseLiteralsSafe();
+
+	// Rewrite literal_pool_ with original clauses in canonical (sorted)
+	// order. Rebuilds watch_list_ and occurrence_lists_ against the new
+	// ofs values. Call AFTER sortClauseLiteralsSafe so the comparison
+	// keys are canonical. Only original clauses are affected — call
+	// post-preprocess, before any learned clauses are added.
+	void sortClausePoolOrder();
+
 	// Test-support: prepare the solver for key-building without
 	// starting a full solve (parse file, preprocess, init component
 	// manager). Does NOT allocate the guard variable — tests that
@@ -251,6 +267,16 @@ private:
 	bool hierarchySeparatorAcceptable(int nd_node,
 	                                  Component &comp,
 	                                  unsigned filtered_sep_size);
+
+	// Separator size gate, shared between the precomputed-hierarchy path
+	// and the reactive METIS path. Returns true iff sep_size is acceptable
+	// for a sub-component with n_active active variables.
+	// Policy: allowed_sep = min(0.3 * n_active, 20).
+	static bool separatorSizeAcceptable(unsigned sep_size, unsigned n_active) {
+		if (sep_size == 0 || n_active == 0) return true;
+		unsigned allowed = std::min((unsigned)(0.3 * (double)n_active), 20u);
+		return sep_size <= allowed;
+	}
 
 	// Phase 3 / Tier 2: adaptive branching via probe-scored τ minimization.
 	// Returns the chosen branching variable, or 0 if no branching is
@@ -405,6 +431,13 @@ private:
 	// with diagnostic if any invariant is violated.
 	void verifyStateIntegrity(const char *label);
 
+	// Dump all binaries in binary_links_ after preprocessing to a file,
+	// one per line as DIMACS. Purpose: post-process with an external SAT
+	// solver to check if each is entailed by the original formula F.
+	// Spurious binaries (not entailed by F) indicate preprocessing bugs
+	// (e.g., cleanClause creating binaries from satisfied clauses).
+	void dumpBinariesAfterPreprocess(const std::string &path);
+
 	// Invariant guard: verify the solver is at a true clean slate after
 	// preprocessing. Every per-variable/per-literal scratch field, every
 	// search-scoped collection, and every counter that search will
@@ -419,6 +452,36 @@ private:
 	// resetPostPreprocessScratch() reset below rule out "residue from
 	// preprocessing" as the cause.
 	void verifyPostPreprocessCleanSlate(const char *label);
+
+	// Emit the current post-preprocess in-memory formula as a DIMACS
+	// CNF to `path`. Called from solve() after preprocessing and after
+	// any order-probe perturbations, so a -permBinaryLinks / -permClauseLits
+	// run produces a self-contained CNF reproducer of the perturbed
+	// state. Idempotent; no side effects on the solver state. Returns
+	// true on success, false on file-open error.
+	bool dumpPreprocessedCnf(const std::string &path);
+
+	// Emit a single sub-component as a standalone DIMACS CNF under the
+	// current partial assignment. Variables are remapped to the 1..N range
+	// in index-sorted order so the file is self-contained. Falsified
+	// literals are dropped; satisfied clauses are omitted. Learned and
+	// removed clauses are omitted. Binaries among active component
+	// variables are emitted once.
+	//
+	// Purpose: during search, the solver can dump each solveComponent's
+	// sub-problem to a file and log the returned count. A post-process
+	// script can then run ganak on each CNF and find the SMALLEST
+	// sub-component where our count and ganak disagree — a minimal
+	// in-tree bug reproducer.
+	bool dumpSubComponentCnf(class Component &comp, const std::string &path,
+	                         unsigned *out_nvars = nullptr);
+
+	// Append one LEARN record to config_.learn_trace_path. Called at the
+	// learn site after addScopedUIPConflictClause / addUIPConflictClause
+	// has produced a non-zero ClauseOfs. Records the new clause's ofs,
+	// size, content, the current decision stack (each lit with its DL
+	// and antecedent type), and the current clause-branching scope.
+	void logLearnTrace(ClauseOfs cl_ofs, const std::vector<LiteralID> &clause);
 
 	// Explicit, one-shot reset of every search-scoped field. Idempotent.
 	// Called from HardWireAndCompact; anything it clears is cheap
@@ -502,6 +565,27 @@ private:
 			Antecedent ant = Antecedent(NOT_A_CLAUSE)) {
 		if (literal_values_[lit] != X_TRI)
 			return false;
+		if (config_.log_conflicts) {
+			const char *atype = "dec";
+			std::string ante_desc;
+			if (ant.isAnt()) {
+				if (ant.isAClause()) {
+					atype = "cl";
+					ante_desc = "ofs=" + std::to_string(ant.asCl());
+				} else {
+					atype = "bin";
+					ante_desc = "partner=" + std::to_string(ant.asLit().toInt());
+				}
+			}
+			std::cerr << "FORCE lit=" << lit.toInt()
+			          << " ante=" << atype
+			          << " " << ante_desc
+			          << " DL=" << stack_.get_decision_level()
+			          << " decisions=";
+			for (auto l : literal_stack_)
+				if (!var(l).ante.isAnt()) std::cerr << l.toInt() << ",";
+			std::cerr << "\n";
+		}
 		// Guard 4: polarity invariant. Entering this branch means
 		// literal_values_[lit] == X_TRI; the opposite polarity must
 		// also be X_TRI, otherwise the two views of the same variable

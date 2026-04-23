@@ -118,6 +118,14 @@ void Instance::compactVariables() {
     _tmp_bin_links.push_back(l.binary_links_);
 
   assert(_tmp_bin_links.size() == literals_.size());
+  // If a previous compactVariables already ran, compact_to_orig_[v] tells
+  // us the *original* variable number for the pre-remap v. Otherwise v is
+  // already original.
+  std::vector<unsigned> prev_to_orig = compact_to_orig_;
+  auto to_orig = [&](unsigned v) {
+    return (v < prev_to_orig.size() && !prev_to_orig.empty()) ? prev_to_orig[v] : v;
+  };
+  std::vector<unsigned> new_to_orig(1, 0);  // index 0 unused
   for (unsigned v = 1; v < variables_.size(); v++)
     if (isActive(v)) {
       if (isolated(v)) {
@@ -126,6 +134,7 @@ void Instance::compactVariables() {
       }
       last_ofs++;
       var_map[v] = last_ofs;
+      new_to_orig.push_back(to_orig(v));
     }
 
   variables_.clear();
@@ -183,6 +192,8 @@ void Instance::compactVariables() {
 
   statistics_.num_used_variables_ = num_variables();
   statistics_.num_free_variables_ = num_isolated;
+
+  compact_to_orig_ = std::move(new_to_orig);
 }
 
 void Instance::compactConflictLiteralPool(){
