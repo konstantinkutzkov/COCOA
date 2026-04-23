@@ -5,6 +5,7 @@ SET(SOURCES alt_component_analyzer.cpp
 	component_management.cpp
 	instance.cpp
 	nd_hierarchy.cpp
+	preprocessor.cpp
 	solver.cpp
 	solver_rec.cpp
 	statistics.cpp)

@@ -5,6 +5,7 @@
  *      Author: marc
  */
 #include "solver.h"
+#include "preprocessor.h"
 #include <deque>
 #include <cmath>
 #include <fstream>
@@ -62,89 +63,84 @@ bool Solver::simplePreProcess() {
 	if (succeeded)
 		HardWireAndCompact();
 
-	// Run #SAT-sound simplification rules (subsumption, pure-duplicate
-	// resolution, self-subsuming resolution) once to fixpoint. BVE is
-	// intentionally NOT run — it is sound for SAT but not for #SAT.
+	// Run the standalone #SAT-sound preprocessor. It operates on its
+	// own internal representation (no Solver/Instance state is shared)
+	// and returns a simplified CNF + a list of root-forced units. We
+	// then rebuild the solver's in-memory formula from the output,
+	// discarding the pre-preprocess formula entirely. After rebuild,
+	// the second unit-BCP + HardWireAndCompact absorbs the
+	// preprocessor-produced units in the same code path that handles
+	// original units — the solver starts from a clean-slate state
+	// regardless of how the simplified CNF was obtained.
 	if (succeeded
 	    && (config_.perform_preprocess_subsumption
 	        || config_.perform_preprocess_pure_duplicate
 	        || config_.perform_preprocess_ssr)) {
-		succeeded = runPreprocessingRules();
+		auto extracted = extractFormulaAsDimacs();
+		PreprocessorConfig pcfg;
+		pcfg.enable_subsumption    = config_.perform_preprocess_subsumption;
+		pcfg.enable_pure_duplicate = config_.perform_preprocess_pure_duplicate;
+		pcfg.enable_ssr            = config_.perform_preprocess_ssr;
+		pcfg.time_budget_ms        = config_.preprocess_time_budget_ms;
+		pcfg.verbose               = config_.preprocess_verbose;
+		PreprocessorResult pre_out = preprocess(
+		    num_variables(), extracted, pcfg);
+
+		if (config_.preprocess_verbose || !config_.quiet) {
+			unsigned pre_n = (unsigned)extracted.size();
+			unsigned post_n = (unsigned)pre_out.clauses.size();
+			std::cerr << "preprocess: "
+			          << pre_n << " -> " << post_n
+			          << " clauses (subsumed=" << pre_out.num_subsumed
+			          << " pure_dup=" << pre_out.num_pure_dup
+			          << " ssr=" << pre_out.num_ssr
+			          << " forced=" << pre_out.num_bcp_units
+			          << " passes=" << pre_out.passes
+			          << " elapsed_ms=" << pre_out.elapsed_ms
+			          << ")\n";
+		}
+
+		if (pre_out.unsat) return false;
+
+		rebuildFromPreprocessedCNF(pre_out);
+
+		// Re-run unit propagation + hardwire on the rebuilt formula to
+		// absorb the preprocessor-produced units. This mirrors the
+		// original unit-clause path so the solver's state after this
+		// point is exactly what it would be if we had parsed a
+		// freshly-simplified CNF file.
+		if (!unit_clauses_.empty()) {
+			for (auto lit : unit_clauses_)
+				setLiteralIfFree(lit);
+			if (!BCP(0)) return false;
+			HardWireAndCompact();
+		}
 	}
 	return succeeded;
 }
 
 // ---------------------------------------------------------------
-// #SAT-sound preprocessing rules (subsumption / pure-duplicate /
-// SSR). Runs once at startup, after HardWireAndCompact, on the
-// already-compacted formula. Rebuilds the pool + all indices from
-// the simplified clause set.
-//
-// Model-set-preserving arguments (each a standard textbook result):
-//
-//   Subsumption.  If C ⊆ D as literal sets then every model of F
-//   that satisfies C also satisfies D. Removing D doesn't change
-//   the model set.
-//
-//   Pure-duplicate resolution.  (ℓ ∨ C) ∧ (¬ℓ ∨ C) is logically
-//   equivalent to (C): resolving on ℓ gives (C), and (C) entails
-//   both originals (since any model satisfying C satisfies both).
-//
-//   Self-subsuming resolution.  If resolving C and D on some literal
-//   ℓ gives R with R ⊆ D, then D ≡ R in the context of F ∧ C.
-//   Replacing D with R preserves the model set.
-//
-// Not implemented (unsound for #SAT):
-//   General BVE:  (x ∨ a), (¬x ∨ b) → (a ∨ b) drops x's freedom
-//   factor from the count. See commit bd6be09 discussion.
+// Extract the current formula (after HardWireAndCompact) as a list
+// of DIMACS int vectors. Includes:
+//   - all long clauses in literal_pool_ (size >= 3)
+//   - all binary clauses (once each, deduped by endpoint ordering)
+// Does NOT include unit clauses — they have already been propagated
+// and compactVariables cleared unit_clauses_.
 // ---------------------------------------------------------------
-bool Solver::runPreprocessingRules() {
-	using namespace std::chrono;
-	auto t0 = steady_clock::now();
-	auto budget_exceeded = [&]() {
-		auto elapsed = duration_cast<milliseconds>(
-			steady_clock::now() - t0).count();
-		return elapsed >= (long long)config_.preprocess_time_budget_ms;
-	};
+std::vector<std::vector<int>> Solver::extractFormulaAsDimacs() {
+	std::vector<std::vector<int>> out;
 
-	// --- Extract every active clause into a working list. Represent
-	// each clause as a sorted vector<int> of DIMACS lits, with a
-	// 64-bit bloom signature for fast non-subsumption rejection. ----
-	struct PC {
-		std::vector<int> lits;     // sorted ascending (dimacs)
-		uint64_t sig = 0;
-		bool deleted = false;
-		bool was_binary = false;   // source: binary_links_ vs long pool
-	};
-	auto bloom_bit = [](int l) -> uint64_t {
-		unsigned r = (unsigned)(l < 0 ? -l : l);
-		r ^= r >> 16; r *= 0x7feb352dU; r ^= r >> 15; r *= 0x846ca68bU;
-		return 1ULL << (r & 63);
-	};
-	auto sig_of = [&](const std::vector<int> &lits) {
-		uint64_t s = 0;
-		for (int l : lits) s |= bloom_bit(l);
-		return s;
-	};
-
-	std::vector<PC> cls;
-
-	// Binaries (deduplicate: each binary appears twice in binary_links_).
+	// Binaries. literal.binary_links_ stores each binary twice (once
+	// per endpoint); emit only when we're at the lower-raw endpoint.
 	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
-		for (auto bt = literal(l).binary_links_.begin();
-		     *bt != SENTINEL_LIT; ++bt) {
-			if (l.raw() < bt->raw()) {
-				PC c;
-				c.lits = {l.toInt(), bt->toInt()};
-				std::sort(c.lits.begin(), c.lits.end());
-				c.sig = sig_of(c.lits);
-				c.was_binary = true;
-				cls.push_back(std::move(c));
-			}
+		const auto &blinks = literal(l).binary_links_;
+		for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
+			if (l.raw() < bt->raw())
+				out.push_back({l.toInt(), bt->toInt()});
 		}
 	}
 
-	// Long clauses from literal_pool_ (size >= 3).
+	// Long clauses (size >= 3).
 	for (auto it = literal_pool_.begin(); it != literal_pool_.end(); ) {
 		if (*it == SENTINEL_LIT) {
 			if (it + 1 == literal_pool_.end()) break;
@@ -154,374 +150,101 @@ bool Solver::runPreprocessingRules() {
 		std::vector<int> lits;
 		auto p = it;
 		while (*p != SENTINEL_LIT) { lits.push_back(p->toInt()); ++p; }
-		std::sort(lits.begin(), lits.end());
-		// Tautology check: adjacent lits of the same var with opposite
-		// signs. Drop tautologies outright (sound).
-		bool taut = false;
-		for (size_t i = 1; i < lits.size() && !taut; i++)
-			if (lits[i] == -lits[i-1]) taut = true;
-		if (!taut && lits.size() >= 2) {
-			PC c;
-			c.lits = std::move(lits);
-			c.sig = sig_of(c.lits);
-			c.was_binary = false;
-			cls.push_back(std::move(c));
-		}
+		if (!lits.empty()) out.push_back(std::move(lits));
 		it = p;
 	}
 
-	const unsigned initial_clauses = cls.size();
-	unsigned initial_lits = 0;
-	for (const auto &c : cls) initial_lits += c.lits.size();
+	return out;
+}
 
-	// --- Build occurrence lists (by DIMACS literal). Used by each
-	// rule to find candidate clauses quickly. ----------------------
-	auto lit_key = [&](int l) -> unsigned {
-		unsigned v = (unsigned)(l < 0 ? -l : l);
-		return (v << 1) | (l < 0 ? 1u : 0u);
-	};
-	unsigned n_lit_keys = 2u * (num_variables() + 2u);
-	auto rebuild_occ = [&](std::vector<std::vector<unsigned>> &occ) {
-		occ.assign(n_lit_keys, {});
-		for (unsigned ci = 0; ci < cls.size(); ci++) {
-			if (cls[ci].deleted) continue;
-			for (int l : cls[ci].lits)
-				occ[lit_key(l)].push_back(ci);
-		}
-	};
-
-	std::vector<std::vector<unsigned>> occ;
-
-	// --- Helpers: is A ⊆ B for sorted lit vectors? -----------------
-	auto is_subset = [](const std::vector<int> &A,
-	                    const std::vector<int> &B) -> bool {
-		if (A.size() > B.size()) return false;
-		auto ai = A.begin(), bi = B.begin();
-		while (ai != A.end()) {
-			while (bi != B.end() && *bi < *ai) ++bi;
-			if (bi == B.end() || *bi != *ai) return false;
-			++ai; ++bi;
-		}
-		return true;
-	};
-
-	unsigned long total_subsumed = 0, total_pure_dup = 0, total_ssr = 0;
-	unsigned pass = 0;
-
-	bool changed = true;
-	bool soundness_failure = false;
-	while (changed && !budget_exceeded() && !soundness_failure) {
-		changed = false;
-		pass++;
-		rebuild_occ(occ);
-
-		// --- Rule 1: subsumption. For each surviving clause C, iterate
-		// occurrence list of C's rarest literal (minimum occ count) to
-		// find candidate D with |D| >= |C|, test C ⊆ D, mark D deleted.
-		if (config_.perform_preprocess_subsumption) {
-			unsigned ndel = 0;
-			for (unsigned ci = 0; ci < cls.size(); ci++) {
-				if (cls[ci].deleted) continue;
-				const auto &C = cls[ci];
-				// Pick the rarest lit to minimize candidate set.
-				unsigned best_key = lit_key(C.lits[0]);
-				size_t best_sz = occ[best_key].size();
-				for (int l : C.lits) {
-					unsigned k = lit_key(l);
-					if (occ[k].size() < best_sz) {
-						best_sz = occ[k].size();
-						best_key = k;
-					}
-				}
-				for (unsigned di : occ[best_key]) {
-					if (di == ci) continue;
-					if (cls[di].deleted) continue;
-					const auto &D = cls[di];
-					if (D.lits.size() < C.lits.size()) continue;
-					// If D has same literal set as C and D.sig==C.sig,
-					// this is a duplicate pair; delete one (the higher
-					// index). For strict subsumption just check subset.
-					if ((C.sig & ~D.sig) != 0) continue;
-					if (is_subset(C.lits, D.lits)) {
-						cls[di].deleted = true;
-						ndel++;
-					}
-				}
-			}
-			if (ndel > 0) {
-				total_subsumed += ndel;
-				changed = true;
-				rebuild_occ(occ);
-			}
-		}
-
-		// --- Rule 2: pure-duplicate resolution
-		//   (ℓ ∨ K) ∧ (¬ℓ ∨ K) → (K)
-		// when K is literally identical on both sides. Hash each
-		// clause by (size, sig-minus-one-lit, variable dropped) —
-		// cheap scan: for each clause pair in the same "size bucket",
-		// test if they differ in exactly one lit of opposite sign. ---
-		if (config_.perform_preprocess_pure_duplicate && !budget_exceeded()) {
-			unsigned nresolved = 0;
-			for (unsigned ci = 0; ci < cls.size(); ci++) {
-				if (cls[ci].deleted) continue;
-				const auto &C = cls[ci];
-				// For each literal ℓ in C, look up clauses containing
-				// ¬ℓ; if any has the same size and literal set modulo
-				// that var, they form a pure-duplicate pair.
-				for (size_t j = 0; j < C.lits.size(); j++) {
-					int ell = C.lits[j];
-					unsigned negkey = lit_key(-ell);
-					for (unsigned di : occ[negkey]) {
-						if (di <= ci) continue;
-						if (cls[di].deleted) continue;
-						const auto &D = cls[di];
-						if (D.lits.size() != C.lits.size()) continue;
-						// Build C \ {ell} and D \ {-ell} and compare.
-						std::vector<int> Cminus, Dminus;
-						Cminus.reserve(C.lits.size() - 1);
-						Dminus.reserve(D.lits.size() - 1);
-						for (int x : C.lits) if (x != ell) Cminus.push_back(x);
-						for (int x : D.lits) if (x != -ell) Dminus.push_back(x);
-						if (Cminus != Dminus) continue;
-
-						// --- Soundness guard: the shared residual
-						// must be non-empty — an empty residual would
-						// make (ℓ) ∧ (¬ℓ) imply UNSAT, which should
-						// have been caught as a unit contradiction
-						// at BCP time. Not an error per se, but flag
-						// it so we notice. ------------------------
-						if (Cminus.empty()) {
-							std::cerr << "\n*** PUREDUP_EMPTY_RESIDUAL ***\n"
-							          << "  (" << ell << ") and ("
-							          << -ell << ") both present — F is UNSAT\n";
-							std::cerr.flush();
-							soundness_failure = true;
-							break;
-						}
-						// Skip if the resolvent would be a unit clause
-						// (size 1). Producing units post-
-						// HardWireAndCompact violates the clean-slate
-						// invariant (unit_clauses_ must be empty after
-						// preprocessing). Safe to skip — correctness
-						// preserved, at most a missed simplification.
-						if (Cminus.size() < 2) continue;
-
-						// Apply: replace C with (K) = Cminus, delete D.
-						cls[ci].lits = std::move(Cminus);
-						cls[ci].sig = sig_of(cls[ci].lits);
-						cls[di].deleted = true;
-						nresolved++;
-						break;  // C changed — restart outer var loop for this ci
-					}
-					if (cls[ci].lits.size() <= j) break;  // C changed above
-				}
-			}
-			if (nresolved > 0) {
-				total_pure_dup += nresolved;
-				changed = true;
-				rebuild_occ(occ);
-			}
-		}
-
-		// --- Rule 3: self-subsuming resolution.
-		//   C has ℓ, D has ¬ℓ, C \ {ℓ} ⊆ D \ {¬ℓ}  →  replace D with D \ {¬ℓ}
-		// For each surviving clause D and each literal m = ¬ℓ in D,
-		// look for C in occ[ℓ] such that C \ {ℓ} ⊆ D. ---------------
-		if (config_.perform_preprocess_ssr && !budget_exceeded()) {
-			unsigned nssr = 0;
-			for (unsigned di = 0; di < cls.size(); di++) {
-				if (cls[di].deleted) continue;
-				auto &D = cls[di];
-				if (D.lits.size() < 2) continue;
-				// Iterate a snapshot of positions — D.lits may shrink.
-				for (size_t k = 0; k < D.lits.size() && !budget_exceeded(); ) {
-					int m = D.lits[k];     // candidate to drop
-					int ell = -m;          // what C must contain
-					unsigned ellkey = lit_key(ell);
-					bool dropped = false;
-					for (unsigned ci : occ[ellkey]) {
-						if (ci == di) continue;
-						if (cls[ci].deleted) continue;
-						const auto &C = cls[ci];
-						if (C.lits.size() > D.lits.size()) continue;
-						if ((C.sig & ~(D.sig | bloom_bit(ell))) != 0) continue;
-						// Build C \ {ell}.
-						std::vector<int> Cminus;
-						Cminus.reserve(C.lits.size() - 1);
-						for (int x : C.lits) if (x != ell) Cminus.push_back(x);
-						// D \ {m} = D.lits with position k removed.
-						std::vector<int> Dminus;
-						Dminus.reserve(D.lits.size() - 1);
-						for (size_t p = 0; p < D.lits.size(); p++)
-							if (p != k) Dminus.push_back(D.lits[p]);
-						if (!is_subset(Cminus, Dminus)) continue;
-						// Apply: D gets m dropped.
-						// --- Soundness guard: D must still have
-						// size >= 1. If Dminus is empty we'd produce
-						// an empty clause — F is UNSAT. Flag. -------
-						if (Dminus.empty()) {
-							std::cerr << "\n*** SSR_EMPTY_RESULT ***\n";
-							std::cerr.flush();
-							soundness_failure = true;
-							dropped = true;
-							break;
-						}
-						// Skip if D' would be a unit — violates the
-						// post-preprocessing clean-slate invariant.
-						// Correctness preserved (just a missed
-						// shortening). The unit is already logically
-						// forced by the formula; any future BCP on
-						// the relevant assignments will find it.
-						if (Dminus.size() < 2) { dropped = false; break; }
-						D.lits = std::move(Dminus);
-						D.sig = sig_of(D.lits);
-						dropped = true;
-						nssr++;
-						break;
-					}
-					if (!dropped) k++;
-					if (soundness_failure) break;
-				}
-				if (soundness_failure) break;
-			}
-			if (nssr > 0) {
-				total_ssr += nssr;
-				changed = true;
-				rebuild_occ(occ);
-			}
-		}
-
-		if (config_.preprocess_verbose) {
-			std::cerr << "preprocess pass=" << pass
-			          << " subsumed=" << total_subsumed
-			          << " pure_dup=" << total_pure_dup
-			          << " ssr=" << total_ssr
-			          << " elapsed_ms="
-			          << duration_cast<milliseconds>(steady_clock::now() - t0).count()
-			          << "\n";
-		}
+// ---------------------------------------------------------------
+// Rebuild the solver's in-memory formula from the preprocessor's
+// output, discarding everything about the pre-preprocess formula.
+// After this call, the state is bit-identical to what
+// createfromFile would produce on a CNF containing
+//   pre_out.forced_units + pre_out.clauses
+// over the same number of variables.
+// ---------------------------------------------------------------
+void Solver::rebuildFromPreprocessedCNF(const PreprocessorResult &pre_out) {
+	// 1. Reset per-variable state (antecedent, DL, value).
+	for (unsigned v = 0; v < variables_.size(); v++) {
+		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
+		variables_[v].decision_level = INVALID_DL;
 	}
+	literal_values_.clear();
+	literal_values_.resize(literals_.end_lit().raw(), X_TRI);
+	literal_stack_.clear();
 
-	if (soundness_failure) {
-		std::cerr << "\n*** PREPROCESSING_DETECTED_UNSAT ***\n";
-		std::cerr.flush();
-		return false;
+	// 2. Reset per-literal structures: watch lists, binary links,
+	// occurrence lists.
+	for (auto l = LiteralID(0, false); l != literals_.end_lit(); l.inc()) {
+		literal(l).resetWatchList();
+		literal(l).binary_links_ = std::vector<LiteralID>(1, SENTINEL_LIT);
+		literal(l).original_binary_link_count_ = 0;
 	}
+	occurrence_lists_.clear();
+	occurrence_lists_.resize(variables_.size());
+	unit_clauses_.clear();
 
-	// Defensive guard: rules explicitly skip any application that
-	// would produce a unit clause (the clean-slate invariant requires
-	// unit_clauses_ to be empty post-preprocessing). Any size-1
-	// clause here indicates a rule-logic bug — abort loudly.
-	for (const auto &c : cls) {
-		if (c.deleted) continue;
-		if (c.lits.size() < 2) {
-			std::cerr << "\n*** PREPROCESS_PRODUCED_UNIT ***\n"
-			          << "  lits.size()=" << c.lits.size()
-			          << " — rules must skip unit-producing applications\n";
+	// 3. Reset the literal pool.
+	literal_pool_.clear();
+	literal_pool_.push_back(SENTINEL_LIT);
+
+	// 4. Populate forced units into unit_clauses_ (to be absorbed
+	// by the caller's follow-up BCP + HardWireAndCompact).
+	auto int_to_lit = [](int l) -> LiteralID {
+		return (l > 0) ? LiteralID((unsigned)l, true)
+		               : LiteralID((unsigned)(-l), false);
+	};
+	for (int u : pre_out.forced_units)
+		unit_clauses_.push_back(int_to_lit(u));
+
+	// 5. Populate clauses. size==2 → binary_links_; size>=3 → pool.
+	unsigned n_long = 0, n_bin = 0;
+	for (const auto &c : pre_out.clauses) {
+		if (c.size() < 2) {
+			// Preprocessor guarantee violated — should never happen.
+			std::cerr << "\n*** REBUILD_FROM_PREPROCESSED_BAD_SIZE ***\n"
+			          << "  clause size=" << c.size() << "\n";
 			std::cerr.flush();
 			std::abort();
 		}
-	}
-
-	// If nothing changed, skip the rebuild.
-	unsigned surviving = 0, surviving_lits = 0;
-	for (const auto &c : cls) {
-		if (c.deleted) continue;
-		surviving++;
-		surviving_lits += c.lits.size();
-	}
-	if (surviving == initial_clauses && surviving_lits == initial_lits
-	    && total_subsumed == 0 && total_pure_dup == 0 && total_ssr == 0) {
-		if (config_.preprocess_verbose)
-			std::cerr << "preprocess: no changes\n";
-		return true;
-	}
-
-	// --- Rebuild literal_pool_, watch_list_, occurrence_lists_, and
-	// binary_links_ from the simplified clause set. Follow the same
-	// conventions as sortClausePoolOrder + HardWireAndCompact: clauses
-	// of size >= 3 go in the pool; size-2 clauses go in binary_links_.
-	// The pool starts with a SENTINEL_LIT at offset 0 and has a
-	// ClauseHeader::overheadInLits() prefix before each clause's
-	// literals. ------------------------------------------------------
-	{
-		// Reset all per-literal structures.
-		for (auto l = LiteralID(0, false); l != literals_.end_lit(); l.inc()) {
-			literal(l).resetWatchList();
-			literal(l).binary_links_ = std::vector<LiteralID>(1, SENTINEL_LIT);
-			literal(l).original_binary_link_count_ = 0;
-		}
-		occurrence_lists_.clear();
-		occurrence_lists_.resize(variables_.size());
-
-		std::vector<LiteralID> new_pool;
-		new_pool.reserve(initial_lits + 2 * initial_clauses);
-		new_pool.push_back(SENTINEL_LIT);
-
-		unsigned n_long = 0, n_bin = 0;
-		auto int_to_lit = [&](int l) -> LiteralID {
-			return (l > 0) ? LiteralID((unsigned)l, true)
-			               : LiteralID((unsigned)(-l), false);
-		};
-
-		for (const auto &c : cls) {
-			if (c.deleted) continue;
-			if (c.lits.size() == 2) {
-				LiteralID a = int_to_lit(c.lits[0]);
-				LiteralID b = int_to_lit(c.lits[1]);
-				// hasBinaryLinkTo guards against double-insertion.
-				if (!literal(a).hasBinaryLinkTo(b)) {
-					literal(a).addBinLinkTo(b);
-					literal(b).addBinLinkTo(a);
-					n_bin++;
-				}
-			} else {
-				// Pool clause: overhead prefix, then literals, then sentinel.
-				for (unsigned i = 0; i < ClauseHeader::overheadInLits(); i++)
-					new_pool.push_back(LiteralID(0, false));
-				ClauseOfs ofs = (ClauseOfs)new_pool.size();
-				for (int l : c.lits) {
-					LiteralID lit = int_to_lit(l);
-					new_pool.push_back(lit);
-					occurrence_lists_[lit].push_back(ofs);
-				}
-				new_pool.push_back(SENTINEL_LIT);
-				literal(int_to_lit(c.lits[0])).addWatchLinkTo(ofs);
-				literal(int_to_lit(c.lits[1])).addWatchLinkTo(ofs);
-				n_long++;
+		if (c.size() == 2) {
+			LiteralID a = int_to_lit(c[0]);
+			LiteralID b = int_to_lit(c[1]);
+			if (!literal(a).hasBinaryLinkTo(b)) {
+				literal(a).addBinLinkTo(b);
+				literal(b).addBinLinkTo(a);
+				n_bin++;
 			}
-		}
-
-		literal_pool_ = std::move(new_pool);
-		original_lit_pool_size_ = literal_pool_.size();
-
-		// Re-record the original binary link count since binary_links_
-		// was rebuilt.
-		for (auto l = LiteralID(0, false); l != literals_.end_lit(); l.inc())
-			literal(l).recordOriginalBinaryLinks();
-
-		// Update statistics.
-		statistics_.num_long_clauses_ = n_long;
-		statistics_.num_binary_clauses_ = n_bin;
-		statistics_.num_original_binary_clauses_ = n_bin;
-
-		if (config_.preprocess_verbose || !config_.quiet) {
-			std::cerr << "preprocess: "
-			          << initial_clauses << " -> "
-			          << (n_long + n_bin) << " clauses ("
-			          << n_long << " long, " << n_bin << " binary); "
-			          << "subsumed=" << total_subsumed
-			          << " pure_dup=" << total_pure_dup
-			          << " ssr=" << total_ssr
-			          << " passes=" << pass
-			          << " elapsed_ms="
-			          << duration_cast<milliseconds>(steady_clock::now() - t0).count()
-			          << "\n";
+		} else {
+			for (unsigned i = 0; i < ClauseHeader::overheadInLits(); i++)
+				literal_pool_.push_back(LiteralID(0, false));
+			ClauseOfs ofs = (ClauseOfs)literal_pool_.size();
+			for (int l : c) {
+				LiteralID lit = int_to_lit(l);
+				literal_pool_.push_back(lit);
+				occurrence_lists_[lit].push_back(ofs);
+			}
+			literal_pool_.push_back(SENTINEL_LIT);
+			literal(int_to_lit(c[0])).addWatchLinkTo(ofs);
+			literal(int_to_lit(c[1])).addWatchLinkTo(ofs);
+			n_long++;
 		}
 	}
 
-	return true;
+	for (auto l = LiteralID(0, false); l != literals_.end_lit(); l.inc())
+		literal(l).recordOriginalBinaryLinks();
+
+	original_lit_pool_size_ = literal_pool_.size();
+
+	// 6. Statistics. Mirrors HardWireAndCompact's bookkeeping — the
+	// caller's subsequent HardWireAndCompact call will re-stamp these.
+	statistics_.num_long_clauses_            = n_long;
+	statistics_.num_binary_clauses_          = n_bin;
+	statistics_.num_original_binary_clauses_ = n_bin;
+	statistics_.num_unit_clauses_            = unit_clauses_.size();
+	statistics_.num_original_unit_clauses_   = unit_clauses_.size();
 }
 
 bool Solver::prepFailedLiteralTest() {

@@ -251,22 +251,23 @@ private:
 	// further data
 	void HardWireAndCompact();
 
-	// Run the #SAT-sound preprocessing rules (subsumption,
-	// pure-duplicate resolution, self-subsuming resolution) to
-	// fixpoint within a wall-clock budget. Rebuilds literal_pool_,
-	// watch_list_, occurrence_lists_, and binary_links_ from the
-	// simplified clause set.
-	//
-	// Invariants preserved:
-	//   - #SAT(F_before) == #SAT(F_after)
-	//   - BCP saturation (satisfied clauses already gone, falsified
-	//     literals already absent) — call only after HardWireAndCompact.
-	//   - Every remaining clause has size >= 2 (units go into
-	//     unit_clauses_ + setLiteralIfFree).
-	//
-	// Returns true iff the formula remains satisfiable (false on empty
-	// clause / direct UNSAT).
-	bool runPreprocessingRules();
+	// Extract the current formula as a list of DIMACS int vectors,
+	// one per clause. Includes long clauses (size >= 3) and binaries
+	// (emitted once each). Does NOT include unit clauses —
+	// HardWireAndCompact has already cleared unit_clauses_ by the
+	// time this is called in simplePreProcess. Const because it
+	// reads state only.
+	std::vector<std::vector<int>> extractFormulaAsDimacs();
+
+	// Reset all in-memory formula state and repopulate from the
+	// preprocessor's output. After this call, literal_pool_,
+	// watch_list_, binary_links_, occurrence_lists_, unit_clauses_,
+	// literal_values_, literal_stack_, and per-variable DL/ante are
+	// in a clean-slate state — identical to what createfromFile
+	// would produce on a fresh DIMACS file containing the
+	// preprocessed CNF. Call must be followed by the standard
+	// unit-BCP + HardWireAndCompact to absorb any forced units.
+	void rebuildFromPreprocessedCNF(const struct PreprocessorResult &pre_out);
 
 
 	// Phase 2 / Tier 1 gating: decide whether a precomputed ND-hierarchy
