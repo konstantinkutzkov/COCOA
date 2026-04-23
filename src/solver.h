@@ -164,6 +164,29 @@ public:
 	// a one-shot perturbation BEFORE search starts.
 	void _permuteClauseLiteralsForTest(unsigned seed);
 
+	// Test-support: inject a clause at the "learned" end of the formula
+	// — long clauses go past original_lit_pool_size_, binaries go past
+	// original_binary_link_count_. Used to verify the canonical-key
+	// filters correctly exclude learned content. These methods are
+	// intentionally ugly-named so they are not confused with production
+	// learning paths.
+	//
+	// The test contract: for any injected learned clause (long or
+	// binary) over currently-active variables, the canonical key of
+	// the super-component must be IDENTICAL to the key computed
+	// before the injection. If it differs, the filter is broken.
+	void _injectLearnedLongClauseForTest(const std::vector<int> &dimacs_lits);
+	void _injectLearnedBinaryForTest(int dimacs_a, int dimacs_b);
+
+	// Test-support: is this variable currently unassigned (active)?
+	bool _isActiveForTest(unsigned v) {
+		return v >= 1 && v <= num_variables()
+		    && literal_values_[LiteralID(v, true)] == X_TRI;
+	}
+
+	// Test-support: number of variables after preprocessing.
+	unsigned _numVariablesForTest() { return num_variables(); }
+
 	// Order-sensitivity probes (post-preprocess, pre-search). See
 	// SolverConfiguration for the purpose. Each is idempotent and
 	// operates on the current in-memory representation; applying

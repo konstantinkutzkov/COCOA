@@ -71,11 +71,29 @@ CanonicalKey buildCanonicalKey(
 
   s_clause_refs.clear();
 
-  // Long clauses
+  // Long clauses. Invariant guard: every ClauseID in the component's
+  // clsBegin() list must refer to an original clause — learned clauses
+  // never get ClauseIDs assigned (AltComponentAnalyzer::initialize
+  // runs once on the original pool before search starts, and no later
+  // code adds to clause_id_to_ofs_). If we see a ClauseID whose ofs
+  // sits past the original-pool boundary, either (a) the pool was
+  // restructured post-init without re-stamping original_lit_pool_size_,
+  // or (b) learned clauses were added to clause_id_to_ofs_. Either
+  // case corrupts the "key includes only non-redundant originals"
+  // invariant, so abort loudly with diagnostics.
   for (auto it = comp.clsBegin(); *it != clsSENTINEL; it++) {
     ClauseOfs ofs = clause_id_to_ofs[*it];
+    if (ofs >= original_lit_pool_size) {
+      std::cerr << "\n*** CANONICAL_KEY_LEARNED_CLAUSE_ID "
+                   "(ClauseID references learned pool region) ***\n"
+                << "  clause_id=" << *it
+                << " ofs=" << ofs
+                << " original_lit_pool_size=" << original_lit_pool_size
+                << "\n";
+      std::cerr.flush();
+      std::abort();
+    }
     if (removed_clauses.count(ofs)) continue;
-    if (ofs >= original_lit_pool_size) continue;
 
     bool satisfied = false;
     unsigned active_count = 0;

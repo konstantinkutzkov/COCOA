@@ -2847,6 +2847,52 @@ void Solver::_prepareForKeyComputation(const std::string &file_name) {
 	comp_manager_.setRemovedClauses(&removed_clauses_);
 }
 
+// Test-support: inject a "learned" long clause. Writes directly into
+// literal_pool_ past original_lit_pool_size_ using the same layout
+// addClause would produce, and registers watches on the first two
+// literals. Does not assign a ClauseID (learned clauses never get one).
+void Solver::_injectLearnedLongClauseForTest(const std::vector<int> &dimacs_lits) {
+	if (dimacs_lits.size() < 3) {
+		std::cerr << "_injectLearnedLongClauseForTest: size must be >= 3\n";
+		std::abort();
+	}
+	auto int_to_lit = [](int l) {
+		return (l > 0) ? LiteralID((unsigned)l, true)
+		               : LiteralID((unsigned)(-l), false);
+	};
+	for (unsigned i = 0; i < ClauseHeader::overheadInLits(); i++)
+		literal_pool_.push_back(LiteralID(0, false));
+	ClauseOfs ofs = (ClauseOfs)literal_pool_.size();
+	if (ofs < (ClauseOfs)original_lit_pool_size_) {
+		std::cerr << "_injectLearnedLongClauseForTest: new clause at ofs="
+		          << ofs << " but boundary=" << original_lit_pool_size_
+		          << " — pool invariant violated\n";
+		std::abort();
+	}
+	for (int l : dimacs_lits)
+		literal_pool_.push_back(int_to_lit(l));
+	literal_pool_.push_back(SENTINEL_LIT);
+	literal(int_to_lit(dimacs_lits[0])).addWatchLinkTo(ofs);
+	literal(int_to_lit(dimacs_lits[1])).addWatchLinkTo(ofs);
+}
+
+// Test-support: inject a "learned" binary. Appends past
+// original_binary_link_count_ in both endpoints' binary_links_.
+void Solver::_injectLearnedBinaryForTest(int dimacs_a, int dimacs_b) {
+	auto int_to_lit = [](int l) {
+		return (l > 0) ? LiteralID((unsigned)l, true)
+		               : LiteralID((unsigned)(-l), false);
+	};
+	LiteralID a = int_to_lit(dimacs_a);
+	LiteralID b = int_to_lit(dimacs_b);
+	// addBinLinkTo appends past the sentinel unconditionally (it
+	// doesn't distinguish original vs learned). Since
+	// original_binary_link_count_ was fixed at preprocessing time,
+	// anything added now automatically sits in the "learned" region.
+	literal(a).addBinLinkTo(b);
+	literal(b).addBinLinkTo(a);
+}
+
 // Invariant guard: verify there are no failed literals. See declaration
 // in solver.h for the spec. Uses probeLiteralPassFail which performs
 // a clean save-assign-BCP-rollback cycle.

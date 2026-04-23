@@ -48,3 +48,9 @@ target_include_directories (test_canonical_key_invariance PRIVATE src)
 target_link_libraries (test_canonical_key_invariance libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
     ${GKLIB_DIR}/build/libGKlib.a)
+
+add_executable (test_canonical_key_learned tests/test_canonical_key_learned.cpp)
+target_include_directories (test_canonical_key_learned PRIVATE src)
+target_link_libraries (test_canonical_key_learned libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a)
