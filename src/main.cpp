@@ -23,6 +23,11 @@ int main(int argc, char *argv[]) {
     cout << "\t -noIBCP\t turn off implicit BCP" << endl;
     cout << "\t -learnLevel n\t learning feature ladder (default 4: no minimization; 5=full w/ rewritten minimize, 3=no bin-pad, 2=no scope, 1=no dedup, 0=no learn)" << endl;
     cout << "\t -verifyLearn\t replay the resolution chain after each minimization for an end-to-end sanity check (opt-in, slow)" << endl;
+    cout << "\t -noSubsumption\t disable preprocess subsumption" << endl;
+    cout << "\t -noPureDup\t disable preprocess pure-duplicate resolution" << endl;
+    cout << "\t -noSSR\t\t disable preprocess self-subsuming resolution" << endl;
+    cout << "\t -preprocessBudget ms\t wall-clock cap for the simplification phase (default 10000)" << endl;
+    cout << "\t -preprocessVerbose\t log per-pass stats for the simplification phase" << endl;
     cout << "\t -cb [n]\t enable clause branching (min clause length n, default 8)" << endl;
     cout << "\t -sep [n]\t enable separator branching (min active vars n, default 15)" << endl;
     cout << "\t -adaptive\t use Phase-3 adaptive (τ-based) branching on the no-separator path" << endl;
@@ -85,6 +90,18 @@ int main(int argc, char *argv[]) {
       i++;
     } else if (strcmp(argv[i], "-verifyLearn") == 0) {
       theSolver.config().verify_learn = true;
+    } else if (strcmp(argv[i], "-noSubsumption") == 0) {
+      theSolver.config().perform_preprocess_subsumption = false;
+    } else if (strcmp(argv[i], "-noPureDup") == 0) {
+      theSolver.config().perform_preprocess_pure_duplicate = false;
+    } else if (strcmp(argv[i], "-noSSR") == 0) {
+      theSolver.config().perform_preprocess_ssr = false;
+    } else if (strcmp(argv[i], "-preprocessBudget") == 0) {
+      if (i + 1 >= argc) { cout << "-preprocessBudget needs ms\n"; return -1; }
+      theSolver.config().preprocess_time_budget_ms = atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-preprocessVerbose") == 0) {
+      theSolver.config().preprocess_verbose = true;
     } else if (strcmp(argv[i], "-adaptive") == 0) {
       theSolver.config().perform_adaptive_branching = true;
     } else if (strcmp(argv[i], "-reactiveMetis") == 0) {

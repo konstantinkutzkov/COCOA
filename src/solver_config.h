@@ -61,6 +61,28 @@ struct SolverConfiguration {
   // expensive for default use.
   bool verify_learn = false;
 
+  // Preprocessing-time simplification rules (run once, at startup,
+  // after BCP + failed-literal test). Each is sound for #SAT (preserves
+  // the set of models, not merely satisfiability).
+  //
+  //   subsumption:         C ⊆ D  → delete D
+  //   pure-duplicate:      (ℓ ∨ C) ∧ (¬ℓ ∨ C) → C   (C identical)
+  //   ssr (self-subsuming resolution):
+  //                        (C) ∧ (D) with resolvent R ⊆ D → replace D with R
+  //
+  // Note: general bounded variable elimination (BVE) is NOT sound for
+  // #SAT and is intentionally excluded.
+  bool perform_preprocess_subsumption = true;
+  bool perform_preprocess_pure_duplicate = true;
+  bool perform_preprocess_ssr = true;
+  // Hard wall-clock cap on the whole preprocessing-rules phase (ms).
+  // When the budget is exceeded mid-pass we stop after the current
+  // rule completes; the formula is still sound, just less simplified.
+  unsigned preprocess_time_budget_ms = 10000;
+  // Verbose per-pass logging of how many clauses were deleted /
+  // shortened, and elapsed time.
+  bool preprocess_verbose = false;
+
   // TODO component caching cannot be deactivated for now!
   bool perform_component_caching = true;
   bool perform_failed_lit_test = true;

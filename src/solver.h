@@ -251,6 +251,23 @@ private:
 	// further data
 	void HardWireAndCompact();
 
+	// Run the #SAT-sound preprocessing rules (subsumption,
+	// pure-duplicate resolution, self-subsuming resolution) to
+	// fixpoint within a wall-clock budget. Rebuilds literal_pool_,
+	// watch_list_, occurrence_lists_, and binary_links_ from the
+	// simplified clause set.
+	//
+	// Invariants preserved:
+	//   - #SAT(F_before) == #SAT(F_after)
+	//   - BCP saturation (satisfied clauses already gone, falsified
+	//     literals already absent) — call only after HardWireAndCompact.
+	//   - Every remaining clause has size >= 2 (units go into
+	//     unit_clauses_ + setLiteralIfFree).
+	//
+	// Returns true iff the formula remains satisfiable (false on empty
+	// clause / direct UNSAT).
+	bool runPreprocessingRules();
+
 
 	// Phase 2 / Tier 1 gating: decide whether a precomputed ND-hierarchy
 	// separator is acceptable for the current sub-component. Rejects
