@@ -71,6 +71,7 @@ Each row: `| date-time | commit | compile flags | solver flags | instance (md5) 
 | 2026-04-24 12:11 | `bf9c724` (HEAD) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-sep 5 -cb 3 -adaptive` | /tmp/t1_049_k10_s1.cnf | 2.675 s | load avg 1.87. Flag-matrix run 4/6. Adaptive+sep is essentially no-op: adaptive probing is gated by `adaptive_probing_min_vars=60`, and hierarchy-leaf components are mostly below that. |
 | 2026-04-24 12:11 | `bf9c724` (HEAD) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-sep 5 -cb 3 -adaptive -reactiveMetis` | /tmp/t1_049_k10_s1.cnf | 2.709 s | load avg 1.87. Flag-matrix run 5/6. Both add no measurable cost on top. |
 | 2026-04-24 12:11 | `bf9c724` (HEAD) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-adaptive` | /tmp/t1_049_k10_s1.cnf | 4.043 s | load avg 2.22. Flag-matrix run 6/6. **Significant regression** vs the other five (~50%). Without `-sep`, adaptive fires on every component; probing cost (K=20 × 2 polarities × full BCP) is not recovered by the heuristic on this instance. |
+| 2026-04-24 12:18 | `bf9c724` (HEAD) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | (no flags) | /tmp/t1_049_k6_s1.cnf (md5 `2723c06a009cb87a8a64f49e6a1d4581`, 84v / 223c) | 25.43 s | load avg 2.06 start, 2.14 end. No time limit. count=131,621,464,405,104. 8.1M decisions, 620 conflicts, 850k cache stores / 4.5M hits. Default completes well under the `-adaptive` 30s timeout this same instance hit — adaptive is decisively worse here. |
 
 ---
 
