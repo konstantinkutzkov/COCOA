@@ -225,3 +225,23 @@ lookup is O(1).
 Measurement overhead for just the hash probe was ~3% on t1_049
 (2.80 s → 2.88 s) and negligible on t1_011 — so the L1 lookup is
 genuinely cheap. The two-level cache is worth implementing.
+
+## 2026-04-24 13:10 — two-level cache (L1 ID-based + L2 canonical) landed
+
+Implementation: 64-bit order-independent hash of `(active var IDs, active clause IDs)` as L1 key. Compute once per sub-component, check L1 before canonical-key build, populate on miss.
+
+Measurements at HEAD `134b71f` + L1 patch:
+
+| Instance | Pre-L1 | With L1 | Speedup | L1 hit rate |
+|---|---|---|---|---|
+| t1_049_k10_s1 (80v/212c) | 2.70 s | **2.47 s** | 8.5% | 56.9% (435k/765k) |
+| t1_049_k6_s1 (84v/223c)  | 25.43 s | **25.19 s** | 1.0% | 58.6% (4.19M/7.15M) |
+| t1_011 (6559v/14515c)    | 40.08 s | **31.49 s** | **21.4%** | 74.6% (316k/423k) |
+
+All counts correct (matching pre-L1 runs and ganak oracle).
+
+Speedup tracks how big a fraction `buildCanonicalKey` was of the original solve. On t1_011, where canonical-build is a huge fraction (big cache, many re-visits), L1 is a 21% win. On t1_049_k6_s1 where the search is dominated by other work, L1 still hits at 59% but the wall-time payoff is only 1%.
+
+Regression tests pass:
+  - test_canonical_key_invariance ✓
+  - test_canonical_key_learned ✓

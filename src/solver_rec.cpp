@@ -715,6 +715,45 @@ mpz_class Solver::solveComponent(Component &comp,
 			mpz_class sub_count;
 			static const unordered_map<ClauseOfs, unsigned> empty_removed;
 			const auto &rm = removed_clauses_;
+
+			// L1 fast-path: identity-based lookup. Order-independent
+			// hash — XOR of per-element mixed values, no sort. Cheap:
+			// one pass over active vars + active clauses.
+			IdKey id_key;
+			if (config_.perform_component_caching
+			    && sub->num_variables() >= 3
+			    && !config_.verify_cache) {
+				// MurmurHash-style finalizer on each ID, XOR-combine.
+				// Order-independent because XOR is commutative; each
+				// input's contribution goes through the mixer so repeat
+				// IDs can't cancel.
+				auto mix = [](uint64_t x) {
+					x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
+					x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL;
+					x ^= x >> 33;
+					return x;
+				};
+				uint64_t h = 0;
+				for (auto it = sub->varsBegin(); *it != varsSENTINEL; ++it) {
+					if (literal_values_[LiteralID(*it, true)] == X_TRI)
+						h ^= mix((uint64_t)*it);
+				}
+				const auto &id2ofs = comp_manager_.getAnalyzer().clauseIdToOfs();
+				for (auto it = sub->clsBegin(); *it != clsSENTINEL; ++it) {
+					ClauseOfs ofs = id2ofs[*it];
+					if (rm.count(ofs)) continue;
+					if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+					h ^= mix((uint64_t)*it ^ 0x9e3779b97f4a7c15ULL);  // namespace clauses
+				}
+				id_key.hash = h;
+
+				if (comp_manager_.contentCache().l1_lookup(id_key, sub_count)) {
+					result *= sub_count;
+					delete sub;
+					continue;
+				}
+			}
+
 			CanonicalKey key = buildCanonicalKey(
 				*sub, literal_pool_, literals_, literal_values_,
 				comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
@@ -723,8 +762,13 @@ mpz_class Solver::solveComponent(Component &comp,
 			            sub->num_variables() >= 3 &&
 			            comp_manager_.contentCache().peek(key, sub_count));
 			if (hit && !config_.verify_cache) {
-				// Normal path: return cached count without recomputing.
+				// L2 hit: canonicalized form matches a previously-cached
+				// sub-component. Populate L1 so future visits with this
+				// same ID-set skip the canonical build.
 				comp_manager_.contentCache().stats_hits++;
+				if (sub->num_variables() >= 3) {
+					comp_manager_.contentCache().l1_store(id_key, sub_count);
+				}
 				result *= sub_count;
 				delete sub;
 				continue;
@@ -866,6 +910,12 @@ mpz_class Solver::solveComponent(Component &comp,
 					g_first_sig[key.hash] = pre_sig;
 				}
 				comp_manager_.contentCache().store(key, sub_count);
+				if (!config_.verify_cache) {
+					// Populate L1 so future visits to the same ID-set skip
+					// the canonical build. Skipped under verify_cache because
+					// that mode force-recomputes everything.
+					comp_manager_.contentCache().l1_store(id_key, sub_count);
+				}
 			}
 			result *= sub_count;
 			delete sub;

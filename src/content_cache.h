@@ -11,10 +11,41 @@
 
 #include <unordered_map>
 #include <cassert>
+#include <cstdint>
 #include <iostream>
+#include <vector>
 #include <gmpxx.h>
 
 #include "canonical_key.h"
+
+// ---------------------------------------------------------------
+// L1 (identity-based) cache key: sub-component fingerprint using
+// the CURRENT run's variable and clause IDs (stable within a run).
+//
+// Stores only a single 64-bit hash of the {active var IDs, active
+// clause IDs} multiset — no sorted vectors, no element-by-element
+// equality check. The hash combines each ID via a mixing function
+// and XORs contributions so the result is ORDER-INDEPENDENT (no
+// sort needed at build time).
+//
+// Correctness caveat: at 64 bits and ~10^6 entries, per-lookup
+// false-hit probability is ~10^-8. With strict identity semantics
+// (same IDs → same hash → same count, since the count is a
+// deterministic function of the sub-component), false hits would
+// need two structurally-different sub-components to hash identically
+// — a birthday-type event at 2^32 entries. For our scales this is
+// vanishingly unlikely. Keep in mind if pushing to very large
+// instances (> 10^7 cache entries).
+// ---------------------------------------------------------------
+struct IdKey {
+  uint64_t hash = 0;
+
+  bool operator==(const IdKey &o) const { return hash == o.hash; }
+};
+
+struct IdKeyHasher {
+  size_t operator()(const IdKey &k) const { return k.hash; }
+};
 
 class ContentCache {
 public:
@@ -114,8 +145,35 @@ public:
 
   size_t size() const { return cache_.size(); }
 
+  // L1 (identity-based) cache API. Fast-path: check L1 before
+  // building the canonical key. On L1 hit the canonical build is
+  // skipped entirely.
+  bool l1_lookup(const IdKey &k, mpz_class &count) {
+    auto it = l1_cache_.find(k);
+    if (it == l1_cache_.end()) { stats_l1_misses++; return false; }
+    count = it->second;
+    stats_l1_hits++;
+    return true;
+  }
+
+  void l1_store(const IdKey &k, const mpz_class &count) {
+    assert(count >= 0 && "L1 count must be non-negative");
+    // Same eviction policy as L2 — if we're over capacity, drop half.
+    if (l1_max_entries > 0 && l1_cache_.size() >= l1_max_entries) {
+      size_t to_remove = l1_cache_.size() / 2;
+      auto it = l1_cache_.begin();
+      for (size_t i = 0; i < to_remove && it != l1_cache_.end(); i++)
+        it = l1_cache_.erase(it);
+    }
+    l1_cache_[k] = count;
+    stats_l1_stores++;
+  }
+
+  size_t l1_size() const { return l1_cache_.size(); }
+
   // Configuration
   size_t max_entries = 1000000;
+  size_t l1_max_entries = 1000000;
 
   // Statistics
   unsigned long stats_hits = 0;
@@ -123,9 +181,13 @@ public:
   unsigned long stats_stores = 0;
   unsigned long stats_verify_checks = 0;
   unsigned long stats_verify_ok = 0;
+  unsigned long stats_l1_hits = 0;
+  unsigned long stats_l1_misses = 0;
+  unsigned long stats_l1_stores = 0;
 
 private:
   std::unordered_map<CanonicalKey, mpz_class, CanonicalKeyHash> cache_;
+  std::unordered_map<IdKey, mpz_class, IdKeyHasher> l1_cache_;
   bool pending_has_ = false;
   CanonicalKey pending_key_;
   mpz_class pending_stored_;
