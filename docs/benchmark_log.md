@@ -73,6 +73,30 @@ Each row: `| date-time | commit | compile flags | solver flags | instance (md5) 
 | 2026-04-24 12:11 | `bf9c724` (HEAD) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-adaptive` | /tmp/t1_049_k10_s1.cnf | 4.043 s | load avg 2.22. Flag-matrix run 6/6. **Significant regression** vs the other five (~50%). Without `-sep`, adaptive fires on every component; probing cost (K=20 × 2 polarities × full BCP) is not recovered by the heuristic on this instance. |
 | 2026-04-24 12:18 | `bf9c724` (HEAD) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | (no flags) | /tmp/t1_049_k6_s1.cnf (md5 `2723c06a009cb87a8a64f49e6a1d4581`, 84v / 223c) | 25.43 s | load avg 2.06 start, 2.14 end. No time limit. count=131,621,464,405,104. 8.1M decisions, 620 conflicts, 850k cache stores / 4.5M hits. Default completes well under the `-adaptive` 30s timeout this same instance hit — adaptive is decisively worse here. |
 
+### Analysis: why adaptive is slower on t1_049_k10_s1 (commit `bf9c724`, 2026-04-24 12:21)
+
+Three-way comparison designed to isolate the source of the slowdown:
+
+| Variant | Flags | Time | Decisions | Conflicts | Cache stores |
+|---|---|---|---|---|---|
+| Default (raw-count picker) | (none) | 2.70 s | 926,992 | 150 | 275,812 |
+| Adaptive, Stage-0 only (τ probing off) | `-adaptive -adaptiveMin 200` | 3.83 s | 1,289,820 | 88 | 415,844 |
+| Adaptive, full | `-adaptive` | 4.02 s | 1,371,666 | 85 | 441,603 |
+
+- Decision ratio (1.48×) ≈ time ratio (1.49×). The slowdown is explained by search-tree size.
+- Disabling τ probing (row 2) shaves only 0.19 s off the 1.32 s gap. **Probing overhead is ~15% of the slowdown; the remaining 85% is Stage-0's branching choices.**
+- Cache stores scale 1.60× — adaptive's branches fragment the problem into more distinct sub-components.
+- Adaptive has FEWER conflicts (85 vs 150). Not a win — it means adaptive's branches don't force BCP cascades as aggressively, so the tree stays "open" longer before hitting dead-ends.
+
+**Root cause**: Stage-0's length-weighted score (`cheap_score[v] = Σ 2^(-α·len(C))` with α=2) favours vars in binaries/ternaries. On t1_049-style dense 3-SAT those vars are already pinned by BCP on the first partner-assignment; branching on them adds little. The default raw-count picker favours vars in MANY clauses regardless of length, which correlates with "each assignment produces many 3→2 shortenings" — a better proxy for BCP-cascade potential at this density.
+
+**Design implication**: Stage-0's α=2.0 was tuned on sparse instances like t1_071 (per the config comment at solver_config.h:78-88). It mis-ranks variables on dense regimes. Possible fixes (each its own experiment):
+  - Lower α (e.g. 0.5) to reduce length discrimination on dense instances.
+  - Analyzer-driven α: estimate formula density, pick α accordingly.
+  - Add a "force-propagation" signal (like raw-count) as a secondary axis.
+
+Not acted on in this session — logged for future work.
+
 ---
 
 ## Run template
