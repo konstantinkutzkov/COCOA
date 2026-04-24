@@ -716,37 +716,16 @@ mpz_class Solver::solveComponent(Component &comp,
 			static const unordered_map<ClauseOfs, unsigned> empty_removed;
 			const auto &rm = removed_clauses_;
 
-			// L1 fast-path: identity-based lookup. Order-independent
-			// hash — XOR of per-element mixed values, no sort. Cheap:
-			// one pass over active vars + active clauses.
+			// L1 fast-path: identity-based lookup. The hash was
+			// computed at component-construction time (in
+			// makeComponentFromState), so this is a field read + one
+			// unordered_map probe.
 			IdKey id_key;
 			if (config_.perform_component_caching
 			    && sub->num_variables() >= 3
-			    && !config_.verify_cache) {
-				// MurmurHash-style finalizer on each ID, XOR-combine.
-				// Order-independent because XOR is commutative; each
-				// input's contribution goes through the mixer so repeat
-				// IDs can't cancel.
-				auto mix = [](uint64_t x) {
-					x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
-					x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL;
-					x ^= x >> 33;
-					return x;
-				};
-				uint64_t h = 0;
-				for (auto it = sub->varsBegin(); *it != varsSENTINEL; ++it) {
-					if (literal_values_[LiteralID(*it, true)] == X_TRI)
-						h ^= mix((uint64_t)*it);
-				}
-				const auto &id2ofs = comp_manager_.getAnalyzer().clauseIdToOfs();
-				for (auto it = sub->clsBegin(); *it != clsSENTINEL; ++it) {
-					ClauseOfs ofs = id2ofs[*it];
-					if (rm.count(ofs)) continue;
-					if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
-					h ^= mix((uint64_t)*it ^ 0x9e3779b97f4a7c15ULL);  // namespace clauses
-				}
-				id_key.hash = h;
-
+			    && !config_.verify_cache
+			    && sub->hasL1Hash()) {
+				id_key.hash = sub->l1Hash();
 				if (comp_manager_.contentCache().l1_lookup(id_key, sub_count)) {
 					result *= sub_count;
 					delete sub;

@@ -162,11 +162,24 @@ public:
     p_new_comp->reserveSpace(stack_size, super_comp().numLongClauses());
     current_comp_for_caching_.clear();
 
+    // Compute the L1 (identity-based) hash while we're already
+    // iterating vars + clauses. Saves recomputing at every
+    // ContentCache L1 lookup. Must stay in sync with the fallback
+    // hash in solver_rec.cpp.
+    auto mix = [](uint64_t x) {
+      x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
+      x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL;
+      x ^= x >> 33;
+      return x;
+    };
+    uint64_t l1_hash = 0;
+
     for (auto v_it = super_comp().varsBegin(); *v_it != varsSENTINEL;  v_it++)
       if (var_seen(*v_it)) { //we have to put a var into our component
         p_new_comp->addVar(*v_it);
         current_comp_for_caching_.addVar(*v_it);
         setVar_in_other_comp(*v_it);
+        l1_hash ^= mix((uint64_t)*v_it);
       }
     p_new_comp->closeVariableData();
     current_comp_for_caching_.closeVariableData();
@@ -177,9 +190,11 @@ public:
            if(!clause_all_lits_active(*it_cl))
              current_comp_for_caching_.addCl(*it_cl);
         setClause_in_other_comp(*it_cl);
+        l1_hash ^= mix((uint64_t)*it_cl ^ 0x9e3779b97f4a7c15ULL);
       }
     p_new_comp->closeClauseData();
     current_comp_for_caching_.closeClauseData();
+    p_new_comp->setL1Hash(l1_hash);
     return p_new_comp;
   }
 //  Component *makeComponentFromState(unsigned stack_size) {

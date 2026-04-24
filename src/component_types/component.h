@@ -9,6 +9,7 @@
 #define COMPONENT_H_
 
 #include <assert.h>
+#include <cstdint>
 #include <vector>
 
 #include "../primitive_types.h"
@@ -120,6 +121,15 @@ public:
   }
   bool hasCanonicalKey() const { return has_canonical_key_; }
   const CanonicalKey &canonicalKey() const { return canonical_key_; }
+
+  // Stashed L1 (identity-based) hash, computed once at component
+  // construction in makeComponentFromArcheType. Avoids recomputing
+  // the same O(n+m) hash at every L1 cache lookup.
+  uint64_t l1_hash_ = 0;
+  bool has_l1_hash_ = false;
+  void setL1Hash(uint64_t h) { l1_hash_ = h; has_l1_hash_ = true; }
+  bool hasL1Hash() const { return has_l1_hash_; }
+  uint64_t l1Hash() const { return l1_hash_; }
 };
 
 

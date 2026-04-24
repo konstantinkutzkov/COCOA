@@ -260,3 +260,24 @@ L1's benefit on k6_s1 is smaller than on t1_011 (21%) because
 k6_s1's search tree is deeper and its average canonical-build cost
 is smaller — L1's per-call overhead is a larger fraction of what
 it saves. But still a genuine positive.
+
+## 2026-04-24 14:31 — stashed L1 hash in Component struct
+
+Moved L1 hash computation from per-lookup in solver_rec.cpp into
+makeComponentFromState, which already iterates the same vars and
+clauses to construct the Component. Added `l1_hash_` field to
+Component.
+
+3-run means on HEAD with this patch, load ~3-4:
+
+  t1_049_k10_s1  2.43 s ± 0.03   (was 2.47 in-place)
+  t1_049_k6_s1   24.78 s ± 0.2   (was 24.87 in-place)
+  t1_011         31.46 s ± 0.03  (was 31.49 in-place)
+
+Marginal improvement, much smaller than predicted. The in-place
+hash was already iterating cache-hot contiguous memory in the
+Component struct — re-scanning was ~50-100 ns per lookup, not
+the 300+ ns I estimated. Locality eats most of the apparent cost.
+
+Still correctness-neutral and structurally cleaner (hash lives
+with the object it describes). Both regression tests pass.
