@@ -299,15 +299,14 @@ CanonicalKey buildCanonicalKey(
   // Sort clauses lexicographically so the multiset has a canonical order.
   std::sort(canonical_clauses.begin(), canonical_clauses.end());
 
-  // --- Sanity-check guards (runtime, always on) ------------------
-  // Cheap representational invariants of the canonical form. A
-  // violation here indicates a key-collision vulnerability: the
-  // canonical form isn't canonical, so equivalent components would
-  // get different keys, or non-equivalent components would get the
-  // same key. We abort with diagnostic rather than debug-assert so
-  // they fire in Release builds.
+  // --- Sanity-check guards: debug-only -----------------------------
+  // These structural invariants on the canonical form are redundant
+  // with the external regression tests (test_canonical_key_invariance,
+  // test_canonical_key_learned) and are O(Σ|clause|) per build. With
+  // ~100k key builds on t1_011 they add up. Keep them under NDEBUG so
+  // debug builds still catch any regression while Release pays nothing.
+#ifndef NDEBUG
   const int n_nonsing = (int)s_sig_pairs.size();
-
   auto fire_guard = [](const char *msg,
                        const std::vector<int> *cl = nullptr) {
     std::cerr << "\n*** CANONICAL_KEY_INVARIANT: " << msg << " ***\n";
@@ -321,30 +320,25 @@ CanonicalKey buildCanonicalKey(
   };
 
   for (const auto &cl : canonical_clauses) {
-    // Literals within a clause must be sorted ascending.
     for (size_t i = 1; i < cl.size(); i++) {
       if (cl[i-1] > cl[i])
         fire_guard("canonical clause literals not sorted ascending", &cl);
     }
-    // Canonical IDs must be 0 (singleton) or in [-n_nonsing, n_nonsing].
     for (int l : cl) {
       if (l != 0 && (std::abs(l) < 1 || std::abs(l) > n_nonsing))
         fire_guard("canonical literal ID out of valid range", &cl);
     }
-    // A variable must appear at most once in a canonical clause
-    // (singletons all canonicalise to 0 so multiple 0s are allowed).
     for (size_t i = 1; i < cl.size(); i++) {
       if (cl[i] == 0 && cl[i-1] == 0) continue;
       if (std::abs(cl[i]) == std::abs(cl[i-1]))
         fire_guard("canonical clause contains a variable twice", &cl);
     }
   }
-
-  // The clause multiset must be sorted lexicographically.
   for (size_t i = 1; i < canonical_clauses.size(); i++) {
     if (canonical_clauses[i] < canonical_clauses[i-1])
       fire_guard("canonical_clauses not sorted lexicographically");
   }
+#endif
   // -----------------------------------------------------------------
 
   // Clean up var_idx entries (reset only what we set)

@@ -592,36 +592,6 @@ bool Solver::bcp() {
 	return bSucceeded;
 }
 
-// Identify the tracked clause by content: length == 33 AND contains var 1153.
-// Unique on /tmp/t1_011_pp_shuf23.cnf. First call caches the ofs; subsequent
-// calls lookup by offset. Returns true iff the given ofs matches.
-static bool isTrackedClause(ClauseOfs ofs, const std::vector<LiteralID> &pool) {
-	static ClauseOfs cached = NOT_A_CLAUSE;
-	if (cached != NOT_A_CLAUSE) return ofs == cached;
-	// Scan pool once to find the matching clause.
-	auto it = pool.begin();
-	while (it != pool.end()) {
-		if (*it != SENTINEL_LIT) { it++; continue; }
-		if (it + 1 == pool.end()) break;
-		it += ClauseHeader::overheadInLits();
-		ClauseOfs o = (ClauseOfs)(it + 1 - pool.begin());
-		unsigned len = 0;
-		bool has1153 = false;
-		for (auto lt = pool.begin() + o; *lt != SENTINEL_LIT; lt++) {
-			len++;
-			if (lt->var() == 1153) has1153 = true;
-		}
-		if (len == 33 && has1153) {
-			cached = o;
-			std::cerr << "tracking clause at ofs=" << o << " (len=33, var 1153 present)\n";
-			return ofs == cached;
-		}
-		auto e = pool.begin() + o;
-		while (*e != SENTINEL_LIT) e++;
-		it = e;
-	}
-	return false;
-}
 
 bool Solver::BCP(unsigned start_at_stack_ofs) {
 	for (unsigned int i = start_at_stack_ofs; i < literal_stack_.size(); i++) {
@@ -650,19 +620,7 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 			auto p_watchLit = beginOf(*itcl) + 1 - isLitA;
 			auto p_otherLit = beginOf(*itcl) + isLitA;
 
-			bool _trk = isTrackedClause(*itcl, literal_pool_);
-			if (_trk) {
-				std::cerr << "BCP visit: ofs=" << *itcl
-				          << " unLit=" << unLit.toInt()
-				          << " p0=" << beginOf(*itcl)->toInt()
-				          << " p1=" << (beginOf(*itcl) + 1)->toInt()
-				          << " other=" << p_otherLit->toInt()
-				          << " other_v=" << (int)literal_values_[*p_otherLit]
-				          << " DL=" << stack_.get_decision_level() << "\n";
-			}
-
 			if (isSatisfied(*p_otherLit) || isClauseRemoved(*itcl)) {
-				if (_trk) std::cerr << "  → skip (satisfied/removed)\n";
 				continue;
 			}
 			// Scope check for learned clauses: if a learned clause was
@@ -678,9 +636,6 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 				itL++;
 			// either we found a free or satisfied lit
 			if (*itL != SENTINEL_LIT) {
-				if (_trk)
-					std::cerr << "  → move watch: old_watcher=" << unLit.toInt()
-					          << " new_watcher=" << itL->toInt() << "\n";
 				literal(*itL).addWatchLinkTo(*itcl);
 				swap(*itL, *p_watchLit);
 				*itcl = literal(unLit).watch_list_.back();
@@ -690,23 +645,9 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 				// and we have hence no free literal left
 				// for p_otherLit remain poss: Active or Resolved
 				if (setLiteralIfFree(*p_otherLit, Antecedent(*itcl))) { // implication
-					if (_trk)
-						std::cerr << "  → implication: force lit=" << p_otherLit->toInt() << "\n";
 					if (isLitA)
 						swap(*p_otherLit, *p_watchLit);
 				} else {
-					if (_trk) {
-						std::cerr << "  → CONFLICT via this clause\n";
-						std::cerr << "    lits in clause (lit/val at DL):";
-						for (auto lt = beginOf(*itcl); *lt != SENTINEL_LIT; lt++) {
-							std::cerr << " " << lt->toInt();
-							int dl = var(*lt).decision_level;
-							TriValue v = literal_values_[*lt];
-							const char *tag = (v == T_TRI) ? "=T" : (v == F_TRI) ? "=F" : "=X";
-							std::cerr << tag << "@DL" << dl;
-						}
-						std::cerr << "\n";
-					}
 					if (config_.log_conflicts) {
 						std::cerr << "CONFLICT_CL ofs=" << *itcl
 						          << " DL=" << stack_.get_decision_level()
