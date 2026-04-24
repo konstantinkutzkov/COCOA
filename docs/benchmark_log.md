@@ -97,6 +97,33 @@ Three-way comparison designed to isolate the source of the slowdown:
 
 Not acted on in this session — logged for future work.
 
+### α sweep on t1_049_k10_s1 (commit `<pending>`, 2026-04-24 12:30)
+
+Added `-adaptiveAlpha <f>` CLI flag exposing `stage0_length_decay`
+for experimentation. Validated the hypothesis: lowering α flips
+adaptive from a regression to an improvement on this instance.
+
+| Flags | α | Time | Decisions |
+|---|---|---|---|
+| (no flags, default picker) | — | 2.70 s | 926,992 |
+| `-adaptive -adaptiveAlpha 2.0` | 2.0 (current default) | 4.05 s | 1,371,666 |
+| `-adaptive -adaptiveAlpha 1.0` | 1.0 | 3.02 s | 1,034,702 |
+| `-adaptive -adaptiveAlpha 0.5` | 0.5 | **2.47 s** | 854,374 |
+| `-adaptive -adaptiveAlpha 0.25` | 0.25 | 2.49 s | 852,012 |
+
+**Key finding**: with α=0.5, `-adaptive` beats the default picker
+by ~9%. The 50% regression we measured earlier with the default
+α=2.0 is entirely attributable to length-weighting being too
+aggressive for this instance's density.
+
+Decision count tracks monotonically with α — lower α = smaller
+tree on this instance. Time follows decisions 1:1.
+
+Design implication: α should be instance-adaptive, not hardcoded
+at 2.0. An analyzer could set α based on cheap structural
+statistics (mean clause length, clause-length variance, binary
+fraction). Research follow-up, not in this commit.
+
 ---
 
 ## Run template

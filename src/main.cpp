@@ -32,6 +32,7 @@ int main(int argc, char *argv[]) {
     cout << "\t -sep [n]\t enable separator branching (min active vars n, default 15)" << endl;
     cout << "\t -adaptive\t use Phase-3 adaptive (τ-based) branching on the no-separator path" << endl;
     cout << "\t -adaptiveMin n\t components with fewer than n active vars skip probing (default 12)" << endl;
+    cout << "\t -adaptiveAlpha f\t Stage-0 length-decay α: cheap_score(v) = Σ 2^(-α·len(C)). Default 2.0 (tuned for sparse). Try 0.5 for dense instances." << endl;
     cout << "\t -reactiveMetis\t enable runtime-METIS fallback at hierarchy-reject points (opt-in; measured to regress on dense sub-instances as of 2026-04-20)" << endl;
     cout << "\t -reactiveMetisMin n\t min active vars to trigger reactive METIS (default 15)" << endl;
     cout << "\t -reactiveMetisSkip k\t after a reactive-METIS failure, wait k decomposition levels before retrying (default 5)" << endl;
@@ -104,6 +105,10 @@ int main(int argc, char *argv[]) {
       theSolver.config().preprocess_verbose = true;
     } else if (strcmp(argv[i], "-adaptive") == 0) {
       theSolver.config().perform_adaptive_branching = true;
+    } else if (strcmp(argv[i], "-adaptiveAlpha") == 0) {
+      if (i + 1 >= argc) { cout << "-adaptiveAlpha needs a number\n"; return -1; }
+      theSolver.config().stage0_length_decay = atof(argv[i + 1]);
+      i++;
     } else if (strcmp(argv[i], "-reactiveMetis") == 0) {
       theSolver.config().use_reactive_metis = true;
     } else if (strcmp(argv[i], "-noReactiveMetis") == 0) {
