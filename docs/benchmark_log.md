@@ -182,3 +182,46 @@ Reopening criteria:
 - **Failed / timeout runs still logged.** Note "TIMEOUT" or the
   cause in the notes column; a missing run is worse than a
   logged failure.
+
+---
+
+## 2026-04-24 12:30 — `buildCanonicalKey` profile on t1_049_k10_s1 (commit `bf9c724` + instrumentation, reverted before commit)
+
+Per-site wall-time breakdown over the whole solve with `-sep 5 -cb 3`:
+
+| Site | Calls | Time | % of 2.8s |
+|---|---|---|---|
+| buildCanonicalKey | 952,796 | 1.37 s | **49%** |
+| discoverComponentsOf | 926,842 | 0.62 s | **22%** |
+| cache ops (peek + store) | 1,228,608 | 0.32 s | 11% |
+| BCP | 927,308 | 0.07 s | 2.5% |
+| picker | 463,496 | 0.016 s | 0.6% |
+| probeLiteral | 0 | 0 | 0 |
+
+Adding `-adaptive` does not change the breakdown materially — the
+adaptive picker stays sub-1% of runtime (probing never fires because
+sub-components stay below `adaptive_probing_min_vars=60`).
+
+**Key finding**: the picker is not the bottleneck. `buildCanonicalKey`
+alone is half the solve time; `discoverComponentsOf` another 22%.
+Probing, BCP, and the picker itself are all sub-3%.
+
+## 2026-04-24 12:35 — L1 (ID-based) repeat-hash probe
+
+Hashed the sorted active-ClauseID + active-var-ID multiset at every
+canonical-key build; counted how often the hash had been seen before
+in the same run.
+
+| Instance | Builds | Repeats | Repeat rate |
+|---|---|---|---|
+| t1_049_k10_s1 | 952,796 | 622,378 | **65.3%** |
+| t1_011 | 424,339 | 316,687 | **74.6%** |
+
+A two-level cache (L1 ID-based fast-path → L2 canonical-based
+fallback) would skip the canonical-key build on those repeat hits.
+Estimated savings: ~30% wall-time on both instances if the L1
+lookup is O(1).
+
+Measurement overhead for just the hash probe was ~3% on t1_049
+(2.80 s → 2.88 s) and negligible on t1_011 — so the L1 lookup is
+genuinely cheap. The two-level cache is worth implementing.
