@@ -245,3 +245,18 @@ Speedup tracks how big a fraction `buildCanonicalKey` was of the original solve.
 Regression tests pass:
   - test_canonical_key_invariance ✓
   - test_canonical_key_learned ✓
+
+## 2026-04-24 14:14 — k6_s1 L1 speedup re-measured (3 runs each)
+
+Follow-up to the single-measurement reading that suggested k6_s1
+got only 1% from L1. Ran 3× at both commits under comparable load.
+
+Pre-L1  (134b71f): 25.68 / 25.28 / 25.47 s   → mean 25.48 ± 0.2 s  (load 3.7)
+With L1 (b5ebaf2): 24.79 / 24.99 / 24.82 s   → mean 24.87 ± 0.1 s  (load 2.9)
+
+Actual speedup: **2-3%** (depending on load correction). The
+earlier single-datapoint 1% was noise, not a pathological case.
+L1's benefit on k6_s1 is smaller than on t1_011 (21%) because
+k6_s1's search tree is deeper and its average canonical-build cost
+is smaller — L1's per-call overhead is a larger fraction of what
+it saves. But still a genuine positive.
