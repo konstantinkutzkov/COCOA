@@ -281,3 +281,26 @@ the 300+ ns I estimated. Locality eats most of the apparent cost.
 
 Still correctness-neutral and structurally cleaner (hash lives
 with the object it describes). Both regression tests pass.
+
+## 2026-04-24 16:00 — L1 hash widened to 128-bit (collision-safe)
+
+Replaced 64-bit IdKey with two-field 128-bit IdKey (hash_lo,
+hash_hi). Both halves computed in the same iteration pass at
+Component construction using independent mixers. Equality compares
+both halves.
+
+Collision probability at 10^9 entries: ~10^-20 (functionally zero).
+The original 64-bit design had ~10^-8 per-run at 10^6 entries —
+small but non-zero.
+
+3-run means at HEAD:
+
+  t1_049_k10_s1  2.43 → 2.46 s   (+0.03, noise)
+  t1_049_k6_s1   24.78 → 24.95 s (+0.17, noise)
+  t1_011         31.46 → 31.37 s (−0.09, noise)
+
+No measurable regression. Extra ~150 ns per Component construction
+amortized to < 1 s on the hardest instance; per-lookup cost
+unchanged.
+
+Both regression tests pass. All counts match.

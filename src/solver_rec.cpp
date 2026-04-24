@@ -716,16 +716,17 @@ mpz_class Solver::solveComponent(Component &comp,
 			static const unordered_map<ClauseOfs, unsigned> empty_removed;
 			const auto &rm = removed_clauses_;
 
-			// L1 fast-path: identity-based lookup. The hash was
-			// computed at component-construction time (in
-			// makeComponentFromState), so this is a field read + one
-			// unordered_map probe.
+			// L1 fast-path: identity-based lookup. The 128-bit hash
+			// was computed at component-construction time in
+			// makeComponentFromState, so this is two field reads +
+			// one unordered_map probe (128-bit equality).
 			IdKey id_key;
 			if (config_.perform_component_caching
 			    && sub->num_variables() >= 3
 			    && !config_.verify_cache
 			    && sub->hasL1Hash()) {
-				id_key.hash = sub->l1Hash();
+				id_key.hash_lo = sub->l1HashLo();
+				id_key.hash_hi = sub->l1HashHi();
 				if (comp_manager_.contentCache().l1_lookup(id_key, sub_count)) {
 					result *= sub_count;
 					delete sub;

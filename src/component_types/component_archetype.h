@@ -162,24 +162,37 @@ public:
     p_new_comp->reserveSpace(stack_size, super_comp().numLongClauses());
     current_comp_for_caching_.clear();
 
-    // Compute the L1 (identity-based) hash while we're already
-    // iterating vars + clauses. Saves recomputing at every
-    // ContentCache L1 lookup. Must stay in sync with the fallback
-    // hash in solver_rec.cpp.
-    auto mix = [](uint64_t x) {
+    // Compute the 128-bit L1 hash in the same iteration pass that
+    // builds the Component. Two independent halves — `lo` uses the
+    // original Murmur finalizer; `hi` uses fresh constants so it is
+    // statistically independent. Together they give a 128-bit key
+    // whose birthday-collision probability at our cache scale is
+    // ~10^-20 — functionally zero — eliminating the need for a
+    // structural equality check at L1 lookup time.
+    auto mix_lo = [](uint64_t x) {
       x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
       x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL;
       x ^= x >> 33;
       return x;
     };
-    uint64_t l1_hash = 0;
+    auto mix_hi = [](uint64_t x) {
+      // Different constants — e.g., the xxHash64 prime used as
+      // multiplier, and a reversed-order mix. Independent of mix_lo.
+      x ^= x >> 31; x *= 0x9fb21c651e98df25ULL;
+      x ^= x >> 27; x *= 0x85ebca77c2b2ae63ULL;
+      x ^= x >> 33;
+      return x;
+    };
+    uint64_t l1_lo = 0, l1_hi = 0;
 
     for (auto v_it = super_comp().varsBegin(); *v_it != varsSENTINEL;  v_it++)
       if (var_seen(*v_it)) { //we have to put a var into our component
         p_new_comp->addVar(*v_it);
         current_comp_for_caching_.addVar(*v_it);
         setVar_in_other_comp(*v_it);
-        l1_hash ^= mix((uint64_t)*v_it);
+        uint64_t id = (uint64_t)*v_it;
+        l1_lo ^= mix_lo(id);
+        l1_hi ^= mix_hi(id);
       }
     p_new_comp->closeVariableData();
     current_comp_for_caching_.closeVariableData();
@@ -190,11 +203,18 @@ public:
            if(!clause_all_lits_active(*it_cl))
              current_comp_for_caching_.addCl(*it_cl);
         setClause_in_other_comp(*it_cl);
-        l1_hash ^= mix((uint64_t)*it_cl ^ 0x9e3779b97f4a7c15ULL);
+        // Namespace-separate clause IDs from var IDs so they can't
+        // collide in either half.
+        uint64_t cid = (uint64_t)*it_cl ^ 0x9e3779b97f4a7c15ULL;
+        l1_lo ^= mix_lo(cid);
+        // Use a different namespace constant for the hi half so
+        // identical clause IDs contribute differently there too.
+        uint64_t cid_hi = (uint64_t)*it_cl ^ 0xbf58476d1ce4e5b9ULL;
+        l1_hi ^= mix_hi(cid_hi);
       }
     p_new_comp->closeClauseData();
     current_comp_for_caching_.closeClauseData();
-    p_new_comp->setL1Hash(l1_hash);
+    p_new_comp->setL1Hash(l1_lo, l1_hi);
     return p_new_comp;
   }
 //  Component *makeComponentFromState(unsigned stack_size) {

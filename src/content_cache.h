@@ -22,29 +22,35 @@
 // L1 (identity-based) cache key: sub-component fingerprint using
 // the CURRENT run's variable and clause IDs (stable within a run).
 //
-// Stores only a single 64-bit hash of the {active var IDs, active
-// clause IDs} multiset — no sorted vectors, no element-by-element
-// equality check. The hash combines each ID via a mixing function
-// and XORs contributions so the result is ORDER-INDEPENDENT (no
-// sort needed at build time).
+// Stores a 128-bit hash (two independent 64-bit halves) of the
+// {active var IDs, active clause IDs} multiset. The two halves are
+// computed in the same iteration pass at Component construction
+// time, using two different mixing constants so the halves are
+// independent.
 //
-// Correctness caveat: at 64 bits and ~10^6 entries, per-lookup
-// false-hit probability is ~10^-8. With strict identity semantics
-// (same IDs → same hash → same count, since the count is a
-// deterministic function of the sub-component), false hits would
-// need two structurally-different sub-components to hash identically
-// — a birthday-type event at 2^32 entries. For our scales this is
-// vanishingly unlikely. Keep in mind if pushing to very large
-// instances (> 10^7 cache entries).
+// Equality compares both halves. No stored clause content, no
+// structural equality check. At 128 bits and < 10^9 entries the
+// birthday-collision probability is ~10^-20, functionally zero —
+// wrong-answer risk from L1 hash collisions is eliminated.
+//
+// Systematic bugs in the canonicalization that would make two
+// genuinely different formulas produce the same hash are NOT
+// caught by this scheme (both halves would collide together).
+// Those are guarded against by regression tests and oracle
+// cross-validation, not by the hash width.
 // ---------------------------------------------------------------
 struct IdKey {
-  uint64_t hash = 0;
+  uint64_t hash_lo = 0;
+  uint64_t hash_hi = 0;
 
-  bool operator==(const IdKey &o) const { return hash == o.hash; }
+  bool operator==(const IdKey &o) const {
+    return hash_lo == o.hash_lo && hash_hi == o.hash_hi;
+  }
 };
 
 struct IdKeyHasher {
-  size_t operator()(const IdKey &k) const { return k.hash; }
+  // unordered_map buckets by this hash; cheap to use the low half.
+  size_t operator()(const IdKey &k) const { return k.hash_lo; }
 };
 
 class ContentCache {

@@ -123,13 +123,18 @@ public:
   const CanonicalKey &canonicalKey() const { return canonical_key_; }
 
   // Stashed L1 (identity-based) hash, computed once at component
-  // construction in makeComponentFromArcheType. Avoids recomputing
-  // the same O(n+m) hash at every L1 cache lookup.
-  uint64_t l1_hash_ = 0;
+  // construction in makeComponentFromState. Two independent 64-bit
+  // halves; together they give a 128-bit hash used as the L1 key.
+  // Avoids recomputing the O(n+m) hash at every cache lookup.
+  uint64_t l1_hash_lo_ = 0;
+  uint64_t l1_hash_hi_ = 0;
   bool has_l1_hash_ = false;
-  void setL1Hash(uint64_t h) { l1_hash_ = h; has_l1_hash_ = true; }
+  void setL1Hash(uint64_t lo, uint64_t hi) {
+    l1_hash_lo_ = lo; l1_hash_hi_ = hi; has_l1_hash_ = true;
+  }
   bool hasL1Hash() const { return has_l1_hash_; }
-  uint64_t l1Hash() const { return l1_hash_; }
+  uint64_t l1HashLo() const { return l1_hash_lo_; }
+  uint64_t l1HashHi() const { return l1_hash_hi_; }
 };
 
 
