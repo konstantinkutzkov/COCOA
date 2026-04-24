@@ -136,6 +136,12 @@ struct SolverConfiguration {
   // trigger BCP immediately and longer clauses rarely do anything on
   // a single assignment.
   double   stage0_length_decay   = 2.0;
+  // If true, `stage0_length_decay` is picked automatically from cheap
+  // structural statistics of the post-preprocess formula (mean active
+  // clause length). Disabled when the user passes -adaptiveAlpha
+  // explicitly — their value wins. Default on; harmless when
+  // -adaptive is not in use.
+  bool     auto_stage0_length_decay = true;
   double   epsilon_2clauses      = 0.1;
   // Components smaller than this many active variables use a
   // Stage-0-only (cheap clause-length-weighted) picker — no probing,

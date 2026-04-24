@@ -274,6 +274,18 @@ private:
 	// further data
 	void HardWireAndCompact();
 
+	// First-cut structural analyzer: picks Stage-0 α from cheap
+	// formula statistics (mean active-clause length after
+	// preprocessing). Runs only when config_.auto_stage0_length_decay
+	// is true and -adaptive is enabled. The user can force a specific
+	// α via -adaptiveAlpha; that flag turns the analyzer off.
+	//
+	// Mapping (first cut; to be refined from measurement):
+	//   mean_len < 3.5  (dense 3-SAT-ish)  →  α = 0.5
+	//   mean_len < 6.0  (medium)            →  α = 1.0
+	//   mean_len ≥ 6.0  (sparse, long cls)  →  α = 2.0
+	void analyzeAndSetHyperparameters();
+
 	// Extract the current formula as a list of DIMACS int vectors,
 	// one per clause. Includes long clauses (size >= 3) and binaries
 	// (emitted once each). Does NOT include unit clauses —

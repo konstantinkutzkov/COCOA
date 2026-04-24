@@ -288,6 +288,83 @@ bool Solver::prepFailedLiteralTest() {
 	return true;
 }
 
+// ---------------------------------------------------------------
+// Structural analyzer: picks Stage-0 α from formula density.
+// Runs post-preprocess, before comp_manager_.initialize() and
+// before search. When auto_stage0_length_decay is off or
+// perform_adaptive_branching is off, this is a no-op.
+// ---------------------------------------------------------------
+void Solver::analyzeAndSetHyperparameters() {
+	if (!config_.perform_adaptive_branching) return;
+	if (!config_.auto_stage0_length_decay)  return;
+
+	// Count active original clauses + sum their lengths.
+	// Binaries are counted via binary_links_ (original_binary_link_count_).
+	// Long clauses are walked from literal_pool_; only those with
+	// offset < original_lit_pool_size_ count (learned clauses don't
+	// exist at this point, but the filter is cheap insurance).
+	unsigned long n_clauses = 0;
+	unsigned long sum_len = 0;
+
+	// Binaries (dedup: each stored twice, once per endpoint).
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		unsigned orig = literal(l).original_binary_link_count_;
+		unsigned idx = 0;
+		for (auto bt = literal(l).binary_links_.begin();
+		     *bt != SENTINEL_LIT; ++bt, ++idx) {
+			if (idx >= orig) break;
+			if (l.raw() < bt->raw()) {  // dedup
+				n_clauses++;
+				sum_len += 2;
+			}
+		}
+	}
+
+	// Long clauses.
+	for (auto it = literal_pool_.begin(); it != literal_pool_.end(); ) {
+		if (*it == SENTINEL_LIT) {
+			if (it + 1 == literal_pool_.end()) break;
+			it += ClauseHeader::overheadInLits() + 1;
+			continue;
+		}
+		ClauseOfs ofs = (ClauseOfs)(it - literal_pool_.begin());
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) break;
+		unsigned len = 0;
+		auto p = it;
+		while (*p != SENTINEL_LIT) { len++; ++p; }
+		if (len >= 2) {
+			n_clauses++;
+			sum_len += len;
+		}
+		it = p;
+	}
+
+	if (n_clauses == 0) return;  // degenerate; leave α as-is
+
+	double mean_len = (double)sum_len / (double)n_clauses;
+
+	double chosen_alpha;
+	const char *bucket;
+	if (mean_len < 3.5) {
+		chosen_alpha = 0.5;
+		bucket = "dense (mean_len<3.5)";
+	} else if (mean_len < 6.0) {
+		chosen_alpha = 1.0;
+		bucket = "medium (3.5≤mean_len<6.0)";
+	} else {
+		chosen_alpha = 2.0;
+		bucket = "sparse (mean_len≥6.0)";
+	}
+
+	config_.stage0_length_decay = chosen_alpha;
+
+	if (!config_.quiet) {
+		std::cerr << "analyzer: " << n_clauses << " active clauses, "
+		          << "mean_len=" << mean_len << " → " << bucket
+		          << " → stage0_length_decay=" << chosen_alpha << "\n";
+	}
+}
+
 void Solver::HardWireAndCompact() {
 	compactClauses();
 	compactVariables();
@@ -449,6 +526,11 @@ void Solver::solve(const string &file_name) {
 				statistics_.getTime();
 
 		violated_clause.reserve(num_variables());
+
+		// Structural analyzer: pick hyperparameters (currently Stage-0 α)
+		// from the post-preprocess formula. No-op unless -adaptive is on
+		// and the user hasn't pinned α via -adaptiveAlpha.
+		analyzeAndSetHyperparameters();
 
 		comp_manager_.initialize(literals_, literal_pool_);
 		comp_manager_.setRemovedClauses(&removed_clauses_);
