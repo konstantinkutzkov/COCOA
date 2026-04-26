@@ -81,27 +81,70 @@ private:
 extern ClauseTypeDictionary g_clause_type_dict;
 
 // ---------------------------------------------------------------
-// Canonical key: hash for fast bucket lookup + normalized clause
-// multiset for structural equality.
+// Diagnostic stats for the anonymization pass.
+// ---------------------------------------------------------------
+struct CanonStats {
+  long long n_calls = 0;
+  long long sum_anchored = 0;
+  long long sum_collision_block_vars = 0;
+  long long sum_orientation_ambiguous_in_blocks = 0;
+  long long calls_with_any_collision = 0;
+  unsigned  max_block_size = 0;
+  // Histogram of largest-block-per-call: bucket = floor(log2(size+1))
+  long long max_block_buckets[16] = {0};  // up to size 32k+
+  // After-iter-2 (if enabled), for direct comparison
+  long long sum_anchored_iter2 = 0;
+  long long sum_collision_block_vars_iter2 = 0;
+  long long calls_with_any_collision_iter2 = 0;
+  unsigned  max_block_size_iter2 = 0;
+  long long max_block_buckets_iter2[16] = {0};
+};
+extern CanonStats g_canon_stats;
+
+// ---------------------------------------------------------------
+// Canonical key: two modes of equality.
 //
-// `clauses` stores, for each active clause, a sorted vector of
-// canonical literals (positive = canonical_id, negative = -canonical_id,
-// 0 = singleton marker). The outer vector is sorted lexicographically.
+// COMPACT (default):
+//   Identity is a 128-bit hash — `hash` (low half) + `hash_hi` (high
+//   half), each a different FNV sum over the canonical clauses. The
+//   `clauses` vector is left empty. `operator==` compares only the
+//   two 64-bit halves. At ~10^-20 birthday-collision probability,
+//   wrong-answer risk from hash collisions is functionally zero.
 //
-// Equality requires hash match AND exact structural match. This closes
-// the systematic-collision hole: two non-isomorphic sub-components
-// that happen to share a 64-bit hash will differ in `clauses` and be
-// correctly distinguished.
+// STRICT (debug-only, opt-in via -l2Strict):
+//   Adds the full normalized clause multiset. `operator==` requires
+//   the hash halves, counts, AND the full multiset to match. Closes
+//   the systematic-collision hole at the cost of larger keys and a
+//   deeper equality check. Useful for forensic debugging: if we see
+//   a miscount under compact mode, flipping to strict tells us
+//   whether the cause was a canonical-form hash collision (strict
+//   fixes it) or a canonicalization fault (strict stays broken).
+//
+// The `compact` flag carries the mode. `CanonicalKeyHash` always
+// buckets on the low half; only equality differs.
 // ---------------------------------------------------------------
 struct CanonicalKey {
-  uint64_t hash = 0;
-  unsigned num_vars = 0;
+  uint64_t hash = 0;            // low 64 bits of the 128-bit L2 hash
+  uint64_t hash_hi = 0;         // high 64 bits
+  unsigned num_vars = 0;        // total active (X_TRI) vars in the sub-component
+  unsigned n_in_clauses = 0;    // active vars actually appearing in at least one canonical clause
   unsigned num_clauses = 0;
-  std::vector<std::vector<int>> clauses;  // normalized multiset
+  bool compact = true;          // true: 128-bit pure hash; false: + clauses
+  std::vector<std::vector<int>> clauses;  // strict mode only
 
   bool operator==(const CanonicalKey &other) const {
     if (hash != other.hash) return false;
-    if (num_vars != other.num_vars) return false;
+    if (hash_hi != other.hash_hi) return false;
+    if (compact && other.compact) return true;
+    // Strict mode: use structural fields only. num_vars (which includes
+    // free vars) is intentionally NOT checked — under the
+    // structural-count cache scheme, two sub-components that share the
+    // same active connected structure but differ only in their count of
+    // free vars (vars not in any clause) MUST collide on this key, so
+    // they share a single cache entry; the per-caller free-var factor
+    // is applied at store/retrieve via 2^(num_vars - n_in_clauses).
+    if (compact != other.compact) return false;
+    if (n_in_clauses != other.n_in_clauses) return false;
     if (num_clauses != other.num_clauses) return false;
     return clauses == other.clauses;
   }
@@ -123,6 +166,22 @@ CanonicalKey buildCanonicalKey(
     const LiteralIndexedVector<TriValue> &literal_values,
     const std::vector<ClauseOfs> &clause_id_to_ofs,
     const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
-    unsigned original_lit_pool_size);
+    unsigned original_lit_pool_size,
+    bool compact = true,
+    bool no_anonymization = false,
+    int wl_iterations = 1,
+    const std::vector<uint64_t> *static_wl_labels = nullptr);
+
+// One-time global WL computation. Runs at preprocessing finish on
+// the post-preprocessed formula's incidence/primal structure. Yields
+// one uint64 label per variable index (1..n_vars; entry 0 unused).
+// Cheap: ~O(num_clauses) per WL iteration, run once for the whole solve.
+std::vector<uint64_t> computeStaticWLLabels(
+    unsigned num_vars,
+    const std::vector<LiteralID> &literal_pool,
+    const LiteralIndexedVector<Literal> &literals,
+    const LiteralIndexedVector<TriValue> &literal_values,
+    unsigned original_lit_pool_size,
+    int n_iters);
 
 #endif /* CANONICAL_KEY_H_ */

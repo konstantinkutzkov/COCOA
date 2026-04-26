@@ -41,6 +41,20 @@ int main(int argc, char *argv[]) {
     cout << "\t -implicantLearn\t enable implicant learning (scoped clauses from BCP traces, opt-in)" << endl;
     cout << "\t -implicantMaxSize n\t max decision literals in a learned implicant (default 4)" << endl;
     cout << "\t -implicantMaxTotal n\t cap on total implicants learned per solve (default 100000)" << endl;
+    cout << "\t -l2Strict\t L2 cache uses strict canonical keys (128-bit hash + full clause multiset for structural equality). Default is compact (128-bit hash only). Debug aid." << endl;
+    cout << "\t -localSearchPreprocess\t enable probe-based #SAT-sound preprocessing (diff-and-lift; opt-in). See docs/probe_preprocessing_plan.md" << endl;
+    cout << "\t -lspMaxProbes n\t max probes per local-search pass (default 1000)" << endl;
+    cout << "\t -lspMaxSize n\t  max σ length for probes (default 4)" << endl;
+    cout << "\t -lspMaxTotal n\t max clauses learned per local-search invocation (default 5000)" << endl;
+    cout << "\t -lspNoR4\t disable definitional elimination (R4) inside the local-search pass" << endl;
+    cout << "\t -lspVerbose\t per-pass stats from the local-search pass" << endl;
+    cout << "\t -checkLearnInvariants\t assert antecedent-in-scope at conflict-analysis and force-set time. Debug aid for t1_011-style order-dependent bugs. Aborts on violation." << endl;
+    cout << "\t -permWatchIndep S\t per-literal independent watch-list shuffle, seed S. Companion to -permWatchSelect for bisection." << endl;
+    cout << "\t -permWatchSelect M\t hex/dec mask: permute literal l only if (l.raw() & M) != 0. Default ~0 (all). Use with -permWatchIndep." << endl;
+    cout << "\t -bruteForceCacheCheck N\t at every cache store/hit, if sub-component has <=N active vars, brute-force verify. Aborts on mismatch. Try N=18." << endl;
+    cout << "\t -bruteForceCacheDumpDir DIR\t dump offending sub-components here when -bruteForceCacheCheck mismatches." << endl;
+    cout << "\t -dumpRecursionDir DIR\t dump SUPER-comp formula at each solveComponent entry where depth<=K. Manifest at DIR/log.txt." << endl;
+    cout << "\t -dumpRecursionMaxDepth K\t cap on dumping (default 0 = root only)." << endl;
     cout << "\t" << endl;
 
     return -1;
@@ -248,6 +262,59 @@ int main(int argc, char *argv[]) {
       i++;
     } else if (strcmp(argv[i], "-verifyCache") == 0) {
       theSolver.config().verify_cache = true;
+    } else if (strcmp(argv[i], "-l2Strict") == 0) {
+      theSolver.config().canonical_compact = false;
+    } else if (strcmp(argv[i], "-l2Compact") == 0) {
+      theSolver.config().canonical_compact = true;
+    } else if (strcmp(argv[i], "-localSearchPreprocess") == 0) {
+      theSolver.config().perform_local_search_preprocess = true;
+    } else if (strcmp(argv[i], "-lspMaxProbes") == 0) {
+      if (i + 1 >= argc) { cout << "-lspMaxProbes needs a number\n"; return -1; }
+      theSolver.config().lsp_max_probes = (unsigned)atoi(argv[i + 1]); i++;
+    } else if (strcmp(argv[i], "-lspMaxSize") == 0) {
+      if (i + 1 >= argc) { cout << "-lspMaxSize needs a number\n"; return -1; }
+      theSolver.config().lsp_max_size = (unsigned)atoi(argv[i + 1]); i++;
+    } else if (strcmp(argv[i], "-lspMaxTotal") == 0) {
+      if (i + 1 >= argc) { cout << "-lspMaxTotal needs a number\n"; return -1; }
+      theSolver.config().lsp_max_total = (unsigned)atoi(argv[i + 1]); i++;
+    } else if (strcmp(argv[i], "-lspNoR4") == 0) {
+      theSolver.config().lsp_no_r4 = true;
+    } else if (strcmp(argv[i], "-lspVerbose") == 0) {
+      theSolver.config().lsp_verbose = true;
+    } else if (strcmp(argv[i], "-checkLearnInvariants") == 0) {
+      theSolver.config().check_learn_invariants = true;
+    } else if (strcmp(argv[i], "-permWatchIndep") == 0) {
+      if (argc <= i + 1) { cout << "-permWatchIndep needs a seed\n"; return -1; }
+      theSolver.config().perm_watch_indep_seed = (unsigned)atoi(argv[i + 1]); i++;
+    } else if (strcmp(argv[i], "-permWatchSelect") == 0) {
+      if (argc <= i + 1) { cout << "-permWatchSelect needs a mask\n"; return -1; }
+      theSolver.config().perm_watch_indep_mask = (unsigned)strtoul(argv[i + 1], nullptr, 0); i++;
+    } else if (strcmp(argv[i], "-bruteForceCacheCheck") == 0) {
+      if (argc <= i + 1) { cout << "-bruteForceCacheCheck needs N\n"; return -1; }
+      theSolver.config().brute_force_cache_check_n = (unsigned)atoi(argv[i + 1]); i++;
+    } else if (strcmp(argv[i], "-bruteForceCacheDumpDir") == 0) {
+      if (argc <= i + 1) { cout << "-bruteForceCacheDumpDir needs a path\n"; return -1; }
+      theSolver.config().brute_force_cache_dump_dir = argv[i + 1]; i++;
+    } else if (strcmp(argv[i], "-dumpRecursionDir") == 0) {
+      if (argc <= i + 1) { cout << "-dumpRecursionDir needs a path\n"; return -1; }
+      theSolver.config().dump_recursion_dir = argv[i + 1]; i++;
+    } else if (strcmp(argv[i], "-dumpRecursionMaxDepth") == 0) {
+      if (argc <= i + 1) { cout << "-dumpRecursionMaxDepth needs K\n"; return -1; }
+      theSolver.config().dump_recursion_max_depth = (unsigned)atoi(argv[i + 1]); i++;
+    } else if (strcmp(argv[i], "-clearCacheAfterFirstRootBranch") == 0) {
+      theSolver.config().clear_cache_after_first_root_branch = true;
+    } else if (strcmp(argv[i], "-disableL1Cache") == 0) {
+      theSolver.config().disable_l1_cache = true;
+    } else if (strcmp(argv[i], "-structuralCountCache") == 0) {
+      theSolver.config().structural_count_cache = true;
+    } else if (strcmp(argv[i], "-noAnonymization") == 0) {
+      theSolver.config().no_anonymization = true;
+    } else if (strcmp(argv[i], "-wlIter") == 0) {
+      if (argc <= i + 1) { cout << "-wlIter needs an int\n"; return -1; }
+      theSolver.config().wl_iterations = atoi(argv[i + 1]); i++;
+    } else if (strcmp(argv[i], "-dumpInProcessLearned") == 0) {
+      if (argc <= i + 1) { cout << "-dumpInProcessLearned needs a path\n"; return -1; }
+      theSolver.config().dump_in_process_learned_path = argv[i + 1]; i++;
     } else if (strcmp(argv[i], "-cs") == 0) {
       if (argc <= i + 1) {
         cout << " wrong parameters" << endl;

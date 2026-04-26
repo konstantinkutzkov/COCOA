@@ -44,6 +44,16 @@ protected:
     var(lit).chain_depth = 0;  // reset cached BCP-proof depth
     literal_values_[lit] = X_TRI;
     literal_values_[lit.neg()] = X_TRI;
+    // Invariant R7: unSet must clear the antecedent so the variable
+    // looks "decision-like" (no antecedent) on subsequent re-set.
+    // hasAntecedent must now report false. Always-on (one bool check
+    // per unSet — cheap).
+    if (variables_[lit.var()].ante.isAnt()) {
+      std::cerr << "\n*** INV_R7_UNSET_DID_NOT_CLEAR_ANTE ***\n"
+                << "  lit=" << lit.toInt() << "\n";
+      std::cerr.flush();
+      std::abort();
+    }
   }
 
   Antecedent & getAntecedent(LiteralID lit) {
@@ -525,6 +535,18 @@ Antecedent Instance::addScopedUIPConflictClause(vector<LiteralID> &literals,
       if (record_scope && !removed_clauses_.empty()) {
         std::set<ClauseOfs> scope;
         for (const auto &p : removed_clauses_) scope.insert(p.first);
+        // Invariant S1: scope size must equal removed_clauses_ size
+        // (no entry should have been silently lost). Always-on check
+        // since cost is ~zero (one comparison per learn call).
+        if (scope.size() != removed_clauses_.size()) {
+          std::cerr << "\n*** INV_S1_SCOPE_LOST_ENTRIES ***\n"
+                    << "  cl_ofs=" << cl_ofs
+                    << "  scope.size()=" << scope.size()
+                    << "  removed_clauses_.size()="
+                    << removed_clauses_.size() << "\n";
+          std::cerr.flush();
+          std::abort();
+        }
         learned_clause_scope_.emplace(cl_ofs, std::move(scope));
       }
       // If removed_clauses_ is empty, scope is {} — unconditionally sound,

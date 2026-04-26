@@ -149,12 +149,12 @@ public:
 	// start), compute the canonical key for the super-component. Used
 	// by test_canonical_key_invariance to verify the key is invariant
 	// under stored-clause-literal permutations.
-	CanonicalKey _computeRootCanonicalKey() {
+	CanonicalKey _computeRootCanonicalKey(bool compact = false) {
 		Component &root = comp_manager_.superComponentOf(stack_.top());
 		return buildCanonicalKey(
 		    root, literal_pool_, literals_, literal_values_,
 		    comp_manager_.getAnalyzer().clauseIdToOfs(),
-		    removed_clauses_, original_lit_pool_size_);
+		    removed_clauses_, original_lit_pool_size_, compact);
 	}
 
 	// Test-support: randomly permute the stored-literal order within
@@ -209,6 +209,7 @@ public:
 	// .rbegin() so shuffling changes the clause traversal order
 	// during BCP.
 	void permuteWatchListsOrder(unsigned seed);
+	void permuteWatchListsIndep(unsigned seed, uint32_t mask);
 
 	// Shuffle occurrence_lists_[l] for every literal l. Component
 	// analysis iterates occurrence_lists_ to find clauses containing
@@ -259,6 +260,18 @@ private:
 
 	ComponentManager comp_manager_ = ComponentManager(config_,
 			statistics_, literal_values_);
+
+	// Static (preprocessing-time) WL labels. Indexed by var ID
+	// (1-based; entry 0 unused). Computed once after preprocessing
+	// and used as a final-step refiner in buildCanonicalKey for vars
+	// still in collision blocks after dynamic WL.
+	std::vector<uint64_t> static_wl_labels_;
+
+	// Structural-count cache diagnostic counters.
+	long long structural_stores_total_ = 0;
+	long long structural_stores_with_free_ = 0;
+	long long structural_hits_total_ = 0;
+	long long structural_hits_with_free_ = 0;
 
 	// the last time conflict clauses have been deleted
 	unsigned long last_ccl_deletion_time_ = 0;
@@ -529,6 +542,28 @@ private:
 	bool dumpSubComponentCnf(class Component &comp, const std::string &path,
 	                         unsigned *out_nvars = nullptr);
 
+	// Brute-force #SAT counter for a sub-component over its currently-
+	// active variables. Iterates over 2^|active_vars| assignments and
+	// counts those satisfying every active original clause + binary
+	// (learned clauses excluded — they're sound consequences of
+	// originals so they don't change #SAT). Returns -1 if the
+	// sub-component is too big to brute-force (above N_max).
+	mpz_class bruteForceCountSubcomp(class Component &sub,
+	                                  unsigned n_max,
+	                                  unsigned *out_active_n = nullptr);
+
+	// Stricter brute-force: enumerate as above but ALSO require each
+	// model to satisfy every in-scope learned clause confined to this
+	// sub-component (i.e., learned clauses whose vars are all active
+	// in `sub` and whose `learnedClauseInScope` returns true now).
+	// Returns the count over (originals AND in-scope-confined learned).
+	// Returns -1 if too big. If `out_n_learned_checked` provided,
+	// outputs the number of learned clauses that participated.
+	mpz_class bruteForceCountSubcompWithLearned(class Component &sub,
+	                                             unsigned n_max,
+	                                             unsigned *out_active_n = nullptr,
+	                                             unsigned *out_n_learned_checked = nullptr);
+
 	// Append one LEARN record to config_.learn_trace_path. Called at the
 	// learn site after addScopedUIPConflictClause / addUIPConflictClause
 	// has produced a non-zero ClauseOfs. Records the new clause's ofs,
@@ -645,6 +680,24 @@ private:
 		// are desynchronised — a BCP state corruption bug.
 		assert(literal_values_[lit.neg()] == X_TRI
 		       && "literal_values_ polarity invariant: opposite must be X_TRI");
+		// Invariant C (gated): if the antecedent is a learned clause,
+		// it must be in scope under the current removed_clauses_ at
+		// the moment we record it. BCP's pre-firing scope check at
+		// solver.cpp:766-768 should already have ensured this; this
+		// guard is a sanity check that BCP itself isn't recording an
+		// out-of-scope antecedent. See solver_config.h::check_learn_invariants.
+		if (config_.check_learn_invariants
+		    && ant.isAClause() && ant.asCl() != NOT_A_CLAUSE
+		    && ant.asCl() >= (ClauseOfs)original_lit_pool_size_
+		    && !learnedClauseInScope(ant.asCl())) {
+			std::cerr << "\n*** INV_C_ANTECEDENT_OUT_OF_SCOPE_AT_FIRING ***\n"
+			          << "  lit=" << lit.toInt()
+			          << "  ante_cl=" << ant.asCl()
+			          << "  current_removed=" << removed_clauses_.size()
+			          << "  DL=" << stack_.get_decision_level() << "\n";
+			std::cerr.flush();
+			std::abort();
+		}
 		var(lit).decision_level = stack_.get_decision_level();
 		var(lit).ante = ant;
 		// Chain-depth caching for fast implicant-filter lookup. Only

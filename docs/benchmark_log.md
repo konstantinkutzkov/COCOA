@@ -282,6 +282,23 @@ the 300+ ns I estimated. Locality eats most of the apparent cost.
 Still correctness-neutral and structurally cleaner (hash lives
 with the object it describes). Both regression tests pass.
 
+## 2026-04-26 16:24 — canonical-key cascade landed (iter-1 dynamic WL → static WL combine → raw-id fallback)
+
+Fix for the t1_011 / super_d3_id8 order-dependent miscount class. Replaces the heuristic var_idx tie-break for collision-block vars with a sound 4-step cascade: iter-1 dynamic WL (always) → iter 2..K dynamic WL (gated on collisions remaining AND iter ≤ K, K = wl_iterations) → static-WL-label combine for residual collision-block vars (gated only on collisions, K-independent) → raw-var-id + RESIDUAL_OFFSET identity fallback with original polarity (gated only on collisions). Default `wl_iterations = 1`. Static labels precomputed once at preprocessing finish via `computeStaticWLLabels`.
+
+Verified counts against ganak ground truth where measured. All test instances retain (or restore) correctness; t1_049 (full) which previously hit the >600 s timeout under `-adaptive` now completes correctly under default cascade flags.
+
+| Timestamp | Commit | Compile flags | Solver flags | Instance | Time | Env / notes |
+|---|---|---|---|---|---|---|
+| 2026-04-26 16:24 | `5788427` (dirty: cascade WIP) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_011.cnf (md5 `4be5e40e8a1660b130a690981ebdea88`) | 13.71 s | load avg 1.72; cascade auto-fires; count = `536870912306` (matches ganak 111.6 s; 8× faster). |
+| 2026-04-26 16:24 | `5788427` (dirty: cascade WIP) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -permWatchIndep 7 -permWatchSelect 0x10` | /tmp/t1_011.cnf (md5 `4be5e40e8a1660b130a690981ebdea88`) | 15.65 s | load avg 1.72; original perm bug trigger now correct under cascade; count = `536870912306` (matches ganak). |
+| 2026-04-26 16:24 | `5788427` (dirty: cascade WIP) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_065.cnf (md5 `44068991f8280094f30665351898ac1e`) | 0.15 s | load avg 2.65; count = `37778931862957161709568` (matches historical 0.0163 s entry); ~9× wall-time slowdown vs hist on this sub-20ms instance attributable to cascade overhead floor (470 cascade calls, 85% with collisions). Absolute cost ≈ 135 ms — negligible at any meaningful instance scale. |
+| 2026-04-26 16:24 | `5788427` (dirty: cascade WIP) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_071.cnf (md5 `e88123bdbf87205e36a681f2a3111e7c`) | 0.13 s | load avg 2.65; count = `456295684783698132731653351484293780287639045166077370506304563500761788632102076272640` (matches hist); 3.6× FASTER than hist (0.471 s). 17,238 cascade calls, only 25% with collisions, max block 7 — cascade mostly skipped, speedup likely from unrelated improvements landed in the interim. |
+| 2026-04-26 16:24 | `5788427` (dirty: cascade WIP) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_049.cnf (md5 `05173bb86a04414d86c661007d00accd`) | 325.94 s | load avg 2.65; count = `8695763196077742` (matches ganak 386.77 s; 16% faster). Previously TIMED OUT > 600 s with `-adaptive` (2026-04-24 10:59 row). Default cascade now completes. 94.9 M cascade calls, 40% with collisions, max block 16. |
+| 2026-04-26 16:24 | `5788427` (dirty: cascade WIP) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -permWatchIndep 7 -permWatchSelect 0x10` | /tmp/dump_bl23/super_d3_id8.cnf (sub-component dump from t1_011 chain; 2040v/11637c) | 2.09 s | load avg 1.72; count = `26843545568` (matches ganak); without the cascade was `26575110112` (off by exactly −2^28). The original perm reproducer for this entire investigation. |
+
+---
+
 ## 2026-04-24 16:00 — L1 hash widened to 128-bit (collision-safe)
 
 Replaced 64-bit IdKey with two-field 128-bit IdKey (hash_lo,

@@ -206,6 +206,28 @@ that are otherwise helping.
 
 **Detection**: n/a — just leave at 4 unless explicitly diagnosing.
 
+### `-wlIter K` (max WL refinement iterations in canonical-key cascade)
+
+**What**: caps how many Weisfeiler-Leman refinement passes are attempted in `buildCanonicalKey` before the cascade falls through to the static-WL-label combine and the raw-id identity fallback. The cascade always runs end-to-end on collision blocks regardless of `K`; this flag only bounds how much sharpening of dynamic WL we attempt before moving on.
+
+Cascade structure (always on):
+1. iter 1 (clause-type signature) — always.
+2. iter 2..K (neighbor-aggregation WL) — gated on collisions remaining AND `iter ≤ K`.
+3. static-WL-label combine — gated only on collisions remaining (independent of K).
+4. raw-id (shifted) identity fallback for residuals — gated only on collisions remaining.
+
+**When higher K helps**: in principle, formulas where dynamic WL needs more rounds to discriminate vars but the resulting splits open useful cache merges that the static-label step alone misses. **Not yet observed empirically** — on super_d3_id8 (the only measured pathological instance so far), `K=2` makes the run slower than `K=1` despite producing a sharper key. Reason: the sharper key creates more distinct cache buckets, so the search makes more decisions, dominating the per-call refinement saving.
+
+**When higher K hurts**: any instance where the extra dynamic WL pass produces too-discriminative keys → more cache misses → more search work. Magnitude: measured 2.14 s (`K=1`) vs 4.02 s (`K=2`) on super_d3_id8 perm.
+
+**When the cascade itself helps (K independent)**: any instance where iter 1's heuristic var_idx tie-break would produce false-positive cache hits across non-isomorphic sub-components. Confirmed: super_d3_id8 perm gives 26,575,110,112 (wrong) without the cascade, 26,843,545,568 (correct) with it.
+
+**Detection**: run with `K=1` first. If correctness is the question, the cascade is unconditionally on, so `K=1` is safe by default. If runtime matters and the instance has many large iter-1 collision blocks (CANON_STATS shows `max_block_size > ~30` and `calls_with_any_collision/calls > 0.9`), `K=2` is worth a try in the portfolio.
+
+**Status**: hyperparameter candidate for portfolio tuning. Default `K=1`. The tuning question is per-class: it's plausible (untested) that some sparse formulas with rare but very large WL-confounded blocks benefit from `K=2`, while pathological symmetric formulas like super_d3_id8 prefer `K=1`.
+
+**Cost when `K=1` and iter 1 fully anchors**: zero extra work — steps 2–4 are gated and skipped entirely. The cascade only pays its cost on calls where iter 1 leaves a collision block.
+
 ### Preprocessing rules (`-noSubsumption`, `-noPureDup`, `-noSSR`)
 
 **What**: turn off individual preprocessing rules.
@@ -371,7 +393,11 @@ for much larger instances it could dominate. Proposal: make
 analyzer cost proportional to time budget — if budget < 10 s skip
 structural probing entirely.
 
-### Q8: Signal robustness
+### Q8: When to override default `-wlIter 1`?
+
+The cascade with `K=1` is correct on the only known pathological instance (super_d3_id8 perm). `K=2` was measured to be **slower** there, not faster. Open: are there instance classes where the extra dynamic WL pass yields fewer-enough cache misses to net out positive? Hypothesis: very large formulas with many WL-resolvable-but-not-with-iter-1 collision blocks. Needs sweep across MC2025 to confirm or refute. Until then, leave at `K=1`.
+
+### Q9: Signal robustness
 
 Some of the features we're considering (e.g., binary fraction) could
 be manipulated by trivial syntactic changes to the formula that

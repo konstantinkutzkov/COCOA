@@ -6,6 +6,8 @@
  */
 #include "solver.h"
 #include "preprocessor.h"
+#include "probe_preprocessor.h"
+#include "canonical_key.h"
 #include <deque>
 #include <cmath>
 #include <fstream>
@@ -109,6 +111,58 @@ bool Solver::simplePreProcess() {
 		// original unit-clause path so the solver's state after this
 		// point is exactly what it would be if we had parsed a
 		// freshly-simplified CNF file.
+		if (!unit_clauses_.empty()) {
+			for (auto lit : unit_clauses_)
+				setLiteralIfFree(lit);
+			if (!BCP(0)) return false;
+			HardWireAndCompact();
+		}
+	}
+
+	// Local-search probe-based preprocessing (opt-in). Runs after the
+	// standard preprocessor; uses A internally for mop-up. Eliminated
+	// variables are pinned via forced units so the downstream solver's
+	// component-analysis count is correct without any solver-side
+	// variable-set bookkeeping.
+	if (succeeded && config_.perform_local_search_preprocess) {
+		auto extracted = extractFormulaAsDimacs();
+		LocalSearchPreprocessConfig lcfg;
+		lcfg.max_probes = config_.lsp_max_probes;
+		lcfg.max_size   = config_.lsp_max_size;
+		lcfg.max_total  = config_.lsp_max_total;
+		lcfg.enable_r4  = !config_.lsp_no_r4;
+		lcfg.budget_ms  = config_.preprocess_time_budget_ms;
+		lcfg.verbose    = config_.lsp_verbose || config_.preprocess_verbose;
+		lcfg.preprocessor_cfg.enable_subsumption    = config_.perform_preprocess_subsumption;
+		lcfg.preprocessor_cfg.enable_pure_duplicate = config_.perform_preprocess_pure_duplicate;
+		lcfg.preprocessor_cfg.enable_ssr            = config_.perform_preprocess_ssr;
+		lcfg.preprocessor_cfg.time_budget_ms        = config_.preprocess_time_budget_ms;
+		lcfg.preprocessor_cfg.verbose               = false;
+
+		LocalSearchPreprocessResult lsp_out =
+		    runLocalSearchPreprocess(num_variables(), extracted, lcfg);
+
+		if (config_.lsp_verbose || config_.preprocess_verbose || !config_.quiet) {
+			std::cerr << "lsp: passes=" << lsp_out.passes
+			          << " probes=" << lsp_out.num_probes_run
+			          << " units=" << lsp_out.num_units_added
+			          << " subsume=" << lsp_out.num_subsumptions
+			          << " ssr=" << lsp_out.num_ssr_strengthenings
+			          << " elim=" << lsp_out.num_eliminations
+			          << " elapsed_ms=" << lsp_out.elapsed_ms
+			          << " unsat=" << lsp_out.unsat << "\n";
+		}
+
+		if (lsp_out.unsat) return false;
+
+		// Convert back to a PreprocessorResult shape and rebuild.
+		PreprocessorResult final_out;
+		final_out.clauses      = lsp_out.clauses;
+		final_out.forced_units = lsp_out.forced_units;
+		final_out.num_vars     = num_variables();
+		final_out.unsat        = false;
+
+		rebuildFromPreprocessedCNF(final_out);
 		if (!unit_clauses_.empty()) {
 			for (auto lit : unit_clauses_)
 				setLiteralIfFree(lit);
@@ -427,6 +481,21 @@ void Solver::solve(const string &file_name) {
 		verifyStateIntegrity("post-simplePreProcess");
 		verifyPostPreprocessCleanSlate("post-simplePreProcess");
 
+		// Static WL labels for the canonical-key cascade. Computed
+		// once on the post-preprocessing global formula. Used in
+		// buildCanonicalKey to refine residual collision blocks
+		// after dynamic WL settles. Cheap (~O(num_clauses) per iter,
+		// 1 iter by default) and amortized across all later cache builds.
+		// Always computed: the cascade fires whenever dynamic WL leaves
+		// collisions, regardless of the wl_iterations cap on dynamic WL.
+		static_wl_labels_ = computeStaticWLLabels(
+		    num_variables(),
+		    literal_pool_,
+		    literals_,
+		    literal_values_,
+		    original_lit_pool_size_,
+		    /*n_iters=*/1);
+
 		// Diagnostic: dump all binaries from binary_links_ after preprocessing
 		// so we can externally verify each is F-entailed. Disabled unless
 		// the user provides -dumpBinaries <path>.
@@ -457,6 +526,14 @@ void Solver::solve(const string &file_name) {
 			std::cerr << "order-probe: permuteWatchListsOrder(seed="
 			          << config_.perm_watch_lists_seed << ")\n";
 			permuteWatchListsOrder(config_.perm_watch_lists_seed);
+		}
+		if (config_.perm_watch_indep_seed != 0) {
+			std::cerr << "order-probe: permuteWatchListsIndep(seed="
+			          << config_.perm_watch_indep_seed
+			          << " mask=0x" << std::hex
+			          << config_.perm_watch_indep_mask << std::dec << ")\n";
+			permuteWatchListsIndep(config_.perm_watch_indep_seed,
+			                       config_.perm_watch_indep_mask);
 		}
 		if (config_.perm_occ_lists_seed != 0) {
 			std::cerr << "order-probe: permuteOccurrenceListsOrder(seed="
@@ -495,6 +572,7 @@ void Solver::solve(const string &file_name) {
 		if (config_.perm_clause_lits_seed != 0
 		    || config_.perm_binary_links_seed != 0
 		    || config_.perm_watch_lists_seed != 0
+		    || config_.perm_watch_indep_seed != 0
 		    || config_.perm_occ_lists_seed != 0
 		    || config_.sort_binary_links
 		    || config_.sort_watch_lists
@@ -650,6 +728,47 @@ void Solver::solve(const string &file_name) {
 			     << (reactive_metis_bucket_total_us_[i]
 			         / (double)reactive_metis_bucket_count_[i])
 			     << " us mean" << endl;
+		}
+	}
+	if (config_.structural_count_cache) {
+		std::cerr << "STRUCTURAL_CACHE_STATS"
+		          << " stores=" << structural_stores_total_
+		          << " stores_with_free=" << structural_stores_with_free_
+		          << " hits=" << structural_hits_total_
+		          << " hits_with_free=" << structural_hits_with_free_ << "\n";
+	}
+	{
+		std::cerr << "CANON_STATS"
+		          << " calls=" << g_canon_stats.n_calls
+		          << " calls_with_any_collision=" << g_canon_stats.calls_with_any_collision
+		          << " sum_anchored=" << g_canon_stats.sum_anchored
+		          << " sum_collision_vars=" << g_canon_stats.sum_collision_block_vars
+		          << " sum_orient_ambiguous=" << g_canon_stats.sum_orientation_ambiguous_in_blocks
+		          << " max_block_size=" << g_canon_stats.max_block_size
+		          << "\n";
+		std::cerr << "CANON_MAX_BLOCK_HISTOGRAM";
+		for (int b = 0; b < 16; b++) {
+			if (g_canon_stats.max_block_buckets[b] == 0) continue;
+			std::cerr << " [" << (1u << b) << ".."
+			          << ((b == 15) ? "inf" : std::to_string((1u << (b+1)) - 1))
+			          << "]=" << g_canon_stats.max_block_buckets[b];
+		}
+		std::cerr << "\n";
+		if (config_.wl_iterations >= 2) {
+			std::cerr << "CANON_STATS_ITER2"
+			          << " calls_with_any_collision=" << g_canon_stats.calls_with_any_collision_iter2
+			          << " sum_anchored=" << g_canon_stats.sum_anchored_iter2
+			          << " sum_collision_vars=" << g_canon_stats.sum_collision_block_vars_iter2
+			          << " max_block_size=" << g_canon_stats.max_block_size_iter2
+			          << "\n";
+			std::cerr << "CANON_MAX_BLOCK_HISTOGRAM_ITER2";
+			for (int b = 0; b < 16; b++) {
+				if (g_canon_stats.max_block_buckets_iter2[b] == 0) continue;
+				std::cerr << " [" << (1u << b) << ".."
+				          << ((b == 15) ? "inf" : std::to_string((1u << (b+1)) - 1))
+				          << "]=" << g_canon_stats.max_block_buckets_iter2[b];
+			}
+			std::cerr << "\n";
 		}
 	}
 }
@@ -1624,11 +1743,47 @@ void Solver::recordLastUIPCauses() {
 
 		//cout << "{" << curr_lit.toInt() << "}";
 		if (getAntecedent(curr_lit).isAClause()) {
-			updateActivities(getAntecedent(curr_lit).asCl());
-			assert(curr_lit == *beginOf(getAntecedent(curr_lit).asCl()));
+			ClauseOfs ante_cl = getAntecedent(curr_lit).asCl();
+			// Invariant A (gated): if the antecedent is a learned clause,
+			// it must be in scope under the CURRENT removed_clauses_.
+			// At firing time the BCP scope check ensured in-scope; this
+			// guard catches the case where removed_clauses_ has grown
+			// (via clause branching) since the firing, making the
+			// antecedent invalid for the current resolution step.
+			if (config_.check_learn_invariants
+			    && ante_cl >= (ClauseOfs)original_lit_pool_size_
+			    && !learnedClauseInScope(ante_cl)) {
+				std::cerr << "\n*** INV_A_ANTECEDENT_OUT_OF_SCOPE_AT_ANALYSIS ***\n"
+				          << "  curr_lit=" << curr_lit.toInt()
+				          << "  ante_cl=" << ante_cl
+				          << "  curr_lit_DL=" << var(curr_lit).decision_level
+				          << "  current_DL=" << DL
+				          << "  current_removed=" << removed_clauses_.size()
+				          << "\n";
+				std::cerr.flush();
+				std::abort();
+			}
+			updateActivities(ante_cl);
+			assert(curr_lit == *beginOf(ante_cl));
 
-			for (auto it = beginOf(getAntecedent(curr_lit).asCl()) + 1;
+			for (auto it = beginOf(ante_cl) + 1;
 					*it != SENTINEL_CL; it++) {
+				// Invariant B (gated): the antecedent's other literals
+				// must be F_TRI right now. They were F_TRI at firing
+				// time; if any is no longer F_TRI, the trail's
+				// monotonicity invariant has been violated.
+				if (config_.check_learn_invariants
+				    && it->var() != curr_lit.var()
+				    && literal_values_[*it] != F_TRI) {
+					std::cerr << "\n*** INV_B_ANTECEDENT_OTHER_LIT_NOT_FALSE ***\n"
+					          << "  curr_lit=" << curr_lit.toInt()
+					          << "  ante_cl=" << ante_cl
+					          << "  other_lit=" << it->toInt()
+					          << "  other_lit_value=" << (int)literal_values_[*it]
+					          << " (expected F_TRI=" << (int)F_TRI << ")\n";
+					std::cerr.flush();
+					std::abort();
+				}
 				if (seen[it->var()] || (var(*it).decision_level == 0)
 						|| existsUnitClauseOf(it->var()))
 					continue;
@@ -1640,6 +1795,18 @@ void Solver::recordLastUIPCauses() {
 			}
 		} else {
 			LiteralID alit = getAntecedent(curr_lit).asLit();
+			// Invariant B (binary case): the falsified partner literal
+			// must be F_TRI right now.
+			if (config_.check_learn_invariants
+			    && literal_values_[alit] != F_TRI) {
+				std::cerr << "\n*** INV_B_BIN_ANTECEDENT_NOT_FALSE ***\n"
+				          << "  curr_lit=" << curr_lit.toInt()
+				          << "  partner=" << alit.toInt()
+				          << "  partner_value=" << (int)literal_values_[alit]
+				          << " (expected F_TRI=" << (int)F_TRI << ")\n";
+				std::cerr.flush();
+				std::abort();
+			}
 			literal(alit).increaseActivity();
 			literal(curr_lit).increaseActivity();
 			if (!seen[alit.var()] && !(var(alit).decision_level == 0)
@@ -2547,6 +2714,230 @@ bool Solver::dumpSubComponentCnf(Component &comp, const std::string &path,
 	return true;
 }
 
+// Brute-force #SAT count over the sub-component's currently-active
+// variables. Active = X_TRI under the current trail. Active clauses
+// = original (not learned) clauses that are not removed and not
+// satisfied by the trail. Original binary clauses included.
+//
+// Returns -1 (mpz_class) when |active vars| > n_max (too big to brute
+// force). Returns 0 if any active clause has all literals F_TRI
+// (already-falsified clause means UNSAT under the trail).
+//
+// Learned clauses are EXCLUDED. Rationale: a sound learned clause is
+// a logical consequence of the original formula, so adding it
+// doesn't change #SAT — brute force without it gives the same
+// answer as with. If the solver uses a learned clause UNSOUNDLY
+// (somehow restricting the model space wrongly), the comparison vs
+// brute force will catch the resulting count mismatch.
+mpz_class Solver::bruteForceCountSubcomp(Component &sub,
+                                          unsigned n_max,
+                                          unsigned *out_active_n) {
+	mpz_class neg_one = -1;
+
+	// Collect active vars in order.
+	std::vector<unsigned> avars;
+	for (auto vt = sub.varsBegin(); *vt != varsSENTINEL; vt++)
+		if (isActive(LiteralID(*vt, true))) avars.push_back(*vt);
+	if (out_active_n) *out_active_n = (unsigned)avars.size();
+	if (avars.size() > n_max) return neg_one;
+
+	// Map original var ID -> bit position.
+	std::unordered_map<unsigned, unsigned> var_to_bit;
+	var_to_bit.reserve(avars.size() * 2);
+	for (unsigned i = 0; i < avars.size(); i++) var_to_bit[avars[i]] = i;
+
+	// Collect active long clauses (originals, not removed, not satisfied),
+	// each as a list of (bit, target) pairs over its currently-active lits.
+	struct ClauseLits { std::vector<std::pair<unsigned,bool>> lits; };
+	std::vector<ClauseLits> clauses;
+	clauses.reserve(64);
+	const auto &cmap = comp_manager_.getAnalyzer().clauseIdToOfs();
+	for (auto it = sub.clsBegin(); *it != clsSENTINEL; it++) {
+		ClauseOfs ofs = cmap[*it];
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+		if (removed_clauses_.count(ofs)) continue;
+		bool satisfied = false;
+		ClauseLits cl;
+		for (auto lt = literal_pool_.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
+			if (literal_values_[*lt] == T_TRI) { satisfied = true; break; }
+			if (literal_values_[*lt] != X_TRI) continue;     // F_TRI -> drop lit
+			auto vi = var_to_bit.find(lt->var());
+			if (vi == var_to_bit.end()) continue;
+			cl.lits.push_back({vi->second, lt->sign()});
+		}
+		if (satisfied) continue;
+		if (cl.lits.empty()) return 0;     // unsatisfiable already
+		clauses.push_back(std::move(cl));
+	}
+
+	// Original binary clauses among active vars.
+	for (unsigned v : avars) {
+		for (int s = 0; s <= 1; s++) {
+			LiteralID lit(v, s == 1);
+			if (literal_values_[lit] != X_TRI) continue;
+			unsigned orig_count = literals_[lit].original_binary_link_count_;
+			unsigned idx = 0;
+			for (auto bt = literals_[lit].binary_links_.begin();
+			     *bt != SENTINEL_LIT; bt++, idx++) {
+				if (idx >= orig_count) break;
+				unsigned other_v = bt->var();
+				if (other_v <= v) continue;
+				if (literal_values_[*bt] == T_TRI) continue;
+				if (literal_values_[*bt] == F_TRI) continue;
+				auto vi = var_to_bit.find(other_v);
+				if (vi == var_to_bit.end()) continue;
+				ClauseLits cl;
+				cl.lits.push_back({var_to_bit[v], lit.sign()});
+				cl.lits.push_back({vi->second, bt->sign()});
+				clauses.push_back(std::move(cl));
+			}
+		}
+	}
+
+	// Enumerate.
+	mpz_class count = 0;
+	const unsigned long total = 1UL << avars.size();
+	for (unsigned long m = 0; m < total; m++) {
+		bool sat = true;
+		for (const auto &cl : clauses) {
+			bool csat = false;
+			for (const auto &lp : cl.lits) {
+				bool val = (m >> lp.first) & 1UL;
+				if (val == lp.second) { csat = true; break; }
+			}
+			if (!csat) { sat = false; break; }
+		}
+		if (sat) ++count;
+	}
+	return count;
+}
+
+// Stricter version: enumerate as above but also require each model to
+// satisfy every IN-SCOPE LEARNED clause confined to this sub-component.
+// If a learned clause is sound for the current scope, this should
+// return the same count as bruteForceCountSubcomp (since sound learned
+// clauses are entailed by originals and don't change #SAT). If the
+// counts differ, an unsound learned clause is restricting the model
+// space.
+mpz_class Solver::bruteForceCountSubcompWithLearned(Component &sub,
+                                                     unsigned n_max,
+                                                     unsigned *out_active_n,
+                                                     unsigned *out_n_learned_checked) {
+	mpz_class neg_one = -1;
+
+	std::vector<unsigned> avars;
+	for (auto vt = sub.varsBegin(); *vt != varsSENTINEL; vt++)
+		if (isActive(LiteralID(*vt, true))) avars.push_back(*vt);
+	if (out_active_n) *out_active_n = (unsigned)avars.size();
+	if (avars.size() > n_max) return neg_one;
+
+	std::unordered_map<unsigned, unsigned> var_to_bit;
+	var_to_bit.reserve(avars.size() * 2);
+	for (unsigned i = 0; i < avars.size(); i++) var_to_bit[avars[i]] = i;
+	std::set<unsigned> avar_set(avars.begin(), avars.end());
+
+	struct ClauseLits { std::vector<std::pair<unsigned,bool>> lits; };
+	std::vector<ClauseLits> clauses;
+	clauses.reserve(64);
+
+	// Active originals + binaries (same as the simpler version).
+	const auto &cmap = comp_manager_.getAnalyzer().clauseIdToOfs();
+	for (auto it = sub.clsBegin(); *it != clsSENTINEL; it++) {
+		ClauseOfs ofs = cmap[*it];
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+		if (removed_clauses_.count(ofs)) continue;
+		bool satisfied = false;
+		ClauseLits cl;
+		for (auto lt = literal_pool_.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
+			if (literal_values_[*lt] == T_TRI) { satisfied = true; break; }
+			if (literal_values_[*lt] != X_TRI) continue;
+			auto vi = var_to_bit.find(lt->var());
+			if (vi == var_to_bit.end()) continue;
+			cl.lits.push_back({vi->second, lt->sign()});
+		}
+		if (satisfied) continue;
+		if (cl.lits.empty()) return 0;
+		clauses.push_back(std::move(cl));
+	}
+	for (unsigned v : avars) {
+		for (int s = 0; s <= 1; s++) {
+			LiteralID lit(v, s == 1);
+			if (literal_values_[lit] != X_TRI) continue;
+			unsigned orig_count = literals_[lit].original_binary_link_count_;
+			unsigned idx = 0;
+			for (auto bt = literals_[lit].binary_links_.begin();
+			     *bt != SENTINEL_LIT; bt++, idx++) {
+				if (idx >= orig_count) break;
+				unsigned other_v = bt->var();
+				if (other_v <= v) continue;
+				if (literal_values_[*bt] == T_TRI) continue;
+				if (literal_values_[*bt] == F_TRI) continue;
+				auto vi = var_to_bit.find(other_v);
+				if (vi == var_to_bit.end()) continue;
+				ClauseLits cl;
+				cl.lits.push_back({var_to_bit[v], lit.sign()});
+				cl.lits.push_back({vi->second, bt->sign()});
+				clauses.push_back(std::move(cl));
+			}
+		}
+	}
+
+	// IN-SCOPE LEARNED clauses confined to this sub-component.
+	// Walk the literal pool past original_lit_pool_size_; for each
+	// learned clause: check (a) currently in-scope, (b) all active
+	// vars belong to this sub-component (fully confined), (c) not
+	// satisfied. If yes, project to active lits and add.
+	unsigned n_learned_added = 0;
+	for (auto it = literal_pool_.begin() + original_lit_pool_size_;
+	     it != literal_pool_.end(); ) {
+		if (*it == SENTINEL_LIT) {
+			if (it + 1 == literal_pool_.end()) break;
+			it += ClauseHeader::overheadInLits() + 1;
+			continue;
+		}
+		ClauseOfs ofs = (ClauseOfs)(it - literal_pool_.begin());
+		// Walk the clause to gather lits.
+		auto end_it = it;
+		while (*end_it != SENTINEL_LIT) end_it++;
+		// Check in-scope.
+		if (!learnedClauseInScope(ofs)) { it = end_it; continue; }
+		// Check confinement and build active lit list.
+		bool satisfied = false;
+		bool confined = true;
+		ClauseLits cl;
+		for (auto lt = it; lt != end_it; lt++) {
+			if (literal_values_[*lt] == T_TRI) { satisfied = true; break; }
+			if (literal_values_[*lt] != X_TRI) continue;     // F_TRI -> drop lit
+			if (!avar_set.count(lt->var())) { confined = false; break; }
+			auto vi = var_to_bit.find(lt->var());
+			if (vi == var_to_bit.end()) { confined = false; break; }
+			cl.lits.push_back({vi->second, lt->sign()});
+		}
+		it = end_it;
+		if (satisfied || !confined) continue;
+		if (cl.lits.empty()) return 0;
+		clauses.push_back(std::move(cl));
+		n_learned_added++;
+	}
+	if (out_n_learned_checked) *out_n_learned_checked = n_learned_added;
+
+	mpz_class count = 0;
+	const unsigned long total = 1UL << avars.size();
+	for (unsigned long m = 0; m < total; m++) {
+		bool sat = true;
+		for (const auto &cl : clauses) {
+			bool csat = false;
+			for (const auto &lp : cl.lits) {
+				bool val = (m >> lp.first) & 1UL;
+				if (val == lp.second) { csat = true; break; }
+			}
+			if (!csat) { sat = false; break; }
+		}
+		if (sat) ++count;
+	}
+	return count;
+}
+
 // Explicit clean-slate reset for everything the search phase will
 // accumulate into. Called at the tail of HardWireAndCompact. See
 // verifyPostPreprocessCleanSlate for the invariant this establishes.
@@ -2633,6 +3024,22 @@ void Solver::verifyPostPreprocessCleanSlate(const char *label) {
 			fire("var " + std::to_string(v)
 			     + " has chain_depth="
 			     + std::to_string((int)variables_[v].chain_depth));
+	}
+
+	// Invariant R5: at search start, every literal's binary_links_
+	// must contain ONLY original binaries — no learned binaries
+	// should have leaked in. Size = original_binary_link_count_ + 1
+	// (the +1 is for the trailing SENTINEL_LIT terminator).
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		const auto &bl = literal(l).binary_links_;
+		unsigned expected = literal(l).original_binary_link_count_ + 1;
+		if (bl.size() != expected) {
+			fire("INV_R5: lit " + std::to_string(l.toInt())
+			     + " binary_links_.size()=" + std::to_string(bl.size())
+			     + " expected=" + std::to_string(expected)
+			     + " (original_binary_link_count_="
+			     + std::to_string(literal(l).original_binary_link_count_) + ")");
+		}
 	}
 }
 
@@ -2722,6 +3129,33 @@ void Solver::permuteWatchListsOrder(unsigned seed) {
 		// Layout: [SENTINEL_CL, e1, e2, ..., e_k]. Preserve the leading
 		// sentinel by shuffling [begin + 1, end).
 		if (wl.size() <= 2) continue;
+		std::shuffle(wl.begin() + 1, wl.end(), rng);
+	}
+}
+
+// Independent per-literal watch-list shuffling. Each literal's watch
+// list is shuffled by its own rng seeded by hash(seed, l.raw()), so
+// the permutation applied to literal A is independent of whether
+// literal B was permuted. This is the prerequisite for the
+// bisection diagnostic: we can selectively apply a subset of
+// per-literal permutations without altering what permutation the
+// others would receive.
+//
+// `mask` filters which literals are permuted: literal l is permuted
+// iff (l.raw() & mask) != 0. Pass mask = ~0u (all bits set) to
+// permute all literals.
+void Solver::permuteWatchListsIndep(unsigned seed, uint32_t mask) {
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		auto &wl = literal(l).watch_list_;
+		if (wl.size() <= 2) continue;
+		if ((l.raw() & mask) == 0) continue;
+		// Per-literal seed = mix(seed, l.raw()) via splitmix64-style.
+		uint64_t s = ((uint64_t)seed << 32) ^ (uint64_t)l.raw()
+		             ^ 0x9E3779B97F4A7C15ULL;
+		s ^= s >> 30; s *= 0xBF58476D1CE4E5B9ULL;
+		s ^= s >> 27; s *= 0x94D049BB133111EBULL;
+		s ^= s >> 31;
+		std::mt19937 rng((uint32_t)(s ^ (s >> 32)));
 		std::shuffle(wl.begin() + 1, wl.end(), rng);
 	}
 }

@@ -560,6 +560,32 @@ mpz_class Solver::solveComponent(Component &comp,
 	if (stopwatch_.timeBoundBroken())
 		return 0;
 
+	// Top-branch CNF dump: at every solveComponent entry where
+	// depth <= dump_recursion_max_depth, snapshot the SUPER-comp
+	// formula state and write to disk. Manifest at log.txt records
+	// (id, depth, nvars, path). Diagnostic tool: re-run ganak/our-solver
+	// on each dump to find the smallest sub-formula where counts
+	// diverge.
+	if (!config_.dump_recursion_dir.empty()
+	    && (unsigned)depth <= config_.dump_recursion_max_depth) {
+		static long long rec_dump_id = 0;
+		long long my_id = rec_dump_id++;
+		std::string path = config_.dump_recursion_dir
+		                 + "/super_d" + std::to_string(depth)
+		                 + "_id" + std::to_string(my_id) + ".cnf";
+		unsigned dump_n = 0;
+		if (dumpSubComponentCnf(comp, path, &dump_n)) {
+			std::ofstream log(config_.dump_recursion_dir + "/log.txt",
+			                  std::ios::app);
+			log << "id=" << my_id
+			    << " depth=" << depth
+			    << " nvars=" << dump_n
+			    << " removed_clauses_size=" << removed_clauses_.size()
+			    << " trail_size=" << literal_stack_.size()
+			    << " path=" << path << "\n";
+		}
+	}
+
 	static int rec_depth = 0;
 	static long long call_count = 0;
 	call_count++;
@@ -724,10 +750,36 @@ mpz_class Solver::solveComponent(Component &comp,
 			if (config_.perform_component_caching
 			    && sub->num_variables() >= 3
 			    && !config_.verify_cache
+			    && !config_.disable_l1_cache
 			    && sub->hasL1Hash()) {
 				id_key.hash_lo = sub->l1HashLo();
 				id_key.hash_hi = sub->l1HashHi();
 				if (comp_manager_.contentCache().l1_lookup(id_key, sub_count)) {
+					// Brute-force check at L1-hit time.
+					if (config_.brute_force_cache_check_n > 0) {
+						unsigned n_active = 0;
+						mpz_class brute = bruteForceCountSubcomp(
+						    *sub, config_.brute_force_cache_check_n, &n_active);
+						if (brute >= 0 && brute != sub_count) {
+							std::cerr << "\n*** BRUTE_FORCE_L1_HIT_MISMATCH ***\n"
+							          << "  n_active=" << n_active
+							          << "  brute_count=" << brute
+							          << "  l1_returned=" << sub_count
+							          << "  diff=" << (sub_count - brute)
+							          << "  depth=" << depth << "\n";
+							if (!config_.brute_force_cache_dump_dir.empty()) {
+								static long long bf_l1_id = 0;
+								std::string path = config_.brute_force_cache_dump_dir
+								                 + "/l1_mismatch_"
+								                 + std::to_string(bf_l1_id++) + ".cnf";
+								unsigned dump_n = 0;
+								if (dumpSubComponentCnf(*sub, path, &dump_n))
+									std::cerr << "  dumped to: " << path << "\n";
+							}
+							std::cerr.flush();
+							std::abort();
+						}
+					}
 					result *= sub_count;
 					delete sub;
 					continue;
@@ -737,16 +789,60 @@ mpz_class Solver::solveComponent(Component &comp,
 			CanonicalKey key = buildCanonicalKey(
 				*sub, literal_pool_, literals_, literal_values_,
 				comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
-				original_lit_pool_size_);
+				original_lit_pool_size_, config_.canonical_compact,
+				config_.no_anonymization, config_.wl_iterations,
+				static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
 			bool hit = (config_.perform_component_caching &&
 			            sub->num_variables() >= 3 &&
 			            comp_manager_.contentCache().peek(key, sub_count));
 			if (hit && !config_.verify_cache) {
+				// Structural-count cache contract: cache stores
+				// count_active = #SAT over vars actually appearing in
+				// the canonical clauses. Caller applies 2^free for
+				// vars in MY varsBegin that don't appear in any
+				// clause. Two sub-components with the same canonical
+				// active structure but different free-var counts
+				// share a single cache entry.
+				if (config_.structural_count_cache) {
+					unsigned my_extra_free = key.num_vars - key.n_in_clauses;
+					if (my_extra_free > 0) {
+						mpz_class factor = 1;
+						mpz_mul_2exp(factor.get_mpz_t(), factor.get_mpz_t(), my_extra_free);
+						sub_count *= factor;
+					}
+					structural_hits_total_++;
+					if (my_extra_free > 0) structural_hits_with_free_++;
+				}
 				// L2 hit: canonicalized form matches a previously-cached
 				// sub-component. Populate L1 so future visits with this
 				// same ID-set skip the canonical build.
+				// Brute-force check at L2-hit time.
+				if (config_.brute_force_cache_check_n > 0) {
+					unsigned n_active = 0;
+					mpz_class brute = bruteForceCountSubcomp(
+					    *sub, config_.brute_force_cache_check_n, &n_active);
+					if (brute >= 0 && brute != sub_count) {
+						std::cerr << "\n*** BRUTE_FORCE_L2_HIT_MISMATCH ***\n"
+						          << "  n_active=" << n_active
+						          << "  brute_count=" << brute
+						          << "  l2_returned=" << sub_count
+						          << "  diff=" << (sub_count - brute)
+						          << "  depth=" << depth << "\n";
+						if (!config_.brute_force_cache_dump_dir.empty()) {
+							static long long bf_l2_id = 0;
+							std::string path = config_.brute_force_cache_dump_dir
+							                 + "/l2_mismatch_"
+							                 + std::to_string(bf_l2_id++) + ".cnf";
+							unsigned dump_n = 0;
+							if (dumpSubComponentCnf(*sub, path, &dump_n))
+								std::cerr << "  dumped to: " << path << "\n";
+						}
+						std::cerr.flush();
+						std::abort();
+					}
+				}
 				comp_manager_.contentCache().stats_hits++;
-				if (sub->num_variables() >= 3) {
+				if (sub->num_variables() >= 3 && !config_.disable_l1_cache) {
 					comp_manager_.contentCache().l1_store(id_key, sub_count);
 				}
 				result *= sub_count;
@@ -885,12 +981,111 @@ mpz_class Solver::solveComponent(Component &comp,
 				}
 			}
 
+			// Brute-force cache check at STORE time. If sub-component is
+			// small enough (<= N), enumerate and verify the count. On
+			// mismatch: dump CNF + abort with diagnostic.
+			if (config_.brute_force_cache_check_n > 0
+			    && config_.perform_component_caching
+			    && sub->num_variables() >= 3) {
+				unsigned n_active = 0;
+				mpz_class brute = bruteForceCountSubcomp(
+				    *sub, config_.brute_force_cache_check_n, &n_active);
+				if (brute >= 0 && brute != sub_count) {
+					std::cerr << "\n*** BRUTE_FORCE_CACHE_STORE_MISMATCH ***\n"
+					          << "  n_active=" << n_active
+					          << "  brute_count=" << brute
+					          << "  sub_count=" << sub_count
+					          << "  diff=" << (sub_count - brute)
+					          << "  depth=" << (depth + 1)
+					          << "  removed_clauses=" << removed_clauses_.size()
+					          << "\n";
+					if (!config_.brute_force_cache_dump_dir.empty()) {
+						static long long bf_dump_id = 0;
+						std::string path = config_.brute_force_cache_dump_dir
+						                 + "/store_mismatch_"
+						                 + std::to_string(bf_dump_id++) + ".cnf";
+						unsigned dump_n = 0;
+						if (dumpSubComponentCnf(*sub, path, &dump_n)) {
+							std::cerr << "  dumped to: " << path
+							          << " (nvars=" << dump_n << ")\n";
+						}
+					}
+					std::cerr.flush();
+					std::abort();
+				}
+				// Invariant S2: if any in-scope learned clause confined to
+				// this sub-component is unsoundly restricting models, the
+				// "with learned" count would be SMALLER than the
+				// "without learned" count. Sound learned clauses don't
+				// change #SAT.
+				if (brute >= 0) {
+					unsigned n_learn = 0;
+					mpz_class brute_with_learned =
+					    bruteForceCountSubcompWithLearned(
+					        *sub, config_.brute_force_cache_check_n,
+					        nullptr, &n_learn);
+					if (brute_with_learned >= 0
+					    && brute_with_learned != brute) {
+						std::cerr << "\n*** INV_S2_LEARNED_CLAUSE_UNSOUND ***\n"
+						          << "  n_active=" << n_active
+						          << "  brute (originals only)=" << brute
+						          << "  brute (originals + in-scope learned)="
+						          << brute_with_learned
+						          << "  diff=" << (brute - brute_with_learned)
+						          << "  n_learned_clauses_checked=" << n_learn
+						          << "  depth=" << (depth + 1)
+						          << "  removed_clauses=" << removed_clauses_.size()
+						          << "\n";
+						if (!config_.brute_force_cache_dump_dir.empty()) {
+							static long long s2_dump_id = 0;
+							std::string path = config_.brute_force_cache_dump_dir
+							                 + "/s2_unsound_learned_"
+							                 + std::to_string(s2_dump_id++) + ".cnf";
+							unsigned dump_n = 0;
+							if (dumpSubComponentCnf(*sub, path, &dump_n))
+								std::cerr << "  dumped to: " << path
+								          << " (nvars=" << dump_n << ")\n";
+						}
+						std::cerr.flush();
+						std::abort();
+					}
+				}
+			}
 			if (config_.perform_component_caching && sub->num_variables() >= 3) {
 				if (config_.verify_cache && g_first_sig.find(key.hash) == g_first_sig.end()) {
 					g_first_sig[key.hash] = pre_sig;
 				}
-				comp_manager_.contentCache().store(key, sub_count);
-				if (!config_.verify_cache) {
+				// Structural-count cache: strip the 2^(free vars at this
+				// level) factor BEFORE storing; the caller (or future
+				// retriever) reapplies their own free-var factor at hit
+				// time. Both halves reference the same key.n_in_clauses.
+				mpz_class to_store = sub_count;
+				if (config_.structural_count_cache) {
+					unsigned my_extra_free = key.num_vars - key.n_in_clauses;
+					structural_stores_total_++;
+					if (my_extra_free > 0) {
+						structural_stores_with_free_++;
+						mpz_class factor = 1;
+						mpz_mul_2exp(factor.get_mpz_t(), factor.get_mpz_t(), my_extra_free);
+						mpz_class q, r;
+						mpz_tdiv_qr(q.get_mpz_t(), r.get_mpz_t(),
+						            sub_count.get_mpz_t(), factor.get_mpz_t());
+						if (r != 0) {
+							std::cerr << "\n*** STRUCTURAL_CACHE_NONDIVISIBLE ***\n"
+							          << "  sub_count=" << sub_count
+							          << "  my_extra_free=" << my_extra_free
+							          << "  remainder=" << r
+							          << "  key.num_vars=" << key.num_vars
+							          << "  key.n_in_clauses=" << key.n_in_clauses
+							          << "\n";
+							std::cerr.flush();
+							std::abort();
+						}
+						to_store = q;
+					}
+				}
+				comp_manager_.contentCache().store(key, to_store);
+				if (!config_.verify_cache && !config_.disable_l1_cache) {
 					// Populate L1 so future visits to the same ID-set skip
 					// the canonical build. Skipped under verify_cache because
 					// that mode force-recomputes everything.
@@ -1260,6 +1455,32 @@ mpz_class Solver::solveComponent(Component &comp,
 	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth, -1,
 	                              /*from_separator=*/false,
 	                              reactive_metis_skip_until_depth);
+	if (depth == 0 && !config_.dump_in_process_learned_path.empty()) {
+		std::ofstream out(config_.dump_in_process_learned_path);
+		unsigned dumped = 0;
+		for (auto cl_ofs : conflict_clauses_) {
+			for (auto lt = beginOf(cl_ofs); *lt != SENTINEL_LIT; lt++) {
+				int v = (int)lt->var();
+				if (!lt->sign()) v = -v;
+				out << v << " ";
+			}
+			out << "0\n";
+			dumped++;
+		}
+		std::cerr << "DUMP_IN_PROCESS_LEARNED: wrote " << dumped
+		          << " conflict clauses (incl. preprocessing + branch A) to "
+		          << config_.dump_in_process_learned_path
+		          << " (first branch returned " << A << ")\n";
+	}
+	if (depth == 0 && config_.clear_cache_after_first_root_branch) {
+		std::cerr << "CLEAR_CACHE_AFTER_FIRST_ROOT_BRANCH: first branch returned "
+		          << A << "; clearing L1+L2 caches before second branch.\n"
+		          << "  L1 size before clear: "
+		          << comp_manager_.contentCache().l1_size()
+		          << "  L2 size before clear: "
+		          << comp_manager_.contentCache().size() << "\n";
+		comp_manager_.contentCache().clearAll();
+	}
 	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false, depth, -1,
 	                              /*from_separator=*/false,
 	                              reactive_metis_skip_until_depth);
@@ -1273,6 +1494,13 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
                                    bool from_separator,
                                    int reactive_metis_skip_until_depth) {
 	unsigned lit_save = literal_stack_.size();
+	// Invariants T1+T2 (gated): snapshot trail state for restore-check.
+	std::size_t snap_removed_size = 0;
+	std::size_t snap_lscope_size  = 0;
+	if (config_.check_learn_invariants) {
+		snap_removed_size = removed_clauses_.size();
+		snap_lscope_size  = learned_clause_scope_.size();
+	}
 	statistics_.num_decisions_++;
 	if (statistics_.num_decisions_ % 128 == 0)
 		decayActivities();
@@ -1415,6 +1643,62 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		unSet(literal_stack_.back());
 		literal_stack_.pop_back();
 	}
+	// Invariant T1: literal_stack_ size restored to entry value.
+	// Invariant T2: removed_clauses_ size restored, learned_clause_scope_
+	//               only-grew (we may have learned new scoped clauses).
+	if (config_.check_learn_invariants) {
+		if (literal_stack_.size() != lit_save) {
+			std::cerr << "\n*** INV_T1_TRAIL_NOT_RESTORED (branchOnLiteral) ***\n"
+			          << "  lit=" << lit.toInt()
+			          << "  lit_save=" << lit_save
+			          << "  current literal_stack_.size()=" << literal_stack_.size()
+			          << "  diff=" << ((long)literal_stack_.size() - (long)lit_save)
+			          << "\n";
+			std::cerr.flush();
+			std::abort();
+		}
+		if (removed_clauses_.size() != snap_removed_size) {
+			std::cerr << "\n*** INV_T2_REMOVED_CLAUSES_LEAK (branchOnLiteral) ***\n"
+			          << "  lit=" << lit.toInt()
+			          << "  snap_removed_size=" << snap_removed_size
+			          << "  current removed_clauses_.size()=" << removed_clauses_.size()
+			          << "\n";
+			std::cerr.flush();
+			std::abort();
+		}
+		if (learned_clause_scope_.size() < snap_lscope_size) {
+			std::cerr << "\n*** INV_T2b_LEARNED_SCOPE_SHRANK (branchOnLiteral) ***\n"
+			          << "  lit=" << lit.toInt()
+			          << "  snap=" << snap_lscope_size
+			          << "  current=" << learned_clause_scope_.size() << "\n";
+			std::cerr.flush();
+			std::abort();
+		}
+		// Invariant T3: literal_values_ <-> literal_stack_ desync.
+		// Walk the trail; for each literal on the stack, both polarities
+		// of literal_values_ must reflect "set". For each X_TRI literal,
+		// neither polarity should claim T_TRI/F_TRI. Sampled by depth %
+		// 8 to keep cost bounded.
+		if ((unsigned)depth % 8 == 0) {
+			// Scan all variables 1..num_variables(). For each, classify
+			// via literal_values_; check trail-consistency.
+			for (unsigned v = 1; v <= num_variables(); v++) {
+				LiteralID p(v, true), n(v, false);
+				TriValue vp = literal_values_[p], vn = literal_values_[n];
+				bool both_x = (vp == X_TRI && vn == X_TRI);
+				bool t_polar = (vp == T_TRI && vn == F_TRI);
+				bool f_polar = (vp == F_TRI && vn == T_TRI);
+				if (!both_x && !t_polar && !f_polar) {
+					std::cerr << "\n*** INV_T3_LITVALUES_INCONSISTENT ***\n"
+					          << "  var=" << v
+					          << "  +v_value=" << (int)vp
+					          << "  -v_value=" << (int)vn << "\n";
+					std::cerr.flush();
+					std::abort();
+				}
+			}
+		}
+	}
 	stack_.pop_back();
 	return result;
 }
@@ -1426,6 +1710,12 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
                                   bool negate_literals, int depth, int nd_node,
                                   int reactive_metis_skip_until_depth) {
 	unsigned lit_save = literal_stack_.size();
+	std::size_t snap_removed_size = 0;
+	std::size_t snap_lscope_size  = 0;
+	if (config_.check_learn_invariants) {
+		snap_removed_size = removed_clauses_.size();
+		snap_lscope_size  = learned_clause_scope_.size();
+	}
 	statistics_.num_decisions_++;
 
 	// Push a StackLevel so the literals set below (by clause removal or
@@ -1444,6 +1734,46 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 
 	// Mark clause as removed
 	markClauseRemoved(cl_ofs);
+
+	// Invariant T4 (the one targeted at the wrongly-justified-literal
+	// failure mode): once C is added to removed_clauses_, every
+	// literal currently on the trail must have an antecedent that
+	// is STILL in scope. If a literal ℓ was forced earlier via a
+	// learned clause D whose scope did NOT include C, then under
+	// F\{C} the antecedent D may no longer be a logical consequence,
+	// which means ℓ may not be forced under F\{C}. The literal sits
+	// on the trail as if it were assigned, but it's wrongly so.
+	// Subsequent counting under this branch undercounts by however
+	// many models F\{C} has with ℓ unassigned (or assigned the other
+	// polarity).
+	if (config_.check_learn_invariants) {
+		for (auto trail_lit : literal_stack_) {
+			Antecedent ant = var(trail_lit).ante;
+			if (!ant.isAnt() || !ant.isAClause()) continue;
+			ClauseOfs ant_ofs = ant.asCl();
+			if (ant_ofs < (ClauseOfs)original_lit_pool_size_) continue;  // original
+			if (!learnedClauseInScope(ant_ofs)) {
+				std::cerr << "\n*** INV_T4_TRAIL_LIT_LOST_JUSTIFICATION ***\n"
+				          << "  trail_lit=" << trail_lit.toInt()
+				          << "  forcing_ante_cl=" << ant_ofs << " (learned)\n"
+				          << "  removed_clauses_ (after adding C):\n";
+				std::cerr << "    cl_ofs (just-added C) = " << cl_ofs << "\n";
+				std::cerr << "    current removed set size = " << removed_clauses_.size() << "\n";
+				auto it_scope = learned_clause_scope_.find(ant_ofs);
+				if (it_scope != learned_clause_scope_.end()) {
+					std::cerr << "    learned clause's recorded scope size = " << it_scope->second.size() << "\n";
+					std::cerr << "    scope members:";
+					for (auto x : it_scope->second) std::cerr << " " << x;
+					std::cerr << "\n";
+				} else {
+					std::cerr << "    learned clause has NO scope entry"
+					          << " (treated as scope = {})\n";
+				}
+				std::cerr.flush();
+				std::abort();
+			}
+		}
+	}
 
 	bool conflict = false;
 	if (negate_literals) {
@@ -1482,6 +1812,32 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 		literal_stack_.pop_back();
 	}
 	unmarkClauseRemoved(cl_ofs);
+	if (config_.check_learn_invariants) {
+		if (literal_stack_.size() != lit_save) {
+			std::cerr << "\n*** INV_T1_TRAIL_NOT_RESTORED (branchOnClause) ***\n"
+			          << "  cl_ofs=" << cl_ofs
+			          << "  lit_save=" << lit_save
+			          << "  current=" << literal_stack_.size() << "\n";
+			std::cerr.flush();
+			std::abort();
+		}
+		if (removed_clauses_.size() != snap_removed_size) {
+			std::cerr << "\n*** INV_T2_REMOVED_CLAUSES_LEAK (branchOnClause) ***\n"
+			          << "  cl_ofs=" << cl_ofs
+			          << "  snap=" << snap_removed_size
+			          << "  current=" << removed_clauses_.size() << "\n";
+			std::cerr.flush();
+			std::abort();
+		}
+		if (learned_clause_scope_.size() < snap_lscope_size) {
+			std::cerr << "\n*** INV_T2b_LEARNED_SCOPE_SHRANK (branchOnClause) ***\n"
+			          << "  cl_ofs=" << cl_ofs
+			          << "  snap=" << snap_lscope_size
+			          << "  current=" << learned_clause_scope_.size() << "\n";
+			std::cerr.flush();
+			std::abort();
+		}
+	}
 	stack_.pop_back();
 	return result;
 }
@@ -1512,6 +1868,15 @@ vector<Component*> Solver::discoverComponentsOf(Component &super_comp,
 	unsigned super_active = 0;
 	for (auto vt = super_comp.varsBegin(); *vt != varsSENTINEL; vt++)
 		if (isActive(LiteralID(*vt, true))) super_active++;
+
+	// Note: tried Invariant I1 here (assert every globally-X_TRI var
+	// is in super_comp.varsBegin()), but it has legitimate
+	// false-positives: at deep recursion levels, super_comp is one of
+	// several sibling sub-components, and vars in OTHER siblings are
+	// X_TRI but not in THIS super_comp's list. The check would need
+	// to be aware of the full sibling set, which isn't accessible
+	// here. Removed; needs a more sophisticated invariant or a
+	// different angle of attack.
 
 	for (auto vt = super_comp.varsBegin(); *vt != varsSENTINEL; vt++) {
 		if (ana.isUnseenAndActive(*vt)) {

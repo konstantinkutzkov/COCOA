@@ -161,6 +161,125 @@ struct SolverConfiguration {
   // same key. A mismatch indicates a semantic bug in the canonical key.
   bool verify_cache = false;
 
+  // L2 canonical-cache key mode.
+  //   true  (default): compact — identity is the 128-bit canonical
+  //                    hash alone. No clause multiset stored. Relies on
+  //                    hash width for collision safety (~10^-20).
+  //   false           : strict — also stores and compares the full
+  //                    normalized clause multiset. Debug aid: lets us
+  //                    tell a canonical-hash collision from a
+  //                    canonicalization fault when a miscount is seen.
+  //                    Intended to be removed once compact is proven.
+  bool canonical_compact = true;
+
+  // Local-search probe-based preprocessing (opt-in).
+  // When enabled, runs after the existing preprocessor (subsumption /
+  // pure-dup / SSR) and applies the diff-and-lift schema described in
+  // docs/probe_preprocessing_plan.md. Default OFF.
+  bool perform_local_search_preprocess = false;
+  unsigned lsp_max_probes = 1000;
+  unsigned lsp_max_size   = 4;
+  unsigned lsp_max_total  = 5000;
+  bool     lsp_no_r4      = false;
+  bool     lsp_verbose    = false;
+
+  // ---------------------------------------------------------------
+  // Learning invariant checks (opt-in, debug aid).
+  //
+  // When ON, asserts that each time conflict analysis or BCP touches
+  // a learned clause's antecedent, the clause is in-scope under the
+  // current removed_clauses_. This targets the t1_011 order-dependent
+  // miscount investigation: hypothesis is that an antecedent recorded
+  // when the clause was in-scope can later be used by 1-UIP analysis
+  // at a deeper scope where the clause is out-of-scope, producing an
+  // unsound UIP clause whose asserting literal is then force-set,
+  // causing an undercount.
+  //
+  // Specific invariants enabled:
+  //   A. recordLastUIPCauses walk: if curr_lit's antecedent is a
+  //      learned clause, must be in-scope NOW.
+  //   B. recordLastUIPCauses walk: each antecedent's other literal
+  //      must be F_TRI right now (BCP invariant carried forward).
+  //   C. setLiteralIfFree: if storing a learned-clause antecedent,
+  //      that clause must be in-scope right now.
+  //
+  // Each fires with a structured diagnostic and aborts. Cost when
+  // OFF: zero (single bool check at the top of each guard).
+  bool check_learn_invariants = false;
+
+  // Brute-force cache check: at every cache store and cache hit, if the
+  // sub-component has <= N active variables, brute-force enumerate
+  // 2^N assignments and verify the count matches what's being stored
+  // / returned. On mismatch: dump the sub-component CNF + abort.
+  // Targets the t1_011 wrong-count investigation: catches the smallest
+  // miscounted sub-component in the search tree.
+  // 0 = disabled. Default 18 once turned on; cost ~0.1s per check.
+  unsigned brute_force_cache_check_n = 0;
+  // Where to dump offending sub-components when the brute-force check
+  // fires. Empty = don't dump (just abort with diagnostic to stderr).
+  std::string brute_force_cache_dump_dir = "";
+
+  // At every entry to solveComponent where depth <= dump_recursion_max_depth,
+  // dump the super-component's formula state as a self-contained DIMACS
+  // CNF to dump_recursion_dir/super_<id>.cnf. Plus a manifest at
+  // dump_recursion_dir/log.txt with (id, depth, nvars, path) per dump.
+  // Diagnostic for top-branch debugging: re-run ganak/our-solver on each
+  // dump to find the smallest sub-formula where counts diverge.
+  // dump_recursion_dir empty = disabled.
+  std::string dump_recursion_dir = "";
+  unsigned dump_recursion_max_depth = 0;
+
+  // Diagnostic: after the FIRST root-level branchOnLiteral returns at
+  // depth=0, wipe both L1 and L2 content caches before launching the
+  // second root branch. Used to test whether cross-branch cache
+  // contamination is the cause of the perm-on-F miscount: if the
+  // second branch's count becomes correct after this clear, the cache
+  // is the carrier; if still wrong, it's some other in-process state.
+  bool clear_cache_after_first_root_branch = false;
+
+  // Diagnostic: bypass the L1 (identity-based) cache fast-path entirely.
+  // Forces every cache query to go through the L2 canonical key path.
+  // Used to test whether L1's raw-id hash (which ignores assignment
+  // context outside the sub-component) is the source of cross-branch
+  // contamination.
+  bool disable_l1_cache = false;
+
+  // Diagnostic: enable the "structural count" caching scheme. Cache
+  // stores count(F over vars-in-clauses) only — the 2^(free vars at
+  // this level) factor is stripped before store and reapplied at
+  // retrieve based on the caller's own (num_vars - n_in_clauses).
+  // Two sub-components that differ only in their free-var counts
+  // share a single cache entry under this scheme. If enabled with
+  // -l2Strict the n_in_clauses-based equality kicks in.
+  bool structural_count_cache = false;
+
+  // Diagnostic: disable the canonical-key anonymization pass
+  // (signature ranking, polarity flip, singleton collapse). Use
+  // raw per-component active-var indices instead. Two structurally
+  // identical sub-components with different var orderings will then
+  // hash differently — cache hits drop sharply, but if the bug
+  // disappears, the anonymization pass is the carrier.
+  bool no_anonymization = false;
+
+  // Maximum WL refinement iterations to attempt in buildCanonicalKey.
+  // The cascade always runs: iter 1, then iter 2..wl_iterations while
+  // collisions remain, then static-label combine for any residual
+  // collision-block vars, then raw-id fallback for vars still tied.
+  // Default 1: just iter 1, then static + raw-id fallback. Measured
+  // faster on super_d3_id8 than wl_iterations=2 because skipping iter 2
+  // leaves coarser dynamic blocks that are then resolved by static labels
+  // and raw-id fallback in a single pass, yielding fewer cache misses
+  // downstream than a sharper-but-stricter dynamic key. Hyperparameter
+  // candidate for portfolio tuning — see docs/portfolio_insights.md.
+  int wl_iterations = 1;
+
+  // Diagnostic: after the first root-level branchOnLiteral returns,
+  // dump every clause currently in conflict_clauses_ (i.e., learned
+  // during preprocessing + branch -5) as one line of lits + " 0\n"
+  // to this path. Used to test whether in-process learned clauses
+  // are themselves unsound (vs whether the cache is the only carrier).
+  std::string dump_in_process_learned_path = "";
+
   // Implicant learning: when BCP forces a literal l* after branching,
   // walk the antecedent chain backward to collect the decision literals
   // that participated in the derivation. If the resulting set is small
@@ -250,6 +369,13 @@ struct SolverConfiguration {
   unsigned perm_clause_lits_seed   = 0;
   unsigned perm_binary_links_seed  = 0;
   unsigned perm_watch_lists_seed   = 0;
+  // Independent per-literal watch-list permutation (separate from
+  // perm_watch_lists_seed which uses a SHARED rng across literals).
+  // perm_watch_indep_seed != 0 enables; mask filters which literals
+  // get permuted (literal l permuted iff (l.raw() & perm_watch_indep_mask) != 0).
+  // Use mask = ~0u to permute all literals; smaller masks for bisection.
+  unsigned perm_watch_indep_seed   = 0;
+  unsigned perm_watch_indep_mask   = 0xFFFFFFFFu;
   unsigned perm_occ_lists_seed     = 0;
 
   // Canonicalize (sort) each order-sensitive structure. When the bug
