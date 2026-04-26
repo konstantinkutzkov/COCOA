@@ -594,6 +594,13 @@ mpz_class Solver::solveComponent(Component &comp,
 		cerr << "calls=" << call_count << " depth=" << rec_depth << endl;
 	}
 
+	// Per-component BCP filter mask is updated only when decomposition
+	// produces a strictly smaller sub-component than its parent — see
+	// the SubVarsetGuard wrapping `solveComponent(*sub, ...)` below in
+	// the decomposition loop. solveComponent's entry is INTENTIONALLY
+	// no-op here: branching paths (separator/clause/lit) recurse with
+	// the same comp.varsBegin, so the filter shouldn't change.
+
 	// (Diagnostic guard `verifyUnitPropagationSaturated` was tested at
 	// every solveComponent entry on /tmp/t1_011_rev.cnf, 2026-04-22.
 	// It DID fire — BCP saturation is not maintained on learned clauses
@@ -623,6 +630,14 @@ mpz_class Solver::solveComponent(Component &comp,
 		mpz_class trivial_factor = 1;
 		vector<Component*> subcomps = discoverComponentsOf(comp, trivial_factor);
 		mpz_class result = trivial_factor;
+		// "Did decomposition really shrink/split the formula?" If a single
+		// sub-component came back with no isolated peeling, the sub has
+		// the same vars as the parent and the per-component BCP filter
+		// state should not change. Skip the SubVarsetGuard work entirely
+		// in that hot path — the recursive solveComponent inherits the
+		// caller's mask. Only when we actually decompose (multiple subs
+		// OR isolated vars peeled) do we update the filter.
+		bool decomposed = (subcomps.size() > 1) || (trivial_factor != 1);
 		for (Component *sub : subcomps) {
 			// Map sub-component to ND hierarchy child node.
 			// mapToChild's return convention:
@@ -949,6 +964,71 @@ mpz_class Solver::solveComponent(Component &comp,
 					}
 				}
 			}
+			// Per-component BCP filter mask. Only fires when decomposition
+			// actually split the formula (`decomposed` set above). A learned
+			// clause whose vars escape *sub's varsBegin would propagate
+			// across the new sub-component boundary and contaminate the
+			// cached count. Diff against the parent (current_sub_var_list_)
+			// is O(|parent ∖ child| + |child ∖ parent|), no full-bitmap reset.
+			//
+			// Branching paths inside solveComponent(*sub) won't push their
+			// own guard — they recurse with the same comp.varsBegin, so the
+			// mask we set here remains active throughout the sub's solve.
+			struct SubVarsetGuard {
+				Solver &slv;
+				std::vector<unsigned> saved_parent_list;
+				bool was_empty = false;
+				bool active;
+				SubVarsetGuard(Solver &s, Component &c, bool a) : slv(s), active(a) {
+					if (!active) return;
+					if (s.current_sub_varset_.empty()) {
+						was_empty = true;
+						s.current_sub_varset_.assign(s.num_variables() + 2, 0);
+					}
+					saved_parent_list = std::move(s.current_sub_var_list_);
+					std::vector<unsigned> child_list;
+					child_list.reserve(64);
+					for (auto it = c.varsBegin(); *it != varsSENTINEL; it++)
+						child_list.push_back(*it);
+					std::sort(child_list.begin(), child_list.end());
+					auto pi = saved_parent_list.begin(), pe = saved_parent_list.end();
+					auto ci = child_list.begin(),       ce = child_list.end();
+					while (pi != pe || ci != ce) {
+						if (pi == pe || (ci != ce && *ci < *pi)) {
+							if (*ci < s.current_sub_varset_.size())
+								s.current_sub_varset_[*ci] = 1;
+							ci++;
+						} else if (ci == ce || *pi < *ci) {
+							if (*pi < s.current_sub_varset_.size())
+								s.current_sub_varset_[*pi] = 0;
+							pi++;
+						} else { pi++; ci++; }
+					}
+					s.current_sub_var_list_ = std::move(child_list);
+				}
+				~SubVarsetGuard() {
+					if (!active) return;
+					auto pi = saved_parent_list.begin(), pe = saved_parent_list.end();
+					auto ci = slv.current_sub_var_list_.begin(),
+					     ce = slv.current_sub_var_list_.end();
+					while (pi != pe || ci != ce) {
+						if (pi == pe || (ci != ce && *ci < *pi)) {
+							if (*ci < slv.current_sub_varset_.size())
+								slv.current_sub_varset_[*ci] = 0;
+							ci++;
+						} else if (ci == ce || *pi < *ci) {
+							if (*pi < slv.current_sub_varset_.size())
+								slv.current_sub_varset_[*pi] = 1;
+							pi++;
+						} else { pi++; ci++; }
+					}
+					slv.current_sub_var_list_ = std::move(saved_parent_list);
+					if (was_empty) {
+						slv.current_sub_varset_.clear();
+						slv.current_sub_var_list_.clear();
+					}
+				}
+			} sub_filter(*this, *sub, decomposed);
 			sub_count = solveComponent(*sub, {}, true, depth + 1, child_nd_node,
 			                           reactive_metis_skip_until_depth);
 

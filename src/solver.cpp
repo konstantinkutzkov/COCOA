@@ -829,9 +829,19 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 			// in contexts where all of C are still removed. Otherwise
 			// skip — treat the clause as absent for BCP purposes.
 			// (Non-learned clauses have no scope entry and are always OK.)
-			if (*itcl >= (ClauseOfs)original_lit_pool_size_
-			    && !learnedClauseInScope(*itcl))
-				continue;
+			//
+			// Component-membership check: a learned clause D may only fire
+			// during the solve of sub-component S iff vars(D) ⊆ S.varsBegin.
+			// Without this gate, a learned clause whose vars span multiple
+			// sub-components (after dynamic re-decomposition split previously-
+			// connected vars) can propagate across the boundary, contaminating
+			// the cached count of S with constraints not entailed by S alone.
+			// Mask is empty at root → no filter; populated by SubVarsetGuard
+			// at every solveComponent entry.
+			if (*itcl >= (ClauseOfs)original_lit_pool_size_) {
+				if (!learnedClauseInScope(*itcl)) continue;
+				if (!learnedClauseInComponent(*itcl, current_sub_varset_)) continue;
+			}
 			auto itL = beginOf(*itcl) + 2;
 			while (isResolved(*itL))
 				itL++;
@@ -1369,11 +1379,19 @@ void Solver::buildMetisInputFromComponent(
 	if (active_vars.size() < 4) return;
 
 	// Active long (non-binary) clauses with their live literals' vars.
+	// Learned clauses are EXCLUDED from the METIS incidence graph: they
+	// are dynamic artifacts of the search path so far and add edges that
+	// don't reflect the formula's intrinsic structure. Including them
+	// can produce a separator that's worse than the originals-only graph
+	// would have yielded — METIS sees artificial cross-region connectivity.
+	// Also, the post-decomposition learned-clause filter (in BCP, gated
+	// by current_sub_varset_) drops bridge learned clauses whose vars
+	// span the new sub-components, so even if METIS were to consider
+	// them, BCP would never apply them within the resulting children.
 	for (auto ct = comp.clsBegin(); *ct != clsSENTINEL; ++ct) {
 		ClauseOfs ofs = comp_manager_.clauseOfsOf(*ct);
 		if (isClauseRemoved(ofs) || isSatisfied(ofs)) continue;
-		if (ofs >= (ClauseOfs)original_lit_pool_size_
-		    && !learnedClauseInScope(ofs)) continue;
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;  // skip learned
 		std::vector<unsigned> vars;
 		for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt) {
 			if (literal_values_[*lt] == X_TRI) vars.push_back(lt->var());

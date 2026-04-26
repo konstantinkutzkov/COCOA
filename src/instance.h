@@ -133,6 +133,18 @@ protected:
   vector<ClauseOfs> conflict_clauses_;
   vector<LiteralID> unit_clauses_;
 
+  // Per-component BCP filter state:
+  //   current_sub_varset_  : bitmap (1-indexed by var ID), 1 if var is in
+  //                          the CURRENTLY-SOLVING sub-component's
+  //                          varsBegin. Empty = no filtering (root state).
+  //   current_sub_var_list_: sorted list of vars currently set in the bitmap.
+  //                          Used by SubVarsetGuard to compute the
+  //                          parent/child diff in O(|parent|+|child|)
+  //                          rather than O(num_vars) per push/pop.
+  // Maintained by Solver::solveComponent's SubVarsetGuard RAII helper.
+  std::vector<char> current_sub_varset_;
+  std::vector<unsigned> current_sub_var_list_;
+
   vector<Variable> variables_;
   LiteralIndexedVector<TriValue> literal_values_;
 
@@ -323,6 +335,37 @@ protected:
     for (const auto &p : removed_clauses_) {
       if (scope.count(p.first) == 0)
         return false;
+    }
+    return true;
+  }
+
+  // True iff the learned clause at cl_ofs has no variable that is
+  // BOTH outside `mask` (the current sub-component's varsBegin) AND
+  // still currently active (X_TRI). Such a variable would belong to
+  // a sibling sub-component, and BCP on this clause inside the
+  // current sub could force its value — cross-sub propagation that
+  // contaminates the cached count.
+  //
+  // Vars outside `mask` that are already assigned (T_TRI/F_TRI by
+  // parent decisions) are FINE to keep: their lit in the clause is
+  // either satisfying the clause (treated as removed) or falsified
+  // (clause is effectively shorter), and BCP handles both cases
+  // soundly via the existing isResolved/isSatisfied checks.
+  //
+  // guard_var_ is the binary-padding sentinel (permanently F_TRI),
+  // never represents a real formula variable, always skipped.
+  // Non-learned clauses are always in-scope (caller filters by
+  // ofs < original_lit_pool_size_ first).
+  bool learnedClauseInComponent(ClauseOfs cl_ofs,
+                                const std::vector<char> &mask) const {
+    if (mask.empty()) return true;  // no current sub set → no filtering
+    for (auto lt = literal_pool_.begin() + cl_ofs; *lt != SENTINEL_LIT; lt++) {
+      unsigned v = lt->var();
+      if (v == guard_var_) continue;
+      if (v < mask.size() && mask[v]) continue;  // in current sub
+      // Outside the current sub. Only block when still active
+      // (X_TRI) — an active outside var means cross-sub hazard.
+      if (literal_values_[LiteralID(v, true)] == X_TRI) return false;
     }
     return true;
   }

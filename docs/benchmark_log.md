@@ -299,6 +299,29 @@ Verified counts against ganak ground truth where measured. All test instances re
 
 ---
 
+## 2026-04-26 18:05 — per-component learned-clause BCP filter + reactive-METIS originals-only
+
+Two related changes that close the cross-sub-component propagation gap discussed in conversation:
+
+1. **Per-component BCP filter for learned clauses.** When solveComponent's decomposition step splits the parent into multiple sub-components (or peels isolated vars), we install a stack-allocated `SubVarsetGuard` around each recursive `solveComponent(*sub)` call. While the guard is alive, BCP rejects any learned clause that has a variable outside the current sub's `varsBegin` AND that variable is still `X_TRI` (i.e., active in a sibling sub). Learned clauses whose outside vars are already assigned (`T_TRI`/`F_TRI`) by parent decisions are KEPT — their lits are determined and BCP handles satisfaction/falsification soundly. Branching paths (separator/clause/lit) recurse with the same `comp.varsBegin`, so they don't push another guard — the filter state set by the decomposition descent persists through them. When `discoverComponentsOf` returns a single sub with `trivial_factor == 1` (no decomposition), the guard is skipped entirely. Diff-tracked O(|parent ∖ child| + |child ∖ parent|) maintenance with a sorted-merge of var lists; never iterates the full bitmap. Filter check in BCP walks the clause body directly (no separate per-clause var-set storage).
+
+2. **Reactive METIS uses original clauses only.** `buildMetisInputFromComponent` now skips learned clauses entirely. Including them gave METIS spurious connectivity from search-history artifacts that don't reflect the formula's intrinsic structure. The new per-component BCP filter would drop bridge learned clauses post-decomposition anyway, so feeding them to METIS only hurt separator quality.
+
+Both changes are always-on (no flag).
+
+| Timestamp | Commit | Compile flags | Solver flags | Instance | Time | Env / notes |
+|---|---|---|---|---|---|---|
+| 2026-04-26 18:05 | `8c8dfe6` (dirty: filter + reactive-METIS) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_065.cnf (md5 `44068991f8280094f30665351898ac1e`) | 0.01 s | load avg ~2.0; 5 consecutive runs all 0.01s; count `37778931862957161709568`; matches historical 0.0163s and post-cascade 0.15s. |
+| 2026-04-26 18:05 | `8c8dfe6` (dirty: filter + reactive-METIS) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_071.cnf (md5 `e88123bdbf87205e36a681f2a3111e7c`) | 0.13 s | load avg ~2.0; count `456295684783698132731653351484293780287639045166077370506304563500761788632102076272640`; identical to post-cascade 0.13s. |
+| 2026-04-26 18:05 | `8c8dfe6` (dirty: filter + reactive-METIS) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_011.cnf (md5 `4be5e40e8a1660b130a690981ebdea88`) | 14.0–14.3 s (3 runs) | load avg 2.17; count `536870912306`; +3% vs cascade-only 13.71s. Decisions 226,066 vs cascade-only 203,330 (+11%). Per-decision cost actually lower (BCP does less work because filtered learned clauses no longer propagate cross-sub) but the search tree is 11% larger for the same reason. Net +3% wall-time. |
+| 2026-04-26 18:05 | `8c8dfe6` (dirty: filter + reactive-METIS) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -permWatchIndep 7 -permWatchSelect 0x10` | /tmp/t1_011.cnf (md5 `4be5e40e8a1660b130a690981ebdea88`) | 16.46 s | load avg ~2.0; count `536870912306`; +5% vs cascade-only 15.65s. Decisions 269,528. |
+| 2026-04-26 18:05 | `8c8dfe6` (dirty: filter + reactive-METIS) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_049.cnf (md5 `05173bb86a04414d86c661007d00accd`) | 331.22 s | load avg 1.55; count `8695763196077742` (matches ganak 386.77s; 14% faster than ganak). +1.6% vs cascade-only 325.94s. 171M decisions. |
+| 2026-04-26 18:05 | `8c8dfe6` (dirty: filter + reactive-METIS) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -permWatchIndep 7 -permWatchSelect 0x10` | /tmp/dump_bl23/super_d3_id8.cnf | 1.85 s | load avg ~2.0; count `26843545568`; **−11% vs cascade-only 2.09s** (faster). Filter likely shrunk the cache enough to reduce per-call canonical-key work. |
+
+**Earlier (over-aggressive) version** of the filter — rejecting any learned clause with a var outside the current sub's `varsBegin`, regardless of whether that var was assigned — was measured at +28% on t1_011 default (17.3–17.9s, 3 runs) with decisions ballooning to 301,096 (+48%). Relaxing to "only block when the outside var is X_TRI" (which is the real cross-sub propagation hazard; assigned outside vars don't propagate via the clause) recovered most of the slowdown. The relaxed version is what landed.
+
+---
+
 ## 2026-04-24 16:00 — L1 hash widened to 128-bit (collision-safe)
 
 Replaced 64-bit IdKey with two-field 128-bit IdKey (hash_lo,
