@@ -322,6 +322,29 @@ Both changes are always-on (no flag).
 
 ---
 
+## 2026-04-26 20:30 — replaced `static thread_local` with `static` (single-threaded only)
+
+Profile-driven optimization. macOS `sample` profile of t1_049 (76,040 1-ms samples over 90 s) showed `_tlv_get_addr` (3,355 samples) + `__tls_init` (5,254 samples) accounted for ~11% of CPU — TLS access overhead from `static thread_local` buffers in hot functions, mainly the 9 scratch vectors in `canonical_key.cpp::buildCanonicalKey` (called 95M+ times on t1_049).
+
+Each access to a `thread_local` variable on macOS goes through `_tlv_get_addr` (~5-10 ns) instead of compiling to a direct load. For C++ vectors with non-trivial constructors the TLS path emits multiple indirections, amplifying the cost.
+
+Replaced all 16 `static thread_local` declarations across `canonical_key.cpp` (9), `instance.h::maybeDedupClause` (2), and `solver.cpp::analyzeDynamicSubsumption` (5) with plain `static`. Solver is single-threaded; if that ever changes (e.g., per-thread `Counter` à la Ganak's `OuterCounter`), these MUST be reverted to `thread_local` to avoid data races. Comments at each site flag this.
+
+Counts identical across the suite (decision counts bit-identical where checked) → pure overhead reduction, zero algorithmic side-effect.
+
+| Timestamp | Commit | Compile flags | Solver flags | Instance | Time | Env / notes |
+|---|---|---|---|---|---|---|
+| 2026-04-26 20:30 | `892a4ea` (dirty: TLS→static) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_065.cnf (md5 `44068991f8280094f30665351898ac1e`) | 0.01 s | load avg ~2.0; count `37778931862957161709568`; unchanged. |
+| 2026-04-26 20:30 | `892a4ea` (dirty: TLS→static) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_071.cnf (md5 `e88123bdbf87205e36a681f2a3111e7c`) | 0.12 s | load avg ~2.0; count matches; within noise. |
+| 2026-04-26 20:30 | `892a4ea` (dirty: TLS→static) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_011.cnf (md5 `4be5e40e8a1660b130a690981ebdea88`) | 8.71-8.83 s (3 runs, mean 8.79 s) | load avg 2.05; count `536870912306`; **−38% vs 14.0-14.3 s prior**. Decisions 226,066 — bit-identical to prior, confirms pure overhead removal. |
+| 2026-04-26 20:30 | `892a4ea` (dirty: TLS→static) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -permWatchIndep 7 -permWatchSelect 0x10` | /tmp/t1_011.cnf | 10.39 s | count `536870912306`; **−37% vs prior 16.46 s**. |
+| 2026-04-26 20:30 | `892a4ea` (dirty: TLS→static) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3` | /tmp/t1_049.cnf (md5 `05173bb86a04414d86c661007d00accd`) | 282.62 s | load avg 1.82; count `8695763196077742` (matches ganak 386.77 s; now **27% faster than ganak**); **−15% vs prior 331.22 s**. Decisions 171,479,716 — identical. |
+| 2026-04-26 20:30 | `892a4ea` (dirty: TLS→static) | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -permWatchIndep 7 -permWatchSelect 0x10` | /tmp/dump_bl23/super_d3_id8.cnf | 1.37 s | count `26843545568`; **−26% vs prior 1.85 s**. |
+
+The `canonical_key.cpp` TLS removal alone captured essentially all the benefit; the additional 7 sites (`maybeDedupClause`, `analyzeDynamicSubsumption`) were correctness-neutral but didn't move the needle on the measured instances — `maybeDedupClause` is per-conflict (~20k calls on t1_011) so its TLS overhead is too small to see, and `analyzeDynamicSubsumption` is opt-in (off by default).
+
+---
+
 ## 2026-04-24 16:00 — L1 hash widened to 128-bit (collision-safe)
 
 Replaced 64-bit IdKey with two-field 128-bit IdKey (hash_lo,

@@ -20,14 +20,27 @@ ClauseTypeDictionary g_clause_type_dict;
 // Global canon stats
 CanonStats g_canon_stats;
 
-// Reusable buffers to avoid heap allocation per call
-static thread_local std::vector<unsigned> s_active_vars;
-static thread_local std::vector<int> s_var_idx;
-static thread_local std::vector<int> s_pos_count;
-static thread_local std::vector<int> s_neg_count;
-static thread_local std::vector<uint64_t> s_sig;
-static thread_local std::vector<int> s_canonical_id;
-static thread_local std::vector<std::pair<uint64_t, unsigned>> s_sig_pairs;
+// Reusable buffers to avoid heap allocation per call.
+//
+// PERFORMANCE NOTE — single-threaded only.
+// These were originally `static thread_local`. Each access to a
+// thread_local variable goes through `_tlv_get_addr` (~5-10 ns), and
+// at 95M+ calls/instance the cumulative cost was measured at ~10% of
+// total CPU on t1_049 via macOS `sample`. Plain `static` compiles to
+// a direct load — same semantics for a single-threaded solver, no
+// per-access runtime call.
+//
+// IMPORTANT: if the solver ever becomes multi-threaded (per-thread
+// Counter as in Ganak's OuterCounter), these MUST be reverted to
+// `thread_local` to avoid data races. Each thread would race on
+// these shared buffers and produce wrong canonical keys silently.
+static std::vector<unsigned> s_active_vars;
+static std::vector<int> s_var_idx;
+static std::vector<int> s_pos_count;
+static std::vector<int> s_neg_count;
+static std::vector<uint64_t> s_sig;
+static std::vector<int> s_canonical_id;
+static std::vector<std::pair<uint64_t, unsigned>> s_sig_pairs;
 
 struct ClauseRef {
   ClauseOfs ofs;        // for long clauses
@@ -35,11 +48,11 @@ struct ClauseRef {
   int lit_a, lit_b;     // for binary clauses (literal values)
   bool is_binary;
 };
-static thread_local std::vector<ClauseRef> s_clause_refs;
+static std::vector<ClauseRef> s_clause_refs;  // see note above re: thread_local
 
 // Per-variable flags packed into a single byte array
 // Bit 0: is_singleton, Bit 1: flip
-static thread_local std::vector<uint8_t> s_var_flags;
+static std::vector<uint8_t> s_var_flags;  // see note above re: thread_local
 
 CanonicalKey buildCanonicalKey(
     Component &comp,

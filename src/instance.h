@@ -240,8 +240,11 @@ protected:
   // mixed into the signature; scope-incompatible copies with same
   // literals are distinguished.
   bool maybeDedupClause(const std::vector<LiteralID> &clause) {
-    // Thread-local buffer so we don't heap-allocate per call.
-    static thread_local std::vector<uint32_t> sig_buf;
+    // Static (NOT thread_local) buffer to avoid both per-call heap alloc
+    // AND per-access _tlv_get_addr overhead. See canonical_key.cpp's
+    // top-of-file note: solver is single-threaded; if that ever changes,
+    // revert to thread_local to avoid data races.
+    static std::vector<uint32_t> sig_buf;
     sig_buf.clear();
     sig_buf.reserve(clause.size());
     for (auto l : clause) sig_buf.push_back(l.raw());
@@ -254,7 +257,7 @@ protected:
     // removed_clauses_ is an unordered_map — iteration order is not
     // deterministic, so collect keys and sort.
     if (!removed_clauses_.empty()) {
-      static thread_local std::vector<ClauseOfs> scope_buf;
+      static std::vector<ClauseOfs> scope_buf;  // single-threaded; see canonical_key.cpp
       scope_buf.clear();
       scope_buf.reserve(removed_clauses_.size());
       for (const auto &p : removed_clauses_) scope_buf.push_back(p.first);

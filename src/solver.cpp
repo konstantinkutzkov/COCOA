@@ -3619,7 +3619,7 @@ void Solver::analyzeOriginalClausePool() {
 void Solver::analyzeDynamicSubsumption(unsigned bcp_start_ofs) {
 	// Sample gate: only run every Nth branch.
 	const unsigned every = std::max(1u, config_.analyze_dynamic_subsumption_every);
-	static thread_local unsigned sample_counter = 0;
+	static unsigned sample_counter = 0;  // single-threaded; see canonical_key.cpp
 	sample_counter++;
 	if (sample_counter % every != 0) return;
 
@@ -3632,7 +3632,7 @@ void Solver::analyzeDynamicSubsumption(unsigned bcp_start_ofs) {
 	// literal_stack_[i] is the TRUE literal just pushed; its negation is
 	// the newly-falsified one. Deduplicate by variable (a single variable
 	// can't be pushed twice in one BCP).
-	static thread_local std::vector<uint32_t> falsified_raws;
+	static std::vector<uint32_t> falsified_raws;  // single-threaded; see canonical_key.cpp
 	falsified_raws.clear();
 	falsified_raws.reserve(literal_stack_.size() - bcp_start_ofs);
 	for (unsigned i = bcp_start_ofs; i < literal_stack_.size(); i++) {
@@ -3645,7 +3645,7 @@ void Solver::analyzeDynamicSubsumption(unsigned bcp_start_ofs) {
 	// Each newly-falsified literal occurs in some subset of clauses
 	// (via occurrence_lists_). A single clause may contain multiple
 	// newly-falsified literals → visit it only once.
-	static thread_local std::unordered_set<ClauseOfs> affected_seen;
+	static std::unordered_set<ClauseOfs> affected_seen;  // single-threaded; see canonical_key.cpp
 	affected_seen.clear();
 	for (uint32_t raw : falsified_raws) {
 		LiteralID lit_false;
@@ -3663,8 +3663,8 @@ void Solver::analyzeDynamicSubsumption(unsigned bcp_start_ofs) {
 	// Scope of subsumption check: among other original clauses only (we
 	// stay in the stored-clause world; learned clauses don't have
 	// occurrence_lists_ entries).
-	static thread_local std::vector<uint32_t> eff_C;
-	static thread_local std::vector<uint32_t> eff_D;
+	static std::vector<uint32_t> eff_C;  // single-threaded; see canonical_key.cpp
+	static std::vector<uint32_t> eff_D;  // single-threaded; see canonical_key.cpp
 
 	// For each affected C, look for a D it subsumes.
 	for (ClauseOfs C_ofs : affected_seen) {
