@@ -301,20 +301,13 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(argv[i], "-dumpRecursionMaxDepth") == 0) {
       if (argc <= i + 1) { cout << "-dumpRecursionMaxDepth needs K\n"; return -1; }
       theSolver.config().dump_recursion_max_depth = (unsigned)atoi(argv[i + 1]); i++;
-    } else if (strcmp(argv[i], "-clearCacheAfterFirstRootBranch") == 0) {
-      theSolver.config().clear_cache_after_first_root_branch = true;
-    } else if (strcmp(argv[i], "-disableL1Cache") == 0) {
-      theSolver.config().disable_l1_cache = true;
-    } else if (strcmp(argv[i], "-structuralCountCache") == 0) {
-      theSolver.config().structural_count_cache = true;
     } else if (strcmp(argv[i], "-noAnonymization") == 0) {
       theSolver.config().no_anonymization = true;
+    } else if (strcmp(argv[i], "-canonStats") == 0) {
+      theSolver.config().print_canon_stats = true;
     } else if (strcmp(argv[i], "-wlIter") == 0) {
       if (argc <= i + 1) { cout << "-wlIter needs an int\n"; return -1; }
       theSolver.config().wl_iterations = atoi(argv[i + 1]); i++;
-    } else if (strcmp(argv[i], "-dumpInProcessLearned") == 0) {
-      if (argc <= i + 1) { cout << "-dumpInProcessLearned needs a path\n"; return -1; }
-      theSolver.config().dump_in_process_learned_path = argv[i + 1]; i++;
     } else if (strcmp(argv[i], "-cs") == 0) {
       if (argc <= i + 1) {
         cout << " wrong parameters" << endl;

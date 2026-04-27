@@ -177,15 +177,6 @@ public:
 
   size_t l1_size() const { return l1_cache_.size(); }
 
-  // Diagnostic: wipe both L1 and L2 cache contents. Used by the
-  // -clearCacheAfterFirstRootBranch experiment to test whether
-  // cross-branch cache reuse contaminates the second root branch.
-  void clearAll() {
-    cache_.clear();
-    l1_cache_.clear();
-    pending_has_ = false;
-  }
-
   // Configuration
   size_t max_entries = 1000000;
   size_t l1_max_entries = 1000000;

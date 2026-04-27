@@ -267,12 +267,6 @@ private:
 	// still in collision blocks after dynamic WL.
 	std::vector<uint64_t> static_wl_labels_;
 
-	// Structural-count cache diagnostic counters.
-	long long structural_stores_total_ = 0;
-	long long structural_stores_with_free_ = 0;
-	long long structural_hits_total_ = 0;
-	long long structural_hits_with_free_ = 0;
-
 	// the last time conflict clauses have been deleted
 	unsigned long last_ccl_deletion_time_ = 0;
 	// the last time the conflict clause storage has been compacted

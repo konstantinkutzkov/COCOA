@@ -730,14 +730,7 @@ void Solver::solve(const string &file_name) {
 			     << " us mean" << endl;
 		}
 	}
-	if (config_.structural_count_cache) {
-		std::cerr << "STRUCTURAL_CACHE_STATS"
-		          << " stores=" << structural_stores_total_
-		          << " stores_with_free=" << structural_stores_with_free_
-		          << " hits=" << structural_hits_total_
-		          << " hits_with_free=" << structural_hits_with_free_ << "\n";
-	}
-	{
+	if (config_.print_canon_stats) {
 		std::cerr << "CANON_STATS"
 		          << " calls=" << g_canon_stats.n_calls
 		          << " calls_with_any_collision=" << g_canon_stats.calls_with_any_collision

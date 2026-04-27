@@ -183,7 +183,17 @@ struct SolverConfiguration {
   bool     lsp_no_r4      = false;
   bool     lsp_verbose    = false;
 
+  // ===============================================================
+  // DIAGNOSTIC FLAGS — debug-only, NOT for benchmarking
   // ---------------------------------------------------------------
+  // Everything below this banner up through the WL/cascade section
+  // is opt-in instrumentation preserved for future bug investigations
+  // (canonical-key correctness, order-dependent miscounts, learned-
+  // clause scope, structural cache verification). Turning these on
+  // is generally expensive and changes behavior beyond what a
+  // portfolio harness should explore. Treat them as forensic tools.
+  // ===============================================================
+
   // Learning invariant checks (opt-in, debug aid).
   //
   // When ON, asserts that each time conflict analysis or BCP touches
@@ -229,30 +239,6 @@ struct SolverConfiguration {
   std::string dump_recursion_dir = "";
   unsigned dump_recursion_max_depth = 0;
 
-  // Diagnostic: after the FIRST root-level branchOnLiteral returns at
-  // depth=0, wipe both L1 and L2 content caches before launching the
-  // second root branch. Used to test whether cross-branch cache
-  // contamination is the cause of the perm-on-F miscount: if the
-  // second branch's count becomes correct after this clear, the cache
-  // is the carrier; if still wrong, it's some other in-process state.
-  bool clear_cache_after_first_root_branch = false;
-
-  // Diagnostic: bypass the L1 (identity-based) cache fast-path entirely.
-  // Forces every cache query to go through the L2 canonical key path.
-  // Used to test whether L1's raw-id hash (which ignores assignment
-  // context outside the sub-component) is the source of cross-branch
-  // contamination.
-  bool disable_l1_cache = false;
-
-  // Diagnostic: enable the "structural count" caching scheme. Cache
-  // stores count(F over vars-in-clauses) only — the 2^(free vars at
-  // this level) factor is stripped before store and reapplied at
-  // retrieve based on the caller's own (num_vars - n_in_clauses).
-  // Two sub-components that differ only in their free-var counts
-  // share a single cache entry under this scheme. If enabled with
-  // -l2Strict the n_in_clauses-based equality kicks in.
-  bool structural_count_cache = false;
-
   // Diagnostic: disable the canonical-key anonymization pass
   // (signature ranking, polarity flip, singleton collapse). Use
   // raw per-component active-var indices instead. Two structurally
@@ -260,6 +246,15 @@ struct SolverConfiguration {
   // hash differently — cache hits drop sharply, but if the bug
   // disappears, the anonymization pass is the carrier.
   bool no_anonymization = false;
+
+  // Print canonical-key stats (CANON_STATS, CANON_MAX_BLOCK_HISTOGRAM,
+  // CANON_STATS_ITER2) to stderr at end of solve. Off by default — these
+  // are useful for portfolio/profiling work but noisy in production.
+  bool print_canon_stats = false;
+
+  // ===============================================================
+  // END diagnostic flags
+  // ===============================================================
 
   // Maximum WL refinement iterations to attempt in buildCanonicalKey.
   // The cascade always runs: iter 1, then iter 2..wl_iterations while
@@ -272,13 +267,6 @@ struct SolverConfiguration {
   // downstream than a sharper-but-stricter dynamic key. Hyperparameter
   // candidate for portfolio tuning — see docs/portfolio_insights.md.
   int wl_iterations = 1;
-
-  // Diagnostic: after the first root-level branchOnLiteral returns,
-  // dump every clause currently in conflict_clauses_ (i.e., learned
-  // during preprocessing + branch -5) as one line of lits + " 0\n"
-  // to this path. Used to test whether in-process learned clauses
-  // are themselves unsound (vs whether the cache is the only carrier).
-  std::string dump_in_process_learned_path = "";
 
   // Implicant learning: when BCP forces a literal l* after branching,
   // walk the antecedent chain backward to collect the decision literals

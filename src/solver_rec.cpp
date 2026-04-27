@@ -765,7 +765,6 @@ mpz_class Solver::solveComponent(Component &comp,
 			if (config_.perform_component_caching
 			    && sub->num_variables() >= 3
 			    && !config_.verify_cache
-			    && !config_.disable_l1_cache
 			    && sub->hasL1Hash()) {
 				id_key.hash_lo = sub->l1HashLo();
 				id_key.hash_hi = sub->l1HashHi();
@@ -811,23 +810,6 @@ mpz_class Solver::solveComponent(Component &comp,
 			            sub->num_variables() >= 3 &&
 			            comp_manager_.contentCache().peek(key, sub_count));
 			if (hit && !config_.verify_cache) {
-				// Structural-count cache contract: cache stores
-				// count_active = #SAT over vars actually appearing in
-				// the canonical clauses. Caller applies 2^free for
-				// vars in MY varsBegin that don't appear in any
-				// clause. Two sub-components with the same canonical
-				// active structure but different free-var counts
-				// share a single cache entry.
-				if (config_.structural_count_cache) {
-					unsigned my_extra_free = key.num_vars - key.n_in_clauses;
-					if (my_extra_free > 0) {
-						mpz_class factor = 1;
-						mpz_mul_2exp(factor.get_mpz_t(), factor.get_mpz_t(), my_extra_free);
-						sub_count *= factor;
-					}
-					structural_hits_total_++;
-					if (my_extra_free > 0) structural_hits_with_free_++;
-				}
 				// L2 hit: canonicalized form matches a previously-cached
 				// sub-component. Populate L1 so future visits with this
 				// same ID-set skip the canonical build.
@@ -857,7 +839,7 @@ mpz_class Solver::solveComponent(Component &comp,
 					}
 				}
 				comp_manager_.contentCache().stats_hits++;
-				if (sub->num_variables() >= 3 && !config_.disable_l1_cache) {
+				if (sub->num_variables() >= 3) {
 					comp_manager_.contentCache().l1_store(id_key, sub_count);
 				}
 				result *= sub_count;
@@ -1135,37 +1117,8 @@ mpz_class Solver::solveComponent(Component &comp,
 				if (config_.verify_cache && g_first_sig.find(key.hash) == g_first_sig.end()) {
 					g_first_sig[key.hash] = pre_sig;
 				}
-				// Structural-count cache: strip the 2^(free vars at this
-				// level) factor BEFORE storing; the caller (or future
-				// retriever) reapplies their own free-var factor at hit
-				// time. Both halves reference the same key.n_in_clauses.
-				mpz_class to_store = sub_count;
-				if (config_.structural_count_cache) {
-					unsigned my_extra_free = key.num_vars - key.n_in_clauses;
-					structural_stores_total_++;
-					if (my_extra_free > 0) {
-						structural_stores_with_free_++;
-						mpz_class factor = 1;
-						mpz_mul_2exp(factor.get_mpz_t(), factor.get_mpz_t(), my_extra_free);
-						mpz_class q, r;
-						mpz_tdiv_qr(q.get_mpz_t(), r.get_mpz_t(),
-						            sub_count.get_mpz_t(), factor.get_mpz_t());
-						if (r != 0) {
-							std::cerr << "\n*** STRUCTURAL_CACHE_NONDIVISIBLE ***\n"
-							          << "  sub_count=" << sub_count
-							          << "  my_extra_free=" << my_extra_free
-							          << "  remainder=" << r
-							          << "  key.num_vars=" << key.num_vars
-							          << "  key.n_in_clauses=" << key.n_in_clauses
-							          << "\n";
-							std::cerr.flush();
-							std::abort();
-						}
-						to_store = q;
-					}
-				}
-				comp_manager_.contentCache().store(key, to_store);
-				if (!config_.verify_cache && !config_.disable_l1_cache) {
+				comp_manager_.contentCache().store(key, sub_count);
+				if (!config_.verify_cache) {
 					// Populate L1 so future visits to the same ID-set skip
 					// the canonical build. Skipped under verify_cache because
 					// that mode force-recomputes everything.
@@ -1535,32 +1488,6 @@ mpz_class Solver::solveComponent(Component &comp,
 	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth, -1,
 	                              /*from_separator=*/false,
 	                              reactive_metis_skip_until_depth);
-	if (depth == 0 && !config_.dump_in_process_learned_path.empty()) {
-		std::ofstream out(config_.dump_in_process_learned_path);
-		unsigned dumped = 0;
-		for (auto cl_ofs : conflict_clauses_) {
-			for (auto lt = beginOf(cl_ofs); *lt != SENTINEL_LIT; lt++) {
-				int v = (int)lt->var();
-				if (!lt->sign()) v = -v;
-				out << v << " ";
-			}
-			out << "0\n";
-			dumped++;
-		}
-		std::cerr << "DUMP_IN_PROCESS_LEARNED: wrote " << dumped
-		          << " conflict clauses (incl. preprocessing + branch A) to "
-		          << config_.dump_in_process_learned_path
-		          << " (first branch returned " << A << ")\n";
-	}
-	if (depth == 0 && config_.clear_cache_after_first_root_branch) {
-		std::cerr << "CLEAR_CACHE_AFTER_FIRST_ROOT_BRANCH: first branch returned "
-		          << A << "; clearing L1+L2 caches before second branch.\n"
-		          << "  L1 size before clear: "
-		          << comp_manager_.contentCache().l1_size()
-		          << "  L2 size before clear: "
-		          << comp_manager_.contentCache().size() << "\n";
-		comp_manager_.contentCache().clearAll();
-	}
 	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false, depth, -1,
 	                              /*from_separator=*/false,
 	                              reactive_metis_skip_until_depth);
