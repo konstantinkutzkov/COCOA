@@ -657,6 +657,23 @@ void Solver::solve(const string &file_name) {
 	if (!config_.quiet)
 		statistics_.printShort();
 
+	std::cerr << "MIDSEP_STATS"
+	          << " decomp_attempts=" << mid_sep_decomp_attempts_
+	          << " decomp_splits=" << mid_sep_decomp_splits_
+	          << std::endl;
+	{
+		auto &cc = comp_manager_.contentCache();
+		std::cerr << "FULL_CACHE_STATS"
+		          << " l2_stores=" << cc.stats_stores
+		          << " l2_hits=" << cc.stats_hits
+		          << " l1_stores=" << cc.stats_l1_stores
+		          << " l1_hits=" << cc.stats_l1_hits
+		          << " l1_misses=" << cc.stats_l1_misses
+		          << " total_lookups=" << (cc.stats_l1_hits + cc.stats_l1_misses)
+		          << " total_hits=" << (cc.stats_hits + cc.stats_l1_hits)
+		          << std::endl;
+	}
+
 	if (config_.verify_cache) {
 		auto &cc = comp_manager_.contentCache();
 		cout << "c verify_cache summary: forced_misses(hits_converted)=" << cc.stats_verify_checks

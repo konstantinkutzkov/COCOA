@@ -119,6 +119,71 @@ struct SolverConfiguration {
   double separator_max_ratio   = 0.20;
   double separator_min_balance = 0.30;
 
+  // Mid-consumption decomposition: at every solveComponent entry
+  // with a non-empty separator, run discoverComponentsOf to detect
+  // BCP-induced disconnects. On instances with many recursive calls
+  // and rare disconnects (e.g., t1_071) the per-call cost was found
+  // to dominate; default OFF. CLI: -decomposeInSep.
+  bool   decompose_in_separator = false;
+  // Throttle: only attempt mid-consumption discoverComponentsOf
+  // when at least this many BRANCHING DECISIONS have been made
+  // since the last connectivity check. BCP-forced literals are NOT
+  // counted (they cascade fast on dense instances and would
+  // saturate the gate every recursion). Counter is reset when
+  // discoverComponentsOf runs (mid-consumption gate or post-
+  // consumption block). With k=5 the check fires roughly every
+  // 5 branching decisions. CLI: -decomposeAfterK.
+  unsigned decompose_after_k    = 6;
+
+  // Bonus added to scoreOf(v) for separator-membership when
+  // -sepVarBias is on. CLI: -sepBiasW <float>. Default chosen
+  // empirically to dominate the freq term but stay below typical
+  // VSIDS activity scaling.
+  double separator_bias_weight = 1000.0;
+
+  // Checkpoint 1 toward score-driven branching: at separator-acceptance,
+  // strip VAR elements from the consumed separator and mark them in
+  // `sep_bias_active_`. CLAUSE elements stay in the separator and go
+  // through the existing clause-branching consumption path. VARs are
+  // chosen by `pickBranchVariable` via the bias bonus, not by forced
+  // enumeration. Reduces decision-count by removing 2-decisions-per-
+  // VAR-element-per-recursion. Clause-branching is unchanged.
+  bool   separator_vars_as_bias = false;
+
+  // Stage C: unified picker that scores active VARs and CLAUSEs at
+  // every decision and picks the highest-scoring target. Replaces the
+  // separator-consumption loop and the standalone variable picker.
+  // VAR score = scoreOf(v) (existing, with sep-bias bonus when
+  // separator_vars_as_bias is on). CLAUSE score = length-decay
+  // 2^(-α·|C|) * clause_score_weight (+ sep-bias bonus if the clause
+  // is in the current frame's separator hint). Branching on a CLAUSE
+  // uses branchOnClause (internal learning-suppression). Branching
+  // on a VAR uses branchOnLiteral (learning enabled — we no longer
+  // descend the ND-hierarchy strictly, so the L/R structural
+  // invariant doesn't constrain learning).
+  bool   unified_picker         = false;
+  // Magnitude scaler on the CLAUSE length term. Without it, the
+  // bare sigmoid lives in [0, 1] and every VAR (whose score is
+  // freq+activity, typically tens to hundreds) beats every CLAUSE
+  // on raw scale. Lifting clause scores to a comparable range is
+  // what makes the unified picker a real choice. CLI: -clauseScoreW.
+  double clause_score_weight    = 100.0;
+  // Sigmoid midpoint c in clauseScoreW · 1/(1+exp(-β·(|C|-c))).
+  // Default ≈ clause_branch_min_length so the sigmoid centers at
+  // the smallest length we'll clause-branch on. CLI: -clauseLenMid.
+  double clause_length_midpoint = 3.0;
+  // Sigmoid steepness β. Larger β = sharper discrimination near
+  // the midpoint. CLI: -clauseLenBeta.
+  double clause_length_steepness = 1.0;
+  // Dynamic separator-importance base `a`: separator-bias bonus is
+  // multiplied by a^(-k) where k = currently-active separator
+  // elements (VARs in bias bitmap + CLAUSEs in sep hint, both
+  // intersected with this comp's active state). Singletons score
+  // ~1× sepW; longer separators decay quickly. Default 1.5 sits
+  // between linear and exponential. a=1.0 disables the dynamic
+  // multiplier (recovers the flat-bonus behavior). CLI: -sepImpA.
+  double separator_importance_base = 1.5;
+
   // Phase 3 / Tier 2: adaptive branching via probe-scored τ minimization.
   // When enabled, replaces `pickBranchVariable` on the no-separator path
   // inside `solveComponent`.

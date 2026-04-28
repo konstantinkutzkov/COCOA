@@ -477,7 +477,13 @@ SOLVER_StateT Solver::countSATRec() {
 				    << " leaf_lo=" << nd_hierarchy_.leaf_lo[i]
 				    << " leaf_hi=" << nd_hierarchy_.leaf_hi[i]
 				    << " sep_size=" << nd_hierarchy_.separator[i].size()
-				    << "\n";
+				    << " sep=[";
+				for (size_t j = 0; j < nd_hierarchy_.separator[i].size(); ++j) {
+					const auto &cn = nd_hierarchy_.separator[i][j];
+					if (j) out << ",";
+					out << (cn.kind == CutNode::VAR ? "V" : "C") << cn.id;
+				}
+				out << "]\n";
 			}
 			// Compact var IDs → leaf
 			for (size_t v = 1; v < nd_hierarchy_.var_leaf.size(); v++) {
@@ -551,7 +557,64 @@ SOLVER_StateT Solver::countSATRec() {
 	return SUCCESS;
 }
 
+// Wrapper: function-boundary memoization.
+//
+// Caching is a property of #SAT(active residual), independent of how the
+// search arrived here. We look up at entry, run the body on miss, store
+// on return. The cache stores STRUCTURAL counts (excluding free-var
+// factor); we divide by 2^free_vars before storing and multiply on
+// retrieval. The body (`solveComponentImpl`) is the previous
+// solveComponent implementation; its internal cache lookups in the
+// post-consumption decompose-block are now redundant and are removed
+// in this commit.
 mpz_class Solver::solveComponent(Component &comp,
+                                  vector<CutNode> separator,
+                                  bool separator_reset,
+                                  int depth,
+                                  int nd_node,
+                                  int reactive_metis_skip_until_depth) {
+	if (stopwatch_.timeBoundBroken())
+		return 0;
+
+	bool can_cache = config_.perform_component_caching
+	                 && comp.num_variables() >= 3;
+	CanonicalKey cached_key;
+	unsigned free_vars = 0;
+	bool key_built = false;
+	if (can_cache) {
+		const auto &rm = removed_clauses_;
+		cached_key = buildCanonicalKey(
+		    comp, literal_pool_, literals_, literal_values_,
+		    comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
+		    original_lit_pool_size_, config_.canonical_compact,
+		    config_.no_anonymization, config_.wl_iterations,
+		    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+		key_built = true;
+		free_vars = (cached_key.num_vars > cached_key.n_in_clauses)
+		    ? (cached_key.num_vars - cached_key.n_in_clauses) : 0;
+		mpz_class hit;
+		if (comp_manager_.contentCache().peek(cached_key, hit)) {
+			mpz_class scaled = hit;
+			for (unsigned i = 0; i < free_vars; ++i) scaled *= 2;
+			return scaled;
+		}
+	}
+
+	mpz_class result = solveComponentImpl(
+	    comp, std::move(separator), separator_reset, depth, nd_node,
+	    reactive_metis_skip_until_depth);
+
+	if (can_cache && key_built) {
+		mpz_class structural = result;
+		for (unsigned i = 0; i < free_vars; ++i)
+			mpz_fdiv_q_2exp(structural.get_mpz_t(),
+			                structural.get_mpz_t(), 1);
+		comp_manager_.contentCache().store(cached_key, structural);
+	}
+	return result;
+}
+
+mpz_class Solver::solveComponentImpl(Component &comp,
                                   vector<CutNode> separator,
                                   bool separator_reset,
                                   int depth,
@@ -612,6 +675,155 @@ mpz_class Solver::solveComponent(Component &comp,
 	// correct. So the unsaturated state is an efficiency loss only,
 	// not a soundness defect. Guard removed to avoid per-call cost.)
 
+	// Mid-consumption decomposition. When `separator` is non-empty
+	// (we're consuming an ancestor's separator), check whether BCP
+	// has actually disconnected the residual into ≥ 2 connected
+	// sub-components. If so, recurse on each sub-comp independently
+	// with its own filtered or recomputed separator. Always-on as of
+	// stage A; the previous opt-in flag was redundant since this
+	// path is sound regardless and the cost is bounded by the
+	// already-amortized BCP work.
+	// Mid-consumption decompose: fire when explicitly enabled OR
+	// when the unified picker is on. Under -unifiedPicker the
+	// consumption block is bypassed and `separator` stays non-empty
+	// as an immutable hint, so the post-consumption decompose-block
+	// (which gates on `separator.empty()`) never fires. Without
+	// this path, decomposition is never detected and the search
+	// explodes on instances where the formula disconnects via BCP.
+	// Throttled by decompose_after_k decisions in either case.
+	if ((config_.decompose_in_separator || config_.unified_picker)
+	    && !separator.empty() && !separator_reset
+	    && decisions_since_connectivity_check_ >= config_.decompose_after_k) {
+		mid_sep_decomp_attempts_++;
+		decisions_since_connectivity_check_ = 0;
+		mpz_class trivial_factor = 1;
+		vector<Component*> subcomps = discoverComponentsOf(comp, trivial_factor);
+		// Real split = ≥ 2 connected components. Peeled-only (1 sub +
+		// trivial_factor > 1) defers to the existing post-consumption
+		// decompose-block; the same canonical residual will be
+		// reached when the separator naturally exhausts.
+		if (subcomps.size() <= 1) {
+			for (Component *s : subcomps) delete s;
+			// Fall through to existing flow.
+		} else {
+			mid_sep_decomp_splits_++;
+			mpz_class result = trivial_factor;
+			if (config_.verbose) {
+				std::cerr << "  MIDSEP_DECOMP depth=" << depth
+				          << " subs=" << subcomps.size()
+				          << " trivial=" << trivial_factor
+				          << " parent_sep=" << separator.size() << std::endl;
+			}
+			for (size_t i = 0; i < subcomps.size(); ++i) {
+				Component *sub = subcomps[i];
+				// Build var/clause membership sets for filtering.
+				std::unordered_set<unsigned> sub_vars;
+				for (auto it = sub->varsBegin(); *it != varsSENTINEL; ++it)
+					sub_vars.insert(*it);
+				std::unordered_set<unsigned> sub_clauses;
+				for (auto it = sub->clsBegin(); *it != clsSENTINEL; ++it) {
+					ClauseOfs ofs = comp_manager_.clauseOfsOf(*it);
+					sub_clauses.insert(ofs);
+				}
+				// Step 3a: filter parent's separator to this sub-comp.
+				vector<CutNode> filtered;
+				filtered.reserve(separator.size());
+				for (const auto &nd : separator) {
+					if (nd.kind == CutNode::VAR) {
+						if (sub_vars.count(nd.id)) filtered.push_back(nd);
+					} else {
+						if (sub_clauses.count(nd.id)) filtered.push_back(nd);
+					}
+				}
+				// Step 3b: evaluate filtered separator quality.
+				vector<CutNode> chosen;
+				if (!filtered.empty()
+				    && hierarchySeparatorAcceptable(nd_node, *sub,
+				                                    (unsigned)filtered.size())) {
+					chosen = std::move(filtered);
+				}
+				// Step 3d: rejected/empty → reactive METIS (Gate 1 only).
+				if (chosen.empty() && config_.use_reactive_metis) {
+					std::vector<unsigned> mv;
+					std::vector<std::pair<unsigned, std::vector<unsigned>>> mc;
+					std::vector<std::pair<unsigned, unsigned>> mp;
+					buildMetisInputFromComponent(*sub, mv, mc, mp);
+					RuntimeSeparatorResult r = computeRuntimeMetisSeparator(mv, mc, mp);
+					reactive_metis_calls_++;
+					if (!r.ok) reactive_metis_failed_++;
+					if (r.ok) {
+						unsigned n_quick = 0;
+						for (auto it = sub->varsBegin();
+						     *it != varsSENTINEL; ++it)
+							if (isActive(LiteralID(*it, true))) n_quick++;
+						bool size_ok = separatorSizeAcceptable(
+						    (unsigned)r.separator.size(), n_quick);
+						unsigned Ltot = r.left_vars + r.right_vars;
+						double balance = (Ltot > 0)
+						    ? (double)std::min(r.left_vars, r.right_vars)
+						      / (double)Ltot
+						    : 0.0;
+						if (size_ok
+						    && balance >= config_.separator_min_balance) {
+							chosen = std::move(r.separator);
+							reactive_metis_accepted_++;
+						} else {
+							reactive_metis_gate1_rej_++;
+						}
+					}
+				}
+				// Step 3e: recurse. Two paths depending on whether the
+				// parent's separator still applies to this sub-comp:
+				//   - filtered/chosen non-empty → parent's separator
+				//     still has elements relevant here. Inherit it
+				//     (separator_reset=false) and keep parent's nd_node.
+				//   - chosen is empty (parent's separator was exhausted
+				//     for this sub-comp, AND reactive METIS didn't
+				//     produce one) → sub-comp's structural cut is at
+				//     the child ND-node, not the parent. Recurse with
+				//     separator_reset=true and child_nd_node so the
+				//     sub-comp's solveComponent fires fresh acceptance
+				//     and looks up THIS sub's nd_node separator.
+				int sub_nd_node;
+				bool sub_reset;
+				vector<CutNode> sub_sep;
+				if (!chosen.empty()) {
+					sub_nd_node = nd_node;
+					sub_reset   = false;
+					sub_sep     = std::move(chosen);
+				} else {
+					int mt = -1;
+					if (nd_node >= 0 && nd_hierarchy_.valid) {
+						std::vector<unsigned> sub_active_vars;
+						for (auto it = sub->varsBegin();
+						     *it != varsSENTINEL; ++it)
+							if (isActive(LiteralID(*it, true)))
+								sub_active_vars.push_back(*it);
+						mt = nd_hierarchy_.mapToChild(nd_node, sub_active_vars);
+						if (mt == -2) mt = -1;
+					}
+					sub_nd_node = mt;
+					sub_reset   = true;
+					// sub_sep stays empty; acceptance at sub_nd_node
+					// will populate it.
+				}
+				mpz_class sub_count = solveComponent(
+				    *sub, std::move(sub_sep), sub_reset,
+				    depth + 1, sub_nd_node,
+				    reactive_metis_skip_until_depth);
+				result *= sub_count;
+				delete sub;
+				if (result == 0) {
+					// Free remaining sub-comps before returning.
+					for (size_t j = i + 1; j < subcomps.size(); ++j)
+						delete subcomps[j];
+					return 0;
+				}
+			}
+			return result;
+		}
+	}
+
 	// Decompose step: factor the super-component into its connected components.
 	// Enter this path in two situations:
 	//   (a) separator exhausted without a reset — the classical path after a
@@ -623,12 +835,48 @@ mpz_class Solver::solveComponent(Component &comp,
 	//       disconnection in the sub-call — wasteful given we already know.
 	bool at_passthrough = (nd_node >= 0 && nd_hierarchy_.valid
 	                       && nd_hierarchy_.isPassthrough(nd_node));
-	if ((!separator_reset && separator.empty()) || at_passthrough) {
+	// "Separator exhausted" gate. Under baseline (and `-sepVarBias`)
+	// the consumption loop pops elements until the carried `separator`
+	// is empty, so `separator.empty()` is the right signal. Under
+	// `-unifiedPicker` we don't pop; instead an element is "consumed"
+	// when its var becomes inactive (set on trail) or its clause is
+	// removed/satisfied. So the gate is generalized: fire when no
+	// element of the carried separator is still active. Both modes
+	// reduce to the same condition when the picker is off.
+	bool sep_exhausted = true;
+	for (const auto &nd : separator) {
+		if (nd.kind == CutNode::VAR) {
+			if (isActive(LiteralID(nd.id, true))) { sep_exhausted = false; break; }
+		} else {
+			if (!isClauseRemoved(nd.id) && !isSatisfied(nd.id)) {
+				sep_exhausted = false; break;
+			}
+		}
+	}
+	if ((!separator_reset && sep_exhausted) || at_passthrough) {
 		// Consume the reset flag so the branches below don't re-enter the
 		// separator-lookup block for this same node.
 		separator_reset = false;
+		// Reset the mid-consumption throttle: we're about to do a
+		// fresh connectivity check now anyway, so future calls should
+		// re-accumulate from 0.
+		decisions_since_connectivity_check_ = 0;
 		mpz_class trivial_factor = 1;
 		vector<Component*> subcomps = discoverComponentsOf(comp, trivial_factor);
+		// Fast path: no real decomposition (1 sub identical to comp,
+		// no peeled free vars). Recursing here would lose the parent's
+		// hierarchy lineage — child_nd_node would be -1 for sub-comps
+		// that span both children of nd_node — so under -unifiedPicker
+		// the deeper acceptance rounds wouldn't find any precomputed
+		// separator to mark in sep_bias_active_. Instead, free the
+		// sub-comp (it aliases comp) and fall through to the picker
+		// at the current level: same nd_node, same accepted separator
+		// already marked, residual just slightly smaller from BCP.
+		if (subcomps.size() == 1 && trivial_factor == 1) {
+			delete subcomps[0];
+			// Don't return; let control continue past this block to
+			// the picker / consumption / variable-branching below.
+		} else {
 		mpz_class result = trivial_factor;
 		// "Did decomposition really shrink/split the formula?" If a single
 		// sub-component came back with no isolated peeling, the sub has
@@ -655,6 +903,29 @@ mpz_class Solver::solveComponent(Component &comp,
 					if (isActive(LiteralID(*it, true)))
 						sub_vars.push_back(*it);
 				int mt = nd_hierarchy_.mapToChild(nd_node, sub_vars);
+				// With -decomposeInSep, a sub-comp can legitimately span
+				// both children because mid-consumption decomposition
+				// kept the parent's nd_node for sub-comps that contained
+				// unbranched bridging elements. In that context -2 is
+				// not an invariant violation — it just means we cannot
+				// descend to a single child here. Treat as -1 (no
+				// hierarchy descent) and let the recursive solveComponent
+				// fall back to reactive METIS / plain branching. When
+				// the flag is off, the original abort discipline holds.
+				// Under -decomposeInSep / -sepVarBias / -unifiedPicker,
+				// the precomputed separator no longer strictly cuts
+				// the residual. A sub-comp may legitimately span both
+				// L and R children of nd_node; treat -2 as "no clean
+				// child mapping" and descend without hierarchy guidance.
+				// (Already true under any of those flags now, after
+				// the unified-picker fix that wires mid-consumption
+				// decompose under it.)
+				if (mt == -2
+				    && (config_.decompose_in_separator
+				        || config_.separator_vars_as_bias
+				        || config_.unified_picker)) {
+					mt = -1;
+				}
 				if (mt == -2) {
 					int lc = nd_hierarchy_.left_child[nd_node];
 					int rc = nd_hierarchy_.right_child[nd_node];
@@ -1130,6 +1401,7 @@ mpz_class Solver::solveComponent(Component &comp,
 			if (result == 0) break;
 		}
 		return result;
+		}  // close the else (real decomposition path)
 	}
 
 	// If requested, try to find a separator for this component.
@@ -1193,6 +1465,24 @@ mpz_class Solver::solveComponent(Component &comp,
 				    !hierarchySeparatorAcceptable(nd_node, comp,
 				                                  (unsigned)separator.size())) {
 					separator.clear();
+				}
+				// Legacy -sepVarBias path: strip VARs to bias bitmap,
+				// keep CLAUSEs in separator. NOT applied under
+				// -unifiedPicker — the picker reads VAR membership
+				// directly from `separator`, so we keep both kinds
+				// in the carried vector.
+				if (config_.separator_vars_as_bias
+				    && !config_.unified_picker
+				    && !separator.empty()) {
+					std::vector<CutNode> vars_only, clauses_only;
+					vars_only.reserve(separator.size());
+					clauses_only.reserve(separator.size());
+					for (const auto &nd : separator) {
+						if (nd.kind == CutNode::VAR) vars_only.push_back(nd);
+						else clauses_only.push_back(nd);
+					}
+					if (!vars_only.empty()) markSeparatorBias(vars_only);
+					separator = std::move(clauses_only);
 				}
 				// Verbose logging: accepted precomputed separator —
 				// record size, component size, L/R distribution.
@@ -1380,8 +1670,27 @@ mpz_class Solver::solveComponent(Component &comp,
 							          << " L=" << r.left_vars
 							          << " R=" << r.right_vars << std::endl;
 						}
-						separator = std::move(r.separator);
-						nd_node = -1;
+						if (config_.separator_vars_as_bias
+						    && !config_.unified_picker) {
+							// Legacy -sepVarBias path: strip VARs to bias.
+							std::vector<CutNode> vars_only, clauses_only;
+							vars_only.reserve(r.separator.size());
+							clauses_only.reserve(r.separator.size());
+							for (const auto &nd : r.separator) {
+								if (nd.kind == CutNode::VAR)
+									vars_only.push_back(nd);
+								else
+									clauses_only.push_back(nd);
+							}
+							if (!vars_only.empty()) markSeparatorBias(vars_only);
+							separator = std::move(clauses_only);
+							nd_node = -1;
+						} else {
+							// Default + -unifiedPicker: keep all elements
+							// in the carried separator.
+							separator = std::move(r.separator);
+							nd_node = -1;
+						}
 					} else {
 						// Either METIS failed, or Scheme F gates rejected.
 						// In both cases throttle: don't retry reactive METIS
@@ -1392,6 +1701,51 @@ mpz_class Solver::solveComponent(Component &comp,
 					}
 				}
 			}
+		}
+	}
+
+	// Stage C: unified picker. Score active VARs and CLAUSEs at this
+	// decision; branch on the highest-scoring target. Replaces both
+	// the separator-consumption loop below and the variable picker
+	// further down. Forced-decision overrides and adaptive branching
+	// keep their existing paths and take precedence when configured.
+	if (config_.unified_picker
+	    && !config_.perform_adaptive_branching
+	    && config_.forced_decisions.empty()) {
+		BranchTarget tgt = pickBranchTarget(comp, separator);
+		if (tgt.score < 0.0f) {
+			return 1;
+		}
+		if (tgt.kind == BranchTarget::VAR) {
+			VariableIndex v = tgt.id;
+			LiteralID lit_t(v, true), lit_f(v, false);
+			bool t_first = literal(lit_t).activity_score_
+			               > literal(lit_f).activity_score_;
+			// Pass `separator` forward unchanged: in unified-picker
+			// mode it's an immutable hint that drives the clause-bias
+			// score on subsequent picks; we do not consume from it.
+			// from_separator=false: learning is enabled for var
+			// branches under the unified picker (we no longer rely
+			// on strict L/R descent that could be broken by learned
+			// clauses; mapToChild==-2 is already softened to -1).
+			mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp,
+			                              separator, false, depth, nd_node,
+			                              /*from_separator=*/false,
+			                              reactive_metis_skip_until_depth);
+			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp,
+			                              separator, false, depth, nd_node,
+			                              /*from_separator=*/false,
+			                              reactive_metis_skip_until_depth);
+			return A + B;
+		} else {
+			ClauseOfs ofs = (ClauseOfs)tgt.id;
+			mpz_class A = branchOnClause(ofs, comp, separator, false,
+			                              false, depth, nd_node,
+			                              reactive_metis_skip_until_depth);
+			mpz_class B = branchOnClause(ofs, comp, separator, false,
+			                              true, depth, nd_node,
+			                              reactive_metis_skip_until_depth);
+			return A - B;
 		}
 	}
 
@@ -1944,6 +2298,84 @@ VariableIndex Solver::pickBranchVariable(Component &comp) {
 			best = *it;
 		}
 	}
+	return best;
+}
+
+Solver::BranchTarget Solver::pickBranchTarget(Component &comp,
+                                              const std::vector<CutNode> &separator) {
+	BranchTarget best;
+
+	// Build per-call sep sets from the carried `separator` (single
+	// source of truth under the unified picker — VARs and CLAUSEs
+	// together). Cheap because `separator` is small (typically a few
+	// elements).
+	std::unordered_set<unsigned> sep_var_set;
+	std::unordered_set<unsigned> sep_clause_set;
+	for (const auto &nd : separator) {
+		if (nd.kind == CutNode::VAR) sep_var_set.insert(nd.id);
+		else                         sep_clause_set.insert(nd.id);
+	}
+
+	// k = active separator elements in this comp.
+	unsigned k = 0;
+	for (unsigned vid : sep_var_set)
+		if (isActive(LiteralID(vid, true))) k++;
+	for (unsigned ofs : sep_clause_set)
+		if (!isClauseRemoved((ClauseOfs)ofs)
+		    && !isSatisfied((ClauseOfs)ofs)) k++;
+
+	// Dynamic separator-importance multiplier m = a^(-k). Singletons
+	// keep ~1× sepW; longer separators decay. a=1.0 disables (m=1).
+	const double a = config_.separator_importance_base;
+	const double m = (a > 1.0) ? std::pow(a, -(double)k) : 1.0;
+	const float sep_bonus_m = (float)(config_.separator_bias_weight * m);
+
+	// Phase 2a: score VARs. The bonus is applied to vars in the
+	// carried separator.
+	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
+		if (!isActive(LiteralID(*it, true))) continue;
+		float s = scoreOf(*it);  // freq + activity (no static bias under unified picker)
+		if (sep_var_set.count(*it)) {
+			s += sep_bonus_m;
+		}
+		if (s > best.score) {
+			best.kind  = BranchTarget::VAR;
+			best.id    = *it;
+			best.score = s;
+		}
+	}
+
+	// Phase 2b: score CLAUSEs (originals only, length above the
+	// clause-branching threshold so we don't pick binaries which
+	// collapse to var-branching anyway).
+	if (config_.perform_clause_branching) {
+		const double beta = config_.clause_length_steepness;
+		const double mid  = config_.clause_length_midpoint;
+		const double cw   = config_.clause_score_weight;
+		for (auto ct = comp.clsBegin(); *ct != clsSENTINEL; ++ct) {
+			ClauseOfs ofs = comp_manager_.clauseOfsOf(*ct);
+			if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+			if (isClauseRemoved(ofs) || isSatisfied(ofs)) continue;
+			unsigned active_len = 0;
+			for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt)
+				if (literal_values_[*lt] == X_TRI) active_len++;
+			if (active_len < config_.clause_branch_min_length) continue;
+			// Sigmoid: 1/(1+exp(-β·(L-c))). Increasing in L —
+			// longer clauses are better branching targets (more
+			// lits pinned in the negated branch ⇒ deeper BCP cascade).
+			double sig = 1.0 / (1.0 + std::exp(-beta * ((double)active_len - mid)));
+			float s = (float)(cw * sig);
+			if (sep_clause_set.count((unsigned)ofs)) {
+				s += sep_bonus_m;
+			}
+			if (s > best.score) {
+				best.kind  = BranchTarget::CLAUSE;
+				best.id    = (unsigned)ofs;
+				best.score = s;
+			}
+		}
+	}
+
 	return best;
 }
 

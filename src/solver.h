@@ -267,6 +267,29 @@ private:
 	// still in collision blocks after dynamic WL.
 	std::vector<uint64_t> static_wl_labels_;
 
+	// Separator-as-bias mode: set of VAR ids the picker should boost.
+	// Filled lazily via markSeparatorBias() from the separator-acceptance
+	// gate when config_.separator_vars_as_bias is on; consulted in
+	// scoreOf. Size is num_variables()+1 (1-based, entry 0 unused).
+	std::vector<bool> sep_bias_active_;
+
+	// Throttle counter for mid-consumption decompose checks. Bumped
+	// only on BRANCHING DECISIONS (setLiteralIfFree call where
+	// !ant.isAnt() — i.e. no antecedent, top-level decision).
+	// BCP-forced literals are NOT counted: they cascade rapidly on
+	// dense instances and would saturate the gate on every recursion.
+	// Reset when discoverComponentsOf runs (mid-consumption gate or
+	// post-consumption block). Consulted only when
+	// config_.decompose_in_separator is on.
+	unsigned long decisions_since_connectivity_check_ = 0;
+
+	// Counters for the experimental -decomposeInSep / -cacheInSep paths,
+	// printed at solve end via printMidSepStats().
+public:
+	unsigned long long mid_sep_decomp_attempts_ = 0;
+	unsigned long long mid_sep_decomp_splits_   = 0;
+private:
+
 	// the last time conflict clauses have been deleted
 	unsigned long last_ccl_deletion_time_ = 0;
 	// the last time the conflict clause storage has been compacted
@@ -396,6 +419,17 @@ private:
 	                         int depth = 0,
 	                         int nd_node = -1,  // hierarchy node, -1 = use root
 	                         int reactive_metis_skip_until_depth = 0);
+
+	// The body of solveComponent. The public solveComponent wraps this
+	// with function-boundary memoization (canonical-key lookup at
+	// entry, store on return). All recursive calls go through the
+	// public wrapper to benefit from the cache uniformly.
+	mpz_class solveComponentImpl(Component &comp,
+	                             std::vector<CutNode> separator,
+	                             bool separator_reset,
+	                             int depth = 0,
+	                             int nd_node = -1,
+	                             int reactive_metis_skip_until_depth = 0);
 	// Branch on a literal, run BCP, recurse, then restore state.
 	//
 	// `from_separator` distinguishes the two call sites:
@@ -434,6 +468,22 @@ private:
 	                                              mpz_class &trivial_factor);
 	// Select next variable to branch on within comp (highest activity score).
 	VariableIndex pickBranchVariable(Component &comp);
+
+	// Stage C: result of the unified picker — either a VAR (id is a
+	// variable index) or a CLAUSE (id is a clause offset).
+	struct BranchTarget {
+		enum Kind { VAR, CLAUSE };
+		Kind kind = VAR;
+		unsigned id = 0;
+		float score = -1.0f;
+	};
+	// Score every active VAR + every long active CLAUSE in `comp`,
+	// return the argmax. CLAUSE candidates are gated on the existing
+	// `clause_branch_min_length` so we don't clause-branch on
+	// binaries (which collapse to var-branching anyway). Clauses in
+	// `sep_clauses` get the separator-bias bonus on their score.
+	BranchTarget pickBranchTarget(Component &comp,
+	                              const std::vector<CutNode> &sep_clauses);
 
 	// Phase 4: implicant learning helpers (see solver_config.h for design).
 	// Walks the antecedent chain backward from `l_star` and collects the
@@ -640,7 +690,32 @@ private:
 //		score += (10*stack_.get_decision_level()) * literal(LiteralID(v, true)).activity_score_;
 //		score += (10*stack_.get_decision_level()) * literal(LiteralID(v, false)).activity_score_;
 
+		// Separator-as-bias mode: VARs the ND/reactive separator gate has
+		// accepted are treated as preferred branch targets, mirroring
+		// ganak's td_score addend (counter.cpp:1289). The bias persists
+		// across recursive solveComponent calls — once a var is marked, it
+		// keeps the boost for the remainder of the search.
+		// Static separator-bias bonus, used only outside the unified
+		// picker. Under -unifiedPicker the picker applies a
+		// dynamic-magnitude bonus (scaled by a^(-k)) itself, so we
+		// must not double-count here.
+		if (config_.separator_vars_as_bias
+		    && !config_.unified_picker
+		    && v < sep_bias_active_.size()
+		    && sep_bias_active_[v]) {
+			score += (float)config_.separator_bias_weight;
+		}
 		return score;
+	}
+
+	// Mark VAR elements of an accepted separator as preferred branch
+	// targets. Lazy-resizes sep_bias_active_ on first call.
+	void markSeparatorBias(const std::vector<CutNode> &sep) {
+		if (sep_bias_active_.size() <= num_variables())
+			sep_bias_active_.assign(num_variables() + 1, false);
+		for (const auto &nd : sep)
+			if (nd.kind == CutNode::VAR && nd.id < sep_bias_active_.size())
+				sep_bias_active_[nd.id] = true;
 	}
 
 	bool setLiteralIfFree(LiteralID lit,
@@ -723,6 +798,12 @@ private:
 			getHeaderOf(ant.asCl()).increaseScore();
 		literal_values_[lit] = T_TRI;
 		literal_values_[lit.neg()] = F_TRI;
+		// Bump the throttle counter for the mid-consumption decompose
+		// gate, but only on BRANCHING DECISIONS (no antecedent).
+		// BCP-forced lits don't bump it — on dense instances BCP can
+		// cascade many lits per decision and would saturate the
+		// counter at every recursion if counted.
+		if (!ant.isAnt()) decisions_since_connectivity_check_++;
 		return true;
 	}
 

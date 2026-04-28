@@ -387,15 +387,31 @@ void NDHierarchy::build(
   //   passthrough = has children, empty separator (connectivity split)
   //   internal    = has children, non-empty separator (METIS bisection)
   int total_sep = 0, internal = 0, passthrough = 0;
+  int max_sep = 0;
+  int sep_buckets[7] = {0,0,0,0,0,0,0};  // [0]=1-2, [1]=3-4, [2]=5-7, [3]=8-15, [4]=16-31, [5]=32-63, [6]=64+
   for (int i = 0; i < next_node; i++) {
     bool is_leaf = (left_child[i] < 0 && right_child[i] < 0);
     if (is_leaf) continue;
     if (separator[i].empty()) passthrough++;
-    else { total_sep += separator[i].size(); internal++; }
+    else {
+      int s = (int)separator[i].size();
+      total_sep += s; internal++;
+      if (s > max_sep) max_sep = s;
+      if (s <= 2) sep_buckets[0]++;
+      else if (s <= 4) sep_buckets[1]++;
+      else if (s <= 7) sep_buckets[2]++;
+      else if (s <= 15) sep_buckets[3]++;
+      else if (s <= 31) sep_buckets[4]++;
+      else if (s <= 63) sep_buckets[5]++;
+      else sep_buckets[6]++;
+    }
   }
   fprintf(stderr, "NDHierarchy: %d tree nodes, %d internal (sep), "
-          "%d passthrough, %d leaves, %d total sep elements\n",
-          next_node, internal, passthrough, next_leaf, total_sep);
+          "%d passthrough, %d leaves, %d total sep elements, "
+          "max_sep=%d, sep_buckets=[1-2:%d, 3-4:%d, 5-7:%d, 8-15:%d, 16-31:%d, 32-63:%d, 64+:%d]\n",
+          next_node, internal, passthrough, next_leaf, total_sep, max_sep,
+          sep_buckets[0], sep_buckets[1], sep_buckets[2], sep_buckets[3],
+          sep_buckets[4], sep_buckets[5], sep_buckets[6]);
 }
 
 vector<CutNode> NDHierarchy::lookupSeparator(

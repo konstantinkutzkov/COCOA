@@ -367,3 +367,42 @@ amortized to < 1 s on the hardest instance; per-lookup cost
 unchanged.
 
 Both regression tests pass. All counts match.
+
+---
+
+## 2026-04-29 — Unified picker (`-unifiedPicker`) requires `-decomposeAfterK 1000`
+
+Under `-unifiedPicker`, the picker bypasses the separator-consumption block; the carried `separator` argument is the immutable hint (VARs+CLAUSEs together) that the picker reads to apply the separator-bias bonus during scoring. The picker never shrinks `separator` — it's the picker's "what's structurally important here" reference, consumed implicitly as elements become inactive (BCP-set vars, removed/satisfied clauses).
+
+The mid-consumption decompose-block (`config.decompose_in_separator || config.unified_picker`) fires every `decompose_after_k` BRANCHING DECISIONS when `separator` is non-empty. Under the unified picker `separator` is essentially ALWAYS non-empty (it's the immutable hint), so the gate fires every `decompose_after_k` decisions throughout the entire search.
+
+With `decompose_after_k = 6` default, this aggressive firing **interferes with the picker's ND-hierarchy descent**:
+
+1. The picker's natural mode is "branch on this nd_node's separator → all 4 elements get consumed via picks → post-consumption decompose-block fires (`sep_exhausted = true`) → splits cleanly into L/R sub-comps mapping to clean child nd_nodes → recurse with separator_reset=true → next nd_node's acceptance fires."
+2. Mid-consumption decompose firing **before** all 4 separator elements are picked breaks this. `discoverComponentsOf` runs with the formula still partially connected via unbranched separator elements; sub-comps span both children → mapToChild returns -2 → softened to -1 → recurses without hierarchy info, so the next acceptance can't find a precomputed separator at the right node. The sub-tree degenerates to score-only (freq+activity) branching, search-tree size explodes.
+
+**Concrete observation on t1_071** (640v / 1818c):
+
+| Config | decisions | conflicts | wall |
+|---|---|---|---|
+| baseline `-rec -sep 5 -cb 3 -sepMode metis` | 62K | 5,094 | 0.63 s |
+| picker, default k=6 | — | — | **TIMEOUT > 60 s** |
+| picker, `-decomposeAfterK 1000` (effectively off) | 286K | 33,271 | 1.29 s |
+| picker, `-decomposeAfterK 1000 -sepPositionW 100` | 314K | 35,831 | 1.39 s |
+
+So:
+- `decompose_after_k = 6` makes the picker un-usable (TIMEOUT).
+- `decompose_after_k = 1000` (effectively disable) brings the picker to ~2× baseline on t1_071 — acceptable for "general score-driven branching" tradeoff.
+- The position-bonus knob (`-sepPositionW`) was tested and removed: it doesn't help on t1_071 (slightly worse), and the design preference is to keep score-driven separator selection without forcing METIS list order.
+
+**Open question**: the mid-consumption decompose throttle was originally intended to **help** by detecting BCP-induced disconnects between branchings. Under the unified picker its effect is reversed because the picker keeps `separator` non-empty. A cleaner future design would gate the mid-consumption decompose specifically on "BCP just made significant structural changes" rather than firing every k decisions when the carried separator happens to be non-empty. For now, recommended invocation under the picker:
+
+```
+-rec -sep 5 -cb 3 -sepMode metis -unifiedPicker -clauseScoreW 100 -sepBiasW 1000 -sepImpA 1.0 -decomposeAfterK 1000
+```
+
+| Timestamp | Commit | Compile flags | Solver flags | Instance | Time | Env / notes |
+|---|---|---|---|---|---|---|
+| 2026-04-29 00:18 | `<dirty: position-bonus removed>` | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -sepMode metis` | /tmp/t1_071.cnf (md5 `e88123bdbf87205e36a681f2a3111e7c`) | 0.63 s | on battery; baseline reference. count `4562956...076272640`. Decisions 62,046; conflicts 5,094. |
+| 2026-04-29 00:18 | `<dirty>` | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -sepMode metis -unifiedPicker -clauseScoreW 100 -sepBiasW 1000 -sepImpA 1.0 -decomposeAfterK 1000` | /tmp/t1_071.cnf | 1.29 s | on battery; picker ~2× baseline. Decisions 286,434; conflicts 33,271 (~6× baseline due to learning enabled in picker var-branches). |
+| 2026-04-29 00:18 | `<dirty>` | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | (same picker flags, NO `-decomposeAfterK`) | /tmp/t1_071.cnf | TIMEOUT > 60 s | on battery; default `decompose_after_k=6` interferes with picker's hierarchy descent. |
