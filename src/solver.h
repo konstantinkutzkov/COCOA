@@ -20,6 +20,7 @@
 #include "solver_config.h"
 
 #include <sys/time.h>
+#include <unordered_set>
 
 enum retStateT {
 	EXIT, RESOLVED, PROCESS_COMPONENT, BACKTRACK
@@ -690,6 +691,16 @@ private:
 //		score += (10*stack_.get_decision_level()) * literal(LiteralID(v, true)).activity_score_;
 //		score += (10*stack_.get_decision_level()) * literal(LiteralID(v, false)).activity_score_;
 
+		// Recursive per-literal BCP-cascade addend (prototype). When
+		// cascade_score_weight > 0, augment freq+activity with a proxy
+		// for "branches saved" by branching on v: counts how many
+		// literals would be forced via the binary-implication chain
+		// rooted at each polarity, geometrically weighted by depth.
+		if (config_.cascade_score_weight > 0.0) {
+			score += (float)(config_.cascade_score_weight
+			                 * computeCascadeScore(v));
+		}
+
 		// Separator-as-bias mode: VARs the ND/reactive separator gate has
 		// accepted are treated as preferred branch targets, mirroring
 		// ganak's td_score addend (counter.cpp:1289). The bias persists
@@ -707,6 +718,11 @@ private:
 		}
 		return score;
 	}
+
+	// Recursive BCP-cascade scoring: see solver.cpp.
+	float computeCascadeScore(VariableIndex v);
+	float cascadeRecurse(LiteralID lit, int depth, float coeff,
+	                     std::unordered_set<unsigned> &visited);
 
 	// Mark VAR elements of an accepted separator as preferred branch
 	// targets. Lazy-resizes sep_bias_active_ on first call.

@@ -133,6 +133,18 @@ int main(int argc, char *argv[]) {
       if (i + 1 >= argc) { cout << "-cheapScoreW needs a number\n"; return -1; }
       theSolver.config().cheap_score_weight = atof(argv[i + 1]);
       i++;
+    } else if (strcmp(argv[i], "-cascadeW") == 0) {
+      if (i + 1 >= argc) { cout << "-cascadeW needs a number\n"; return -1; }
+      theSolver.config().cascade_score_weight = atof(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-cascadeDepth") == 0) {
+      if (i + 1 >= argc) { cout << "-cascadeDepth needs an integer\n"; return -1; }
+      theSolver.config().cascade_score_depth = atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-cascadeCoeff") == 0) {
+      if (i + 1 >= argc) { cout << "-cascadeCoeff needs a number\n"; return -1; }
+      theSolver.config().cascade_score_coeff = atof(argv[i + 1]);
+      i++;
     } else if (strcmp(argv[i], "-rec") == 0) {
       // Accepted for backward compatibility; recursive is now the only solver.
     } else if (strcmp(argv[i], "-learnLevel") == 0) {

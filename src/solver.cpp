@@ -1251,6 +1251,49 @@ void Solver::stage0_cheap_scores(Component &comp,
 	}
 }
 
+// Recursive BCP-cascade scoring (prototype):
+//   weight(ℓ) = 1 if setting ℓ to true forces no literal,
+//               coeff × Σ weight(forced) over forced partners otherwise
+// Bounded by `depth` (recursion cap) and a `visited` set to handle binary
+// implication-graph cycles. Walks `binary_links_[¬ℓ]` for the immediate
+// forced literals (binaries `(¬ℓ ∨ partner)` with active partner). Does
+// NOT (yet) include length-3 clauses that would shorten to a binary
+// upon setting ℓ — that's a deeper extension.
+float Solver::cascadeRecurse(LiteralID lit, int depth, float coeff,
+                              std::unordered_set<unsigned> &visited) {
+	if (depth == 0) return 1.0f;
+	if (!visited.insert(lit.raw()).second) return 1.0f;
+
+	LiteralID complement = lit.neg();
+	float forced_sum = 0.0f;
+	bool any_forced = false;
+
+	const auto &blinks = literal(complement).binary_links_;
+	for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
+		if (literal_values_[*bt] != X_TRI) continue;
+		any_forced = true;
+		forced_sum += cascadeRecurse(*bt, depth - 1, coeff, visited);
+	}
+
+	if (!any_forced) return 1.0f;
+	return coeff * forced_sum;
+}
+
+float Solver::computeCascadeScore(VariableIndex v) {
+	if (!isActive(LiteralID(v, true))) return 0.0f;
+	const int   max_depth = config_.cascade_score_depth;
+	const float coeff     = (float)config_.cascade_score_coeff;
+	std::unordered_set<unsigned> visited;
+	visited.reserve(64);
+	LiteralID lit_t(v, true), lit_f(v, false);
+	float pos = cascadeRecurse(lit_t, max_depth, coeff, visited);
+	visited.clear();
+	float neg = cascadeRecurse(lit_f, max_depth, coeff, visited);
+	// Worst-case branch determines tree depth in #SAT counting; min
+	// rewards vars where BOTH polarities cascade strongly (balanced).
+	return std::min(pos, neg);
+}
+
 VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsat) {
 	out_unsat = false;
 

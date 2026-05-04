@@ -204,6 +204,20 @@ struct SolverConfiguration {
   // misses but separator preference doesn't substitute for either.
   double cheap_score_weight = 0.0;
 
+  // Recursive per-literal cascade weighting (prototype). When weight > 0,
+  // Solver::scoreOf adds cascade_score_weight × computeCascadeScore(v),
+  // where computeCascadeScore evaluates a recursive BCP-cascade proxy:
+  //   weight(ℓ) = 1 if setting ℓ forces no other literal,
+  //               coeff × Σ weight(forced_partner) otherwise
+  // bounded by cascade_score_depth (recursion cap, default 3) and a
+  // visited set to handle binary-implication cycles. Variable score uses
+  // min(weight(lit_pos), weight(lit_neg)) — worst-case branch is what
+  // determines tree depth in #SAT counting.
+  // CLI: -cascadeW, -cascadeDepth, -cascadeCoeff.
+  double cascade_score_weight = 0.0;
+  int    cascade_score_depth  = 3;
+  double cascade_score_coeff  = 2.0;
+
   // Phase 3 / Tier 2: adaptive branching via probe-scored τ minimization.
   // When enabled, replaces `pickBranchVariable` on the no-separator path
   // inside `solveComponent`.
