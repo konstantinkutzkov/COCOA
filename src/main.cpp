@@ -125,6 +125,14 @@ int main(int argc, char *argv[]) {
       if (i + 1 >= argc) { cout << "-sepImpA needs a number\n"; return -1; }
       theSolver.config().separator_importance_base = atof(argv[i + 1]);
       i++;
+    } else if (strcmp(argv[i], "-sepSizeNormP") == 0) {
+      if (i + 1 >= argc) { cout << "-sepSizeNormP needs a number in [0,1]\n"; return -1; }
+      theSolver.config().separator_size_norm_p = atof(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-cheapScoreW") == 0) {
+      if (i + 1 >= argc) { cout << "-cheapScoreW needs a number\n"; return -1; }
+      theSolver.config().cheap_score_weight = atof(argv[i + 1]);
+      i++;
     } else if (strcmp(argv[i], "-rec") == 0) {
       // Accepted for backward compatibility; recursive is now the only solver.
     } else if (strcmp(argv[i], "-learnLevel") == 0) {

@@ -2079,6 +2079,14 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 	}
 	statistics_.num_decisions_++;
 
+	if (config_.log_branches) {
+		std::cerr << "BRANCH_CLAUSE_ENTER ofs=" << cl_ofs
+		          << " negate=" << (negate_literals ? 1 : 0)
+		          << " DL=" << stack_.get_decision_level()
+		          << " depth=" << depth
+		          << "\n";
+	}
+
 	// Push a StackLevel so the literals set below (by clause removal or
 	// clause negation) get decision_level >= 1 rather than 0.
 	//
@@ -2324,17 +2332,58 @@ Solver::BranchTarget Solver::pickBranchTarget(Component &comp,
 		if (!isClauseRemoved((ClauseOfs)ofs)
 		    && !isSatisfied((ClauseOfs)ofs)) k++;
 
-	// Dynamic separator-importance multiplier m = a^(-k). Singletons
+	// Optional cross-instance normalization: divide k by (N+M)^p, where
+	// (N+M) is the active incidence-graph size of this comp (active vars +
+	// active original clauses). p=0 disables (recovers raw k). When p>0,
+	// large separators on big formulas decay less than the same-sized
+	// separator on a small formula — making the bonus shape comparable
+	// across instance scales.
+	const double p_norm = config_.separator_size_norm_p;
+	double k_eff = (double)k;
+	if (p_norm > 0.0 && k > 0) {
+		unsigned n_active_vars = 0;
+		for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it)
+			if (isActive(LiteralID(*it, true))) n_active_vars++;
+		unsigned n_active_clauses = 0;
+		for (auto ct = comp.clsBegin(); *ct != clsSENTINEL; ++ct) {
+			ClauseOfs ofs = comp_manager_.clauseOfsOf(*ct);
+			if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+			if (isClauseRemoved(ofs) || isSatisfied(ofs)) continue;
+			n_active_clauses++;
+		}
+		unsigned size_nm = n_active_vars + n_active_clauses;
+		if (size_nm > 0) {
+			k_eff = (double)k / std::pow((double)size_nm, p_norm);
+		}
+	}
+
+	// Dynamic separator-importance multiplier m = a^(-k_eff). Singletons
 	// keep ~1× sepW; longer separators decay. a=1.0 disables (m=1).
 	const double a = config_.separator_importance_base;
-	const double m = (a > 1.0) ? std::pow(a, -(double)k) : 1.0;
+	const double m = (a > 1.0) ? std::pow(a, -k_eff) : 1.0;
 	const float sep_bonus_m = (float)(config_.separator_bias_weight * m);
+
+	// Optional length-weighted cheap_score addend on var scoring,
+	// reusing the adaptive picker's BCP-cascade proxy. When weight > 0,
+	// vars in many short clauses get an extra positive contribution —
+	// designed for BCP-dominated instances where length-agnostic freq
+	// misses the high-cascade targets.
+	const double cheap_w = config_.cheap_score_weight;
+	std::vector<double> cheap_scores;
+	if (cheap_w > 0.0) {
+		std::vector<VariableIndex> cheap_candidates;  // unused result
+		stage0_cheap_scores(comp, config_.stage0_length_decay,
+		                    cheap_scores, cheap_candidates);
+	}
 
 	// Phase 2a: score VARs. The bonus is applied to vars in the
 	// carried separator.
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
 		if (!isActive(LiteralID(*it, true))) continue;
 		float s = scoreOf(*it);  // freq + activity (no static bias under unified picker)
+		if (cheap_w > 0.0 && *it < cheap_scores.size()) {
+			s += (float)(cheap_w * cheap_scores[*it]);
+		}
 		if (sep_var_set.count(*it)) {
 			s += sep_bonus_m;
 		}

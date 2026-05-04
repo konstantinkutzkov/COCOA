@@ -184,6 +184,26 @@ struct SolverConfiguration {
   // multiplier (recovers the flat-bonus behavior). CLI: -sepImpA.
   double separator_importance_base = 1.5;
 
+  // Cross-instance normalization for the dynamic decay. The picker scores
+  // separator elements with bonus = sepBiasW * a^(-k / (N+M)^p), where
+  // (N+M) is the active incidence-graph size of the current sub-comp
+  // (active vars + active original clauses) and p in [0, 1] controls how
+  // aggressively k is shrunk relative to comp size. p=0 disables (recovers
+  // raw a^(-k) behaviour). p=0.5 treats k as a fraction of sqrt(N+M).
+  // CLI: -sepSizeNormP.
+  double separator_size_norm_p = 0.0;
+
+  // Picker hybrid weight on the adaptive Stage-0 cheap_score
+  // (Σ 2^(-α·active_len(C))) over freq+activity. Var score becomes
+  //   freq + 20·activity + cheap_score_weight · cheap_score(v) + sep_bonus
+  // where α = stage0_length_decay (already auto-picked when
+  // auto_stage0_length_decay is on). Default 0 disables (recovers
+  // length-agnostic freq+activity scoring). CLI: -cheapScoreW.
+  // Useful on BCP-dominated instances where vars in many short clauses
+  // are the high-cascade branching targets that legacy freq+activity
+  // misses but separator preference doesn't substitute for either.
+  double cheap_score_weight = 0.0;
+
   // Phase 3 / Tier 2: adaptive branching via probe-scored τ minimization.
   // When enabled, replaces `pickBranchVariable` on the no-separator path
   // inside `solveComponent`.
