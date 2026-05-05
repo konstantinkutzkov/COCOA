@@ -204,19 +204,48 @@ struct SolverConfiguration {
   // misses but separator preference doesn't substitute for either.
   double cheap_score_weight = 0.0;
 
-  // Recursive per-literal cascade weighting (prototype). When weight > 0,
-  // Solver::scoreOf adds cascade_score_weight × computeCascadeScore(v),
-  // where computeCascadeScore evaluates a recursive BCP-cascade proxy:
-  //   weight(ℓ) = 1 if setting ℓ forces no other literal,
-  //               coeff × Σ weight(forced_partner) otherwise
-  // bounded by cascade_score_depth (recursion cap, default 3) and a
-  // visited set to handle binary-implication cycles. Variable score uses
-  // min(weight(lit_pos), weight(lit_neg)) — worst-case branch is what
-  // determines tree depth in #SAT counting.
-  // CLI: -cascadeW, -cascadeDepth, -cascadeCoeff.
+  // Discrete coeff^k BCP-cascade addend (with min aggregation over
+  // polarities) on the variable scoring path (Solver::scoreOf, used by
+  // both legacy pickBranchVariable and the additive unified picker).
+  // When weight > 0: score_addend(v) = cascade_score_weight × min(
+  //   walk(lit_pos, depth), walk(lit_neg, depth)) where walk is a
+  // depth-bounded recursive walk on binary_links_, contributing 1 if
+  // no forcing or coeff·Σ recurse(forced) otherwise (coeff=2 hardcoded).
+  // CLI: -cascadeW (default 0 = disabled), -cascadeDepth (default 3).
   double cascade_score_weight = 0.0;
   int    cascade_score_depth  = 3;
-  double cascade_score_coeff  = 2.0;
+
+  // Unified picker mode selector and its multiplicative-form parameters.
+  // ADDITIVE (default): legacy additive score combination
+  //   S(x) = base(x) + sep_bonus_m·1[x∈sep] + cascade_addend
+  // MULTIPLICATIVE: type-pure base, multiplicative boost
+  //   base(v) = picker_var_weight · max(picker_base_floor,
+  //                                     freq + activity + cheapW·cheap)
+  //   base(C) = picker_clause_weight · sigmoid(β · (L − mid))
+  //   boost(x) = 1 + picker_alpha · exp(−picker_lambda · rel_k) · [x∈sep]
+  //              + picker_gamma · max(0, depth(v)/depth_med − 1)  (Regime B only)
+  //   S(x)    = base(x) · boost(x)
+  // where rel_k = (active sep elements) / N_active_vars.
+  // Regime A (default): picker_gamma = 0 → cascade boost off, no
+  // per-call cascade-cost overhead. Regime B requires sampled-median
+  // + lazy candidate evaluation; not enabled in this iteration.
+  // CLI: -pickerMode {additive|multiplicative}, -pickerAlpha,
+  //      -pickerLambda, -pickerGamma, -pickerVarW, -pickerClauseW.
+  enum class UnifiedPickerMode { ADDITIVE, MULTIPLICATIVE };
+  UnifiedPickerMode unified_picker_mode = UnifiedPickerMode::ADDITIVE;
+  // Defaults calibrated against typical var-base magnitudes
+  // (freq+activity+cheapW·cheap ≈ 3–100 on real instances) and
+  // sigmoid-clamped clause-base (∈ (0,1)). With clauseW=7 a length-4
+  // clause (sigmoid≈0.73 → base≈5) is comparable to a typical var
+  // (freq≈5, activity decayed). With α=15 a separator candidate at
+  // rel_k=0 gets a 16× multiplier — matches legacy's near-strict
+  // "consume separator first" preference.
+  double picker_alpha         = 15.0;
+  double picker_lambda        = 5.0;
+  double picker_gamma         = 0.0;
+  double picker_var_weight    = 1.0;
+  double picker_clause_weight = 7.0;
+  double picker_base_floor    = 0.01;
 
   // Phase 3 / Tier 2: adaptive branching via probe-scored τ minimization.
   // When enabled, replaces `pickBranchVariable` on the no-separator path

@@ -486,6 +486,12 @@ private:
 	BranchTarget pickBranchTarget(Component &comp,
 	                              const std::vector<CutNode> &sep_clauses);
 
+	// Multiplicative-mode picker (S = base · boost). Regime A only:
+	// γ=0, no per-call cascade-cost overhead. See solver_rec.cpp.
+	BranchTarget pickBranchTargetMultiplicative(
+	    Component &comp,
+	    const std::vector<CutNode> &separator);
+
 	// Phase 4: implicant learning helpers (see solver_config.h for design).
 	// Walks the antecedent chain backward from `l_star` and collects the
 	// decision literals that appeared along the way (DL > 0). Returns an
@@ -691,11 +697,12 @@ private:
 //		score += (10*stack_.get_decision_level()) * literal(LiteralID(v, true)).activity_score_;
 //		score += (10*stack_.get_decision_level()) * literal(LiteralID(v, false)).activity_score_;
 
-		// Recursive per-literal BCP-cascade addend (prototype). When
-		// cascade_score_weight > 0, augment freq+activity with a proxy
-		// for "branches saved" by branching on v: counts how many
-		// literals would be forced via the binary-implication chain
-		// rooted at each polarity, geometrically weighted by depth.
+		// τ-based BCP-cascade addend. When cascade_score_weight > 0,
+		// augment freq+activity with log(2 / τ(1 + k_+, 1 + k_-))
+		// — the branching-number-derived proxy for "branches saved
+		// by BCP" (range [0, log 2]). Bounded magnitude so it never
+		// overpowers separator_bias_weight (1000) when sep is active;
+		// only competes with freq/activity to break ties on non-sep vars.
 		if (config_.cascade_score_weight > 0.0) {
 			score += (float)(config_.cascade_score_weight
 			                 * computeCascadeScore(v));
@@ -719,10 +726,9 @@ private:
 		return score;
 	}
 
-	// Recursive BCP-cascade scoring: see solver.cpp.
+	// Discrete coeff^k BCP-cascade addend with min aggregation over
+	// polarities. See solver.cpp for details.
 	float computeCascadeScore(VariableIndex v);
-	float cascadeRecurse(LiteralID lit, int depth, float coeff,
-	                     std::unordered_set<unsigned> &visited);
 
 	// Mark VAR elements of an accepted separator as preferred branch
 	// targets. Lazy-resizes sep_bias_active_ on first call.

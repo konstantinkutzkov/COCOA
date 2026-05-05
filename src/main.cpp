@@ -141,9 +141,37 @@ int main(int argc, char *argv[]) {
       if (i + 1 >= argc) { cout << "-cascadeDepth needs an integer\n"; return -1; }
       theSolver.config().cascade_score_depth = atoi(argv[i + 1]);
       i++;
-    } else if (strcmp(argv[i], "-cascadeCoeff") == 0) {
-      if (i + 1 >= argc) { cout << "-cascadeCoeff needs a number\n"; return -1; }
-      theSolver.config().cascade_score_coeff = atof(argv[i + 1]);
+    } else if (strcmp(argv[i], "-pickerMode") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerMode needs additive|multiplicative\n"; return -1; }
+      if (strcmp(argv[i+1], "additive") == 0) {
+        theSolver.config().unified_picker_mode =
+          SolverConfiguration::UnifiedPickerMode::ADDITIVE;
+      } else if (strcmp(argv[i+1], "multiplicative") == 0) {
+        theSolver.config().unified_picker_mode =
+          SolverConfiguration::UnifiedPickerMode::MULTIPLICATIVE;
+      } else {
+        cout << "-pickerMode must be 'additive' or 'multiplicative'\n"; return -1;
+      }
+      i++;
+    } else if (strcmp(argv[i], "-pickerAlpha") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerAlpha needs a number\n"; return -1; }
+      theSolver.config().picker_alpha = atof(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-pickerLambda") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerLambda needs a number\n"; return -1; }
+      theSolver.config().picker_lambda = atof(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-pickerGamma") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerGamma needs a number\n"; return -1; }
+      theSolver.config().picker_gamma = atof(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-pickerVarW") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerVarW needs a number\n"; return -1; }
+      theSolver.config().picker_var_weight = atof(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-pickerClauseW") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerClauseW needs a number\n"; return -1; }
+      theSolver.config().picker_clause_weight = atof(argv[i + 1]);
       i++;
     } else if (strcmp(argv[i], "-rec") == 0) {
       // Accepted for backward compatibility; recursive is now the only solver.

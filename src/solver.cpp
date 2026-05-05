@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 
 #include <algorithm>
 
@@ -1251,46 +1252,49 @@ void Solver::stage0_cheap_scores(Component &comp,
 	}
 }
 
-// Recursive BCP-cascade scoring (prototype):
-//   weight(ℓ) = 1 if setting ℓ to true forces no literal,
-//               coeff × Σ weight(forced) over forced partners otherwise
-// Bounded by `depth` (recursion cap) and a `visited` set to handle binary
-// implication-graph cycles. Walks `binary_links_[¬ℓ]` for the immediate
-// forced literals (binaries `(¬ℓ ∨ partner)` with active partner). Does
-// NOT (yet) include length-3 clauses that would shorten to a binary
-// upon setting ℓ — that's a deeper extension.
-float Solver::cascadeRecurse(LiteralID lit, int depth, float coeff,
-                              std::unordered_set<unsigned> &visited) {
-	if (depth == 0) return 1.0f;
-	if (!visited.insert(lit.raw()).second) return 1.0f;
-
-	LiteralID complement = lit.neg();
-	float forced_sum = 0.0f;
-	bool any_forced = false;
-
-	const auto &blinks = literal(complement).binary_links_;
-	for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
-		if (literal_values_[*bt] != X_TRI) continue;
-		any_forced = true;
-		forced_sum += cascadeRecurse(*bt, depth - 1, coeff, visited);
-	}
-
-	if (!any_forced) return 1.0f;
-	return coeff * forced_sum;
-}
-
+// Discrete coeff^k BCP-cascade addend, aggregated by min over the two
+// polarities. For each polarity, a depth-bounded recursive walk over
+// `binary_links_[¬lit]` returns:
+//   - 1 if no forcing on the polarity (no active partner);
+//   - coeff × Σ walk(forced_partner) otherwise.
+// In a chain of k forced lits this evaluates to coeff^k; a fan of k
+// forced at one level evaluates to coeff·k. The min aggregation matches
+// #SAT counting semantics: both branches are traversed and tree depth is
+// dominated by the weaker (less-cascading) side, so we score by that
+// worst-case branch. This is empirically the best combination among
+// {min, sum, τ-formula} — see commit message / benchmark log for
+// experimental support on t1_021_k15_s1.
+//
+// TODO (long-term): re-express ALL scoring components (freq, activity,
+// sep_bias, this cascade addend) in common log-rate (per-var work) units
+// so they compose without per-instance weight tuning.
 float Solver::computeCascadeScore(VariableIndex v) {
 	if (!isActive(LiteralID(v, true))) return 0.0f;
-	const int   max_depth = config_.cascade_score_depth;
-	const float coeff     = (float)config_.cascade_score_coeff;
+	const int depth = config_.cascade_score_depth;
+	const float coeff = 2.0f;
 	std::unordered_set<unsigned> visited;
 	visited.reserve(64);
-	LiteralID lit_t(v, true), lit_f(v, false);
-	float pos = cascadeRecurse(lit_t, max_depth, coeff, visited);
+
+	std::function<float(LiteralID, int)> walk =
+	    [&](LiteralID lit, int d) -> float {
+		if (d == 0) return 1.0f;
+		if (!visited.insert(lit.raw()).second) return 1.0f;
+		LiteralID complement = lit.neg();
+		float forced_sum = 0.0f;
+		bool any_forced = false;
+		const auto &blinks = literal(complement).binary_links_;
+		for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
+			if (literal_values_[*bt] != X_TRI) continue;
+			any_forced = true;
+			forced_sum += walk(*bt, d - 1);
+		}
+		if (!any_forced) return 1.0f;
+		return coeff * forced_sum;
+	};
+
+	float pos = walk(LiteralID(v, true), depth);
 	visited.clear();
-	float neg = cascadeRecurse(lit_f, max_depth, coeff, visited);
-	// Worst-case branch determines tree depth in #SAT counting; min
-	// rewards vars where BOTH polarities cascade strongly (balanced).
+	float neg = walk(LiteralID(v, false), depth);
 	return std::min(pos, neg);
 }
 

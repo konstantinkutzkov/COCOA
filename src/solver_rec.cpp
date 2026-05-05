@@ -2311,6 +2311,13 @@ VariableIndex Solver::pickBranchVariable(Component &comp) {
 
 Solver::BranchTarget Solver::pickBranchTarget(Component &comp,
                                               const std::vector<CutNode> &separator) {
+	// Mode dispatch: multiplicative path is implemented in a separate
+	// helper so the legacy additive code below is untouched.
+	if (config_.unified_picker_mode ==
+	    SolverConfiguration::UnifiedPickerMode::MULTIPLICATIVE) {
+		return pickBranchTargetMultiplicative(comp, separator);
+	}
+
 	BranchTarget best;
 
 	// Build per-call sep sets from the carried `separator` (single
@@ -2377,10 +2384,13 @@ Solver::BranchTarget Solver::pickBranchTarget(Component &comp,
 	}
 
 	// Phase 2a: score VARs. The bonus is applied to vars in the
-	// carried separator.
+	// carried separator. scoreOf already includes the cascade addend
+	// when -cascadeW > 0 (see Solver::scoreOf), so the picker
+	// automatically benefits — no separate plumbing needed.
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
 		if (!isActive(LiteralID(*it, true))) continue;
-		float s = scoreOf(*it);  // freq + activity (no static bias under unified picker)
+		float s = scoreOf(*it);  // freq + activity + (optional)
+		                          // τ-cascade addend via -cascadeW
 		if (cheap_w > 0.0 && *it < cheap_scores.size()) {
 			s += (float)(cheap_w * cheap_scores[*it]);
 		}
@@ -2409,14 +2419,129 @@ Solver::BranchTarget Solver::pickBranchTarget(Component &comp,
 			for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt)
 				if (literal_values_[*lt] == X_TRI) active_len++;
 			if (active_len < config_.clause_branch_min_length) continue;
-			// Sigmoid: 1/(1+exp(-β·(L-c))). Increasing in L —
-			// longer clauses are better branching targets (more
-			// lits pinned in the negated branch ⇒ deeper BCP cascade).
+			// Sigmoid: 1/(1+exp(-β·(L-c))). Increasing in L — longer
+			// clauses are better branching targets (more lits pinned
+			// in the negated branch ⇒ deeper BCP cascade).
 			double sig = 1.0 / (1.0 + std::exp(-beta * ((double)active_len - mid)));
 			float s = (float)(cw * sig);
 			if (sep_clause_set.count((unsigned)ofs)) {
 				s += sep_bonus_m;
 			}
+			if (s > best.score) {
+				best.kind  = BranchTarget::CLAUSE;
+				best.id    = (unsigned)ofs;
+				best.score = s;
+			}
+		}
+	}
+
+	return best;
+}
+
+// Multiplicative-mode picker (Regime A: γ=0).
+//
+//   base(v)  = picker_var_weight · max(ε, freq + 20·activity + cheapW·cheap)
+//   base(C)  = picker_clause_weight · sigmoid(β·(L − mid))
+//   boost(x) = 1 + picker_alpha · exp(−picker_lambda · rel_k) · 1[x ∈ sep]
+//   S(x)     = base(x) · boost(x)
+//   rel_k    = (active sep elements) / N_active_vars
+//
+// Type-pure: var-base never sums clause terms, vice versa. Cross-type
+// competition only via picker_var_weight / picker_clause_weight ratio.
+// Sep boost is constant across all sep elements at this node — within-
+// sep ranking is preserved purely through base. Cascade boost is
+// disabled (γ=0) for Regime A — the deliberate first-ship scope to
+// validate the multiplicative form without per-call cascade cost.
+Solver::BranchTarget Solver::pickBranchTargetMultiplicative(
+    Component &comp,
+    const std::vector<CutNode> &separator) {
+	BranchTarget best;
+
+	// Build sep sets from the carried `separator` (vars + clauses).
+	std::unordered_set<unsigned> sep_var_set;
+	std::unordered_set<unsigned> sep_clause_set;
+	for (const auto &nd : separator) {
+		if (nd.kind == CutNode::VAR) sep_var_set.insert(nd.id);
+		else                         sep_clause_set.insert(nd.id);
+	}
+
+	// Count active sep elements (numerator of rel_k).
+	unsigned n_sep_active = 0;
+	for (unsigned vid : sep_var_set)
+		if (isActive(LiteralID(vid, true))) n_sep_active++;
+	for (unsigned ofs : sep_clause_set)
+		if (!isClauseRemoved((ClauseOfs)ofs)
+		    && !isSatisfied((ClauseOfs)ofs)) n_sep_active++;
+
+	// Count active vars in the comp (denominator of rel_k).
+	unsigned n_active_vars = 0;
+	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it)
+		if (isActive(LiteralID(*it, true))) n_active_vars++;
+
+	// Separator-shortness gate (constant across all sep elements).
+	const double rel_k = (n_active_vars > 0)
+	    ? (double)n_sep_active / (double)n_active_vars
+	    : 0.0;
+	const double alpha  = config_.picker_alpha;
+	const double lambda = config_.picker_lambda;
+	const float boost_sep_value =
+	    (float)(alpha * std::exp(-lambda * rel_k));
+
+	const double varW    = config_.picker_var_weight;
+	const double clauseW = config_.picker_clause_weight;
+	const double cheap_w = config_.cheap_score_weight;
+	const float  eps     = (float)config_.picker_base_floor;
+
+	// Optional cheap-score precomputation (matches additive path).
+	std::vector<double> cheap_scores;
+	if (cheap_w > 0.0) {
+		std::vector<VariableIndex> cheap_candidates;
+		stage0_cheap_scores(comp, config_.stage0_length_decay,
+		                    cheap_scores, cheap_candidates);
+	}
+
+	// Phase 2a: score VARs.
+	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
+		if (!isActive(LiteralID(*it, true))) continue;
+		// raw = freq + 20·activity + cheapW·cheap
+		float raw = (float)comp_manager_.scoreOf(*it);
+		raw += 10.0f * literal(LiteralID(*it, true)).activity_score_;
+		raw += 10.0f * literal(LiteralID(*it, false)).activity_score_;
+		if (cheap_w > 0.0 && *it < cheap_scores.size()) {
+			raw += (float)(cheap_w * cheap_scores[*it]);
+		}
+		if (raw < eps) raw = eps;
+		float base = (float)varW * raw;
+		float boost = 1.0f
+		    + (sep_var_set.count(*it) ? boost_sep_value : 0.0f);
+		float s = base * boost;
+		if (s > best.score) {
+			best.kind  = BranchTarget::VAR;
+			best.id    = *it;
+			best.score = s;
+		}
+	}
+
+	// Phase 2b: score CLAUSEs (originals, length ≥ clause_branch_min_length).
+	if (config_.perform_clause_branching) {
+		const double beta = config_.clause_length_steepness;
+		const double mid  = config_.clause_length_midpoint;
+		for (auto ct = comp.clsBegin(); *ct != clsSENTINEL; ++ct) {
+			ClauseOfs ofs = comp_manager_.clauseOfsOf(*ct);
+			if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+			if (isClauseRemoved(ofs) || isSatisfied(ofs)) continue;
+			unsigned active_len = 0;
+			for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt)
+				if (literal_values_[*lt] == X_TRI) active_len++;
+			if (active_len < config_.clause_branch_min_length) continue;
+			double sig = 1.0 /
+			    (1.0 + std::exp(-beta * ((double)active_len - mid)));
+			float base = (float)(clauseW * sig);
+			if (base < eps) base = eps;
+			float boost = 1.0f
+			    + (sep_clause_set.count((unsigned)ofs)
+			       ? boost_sep_value : 0.0f);
+			float s = base * boost;
 			if (s > best.score) {
 				best.kind  = BranchTarget::CLAUSE;
 				best.id    = (unsigned)ofs;
