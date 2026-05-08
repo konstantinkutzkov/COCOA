@@ -654,7 +654,12 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 	call_count++;
 	struct DG { int &d; DG(int &x):d(x){d++;} ~DG(){d--;} } guard(rec_depth);
 	if (call_count % 100000 == 0) {
-		cerr << "calls=" << call_count << " depth=" << rec_depth << endl;
+		cerr << "calls=" << call_count << " depth=" << rec_depth
+		     << " decisions=" << statistics_.num_decisions_
+		     << " conflicts=" << statistics_.num_conflicts_
+		     << " stores=" << statistics_.num_cached_components_
+		     << " hits=" << statistics_.num_cache_hits_
+		     << endl;
 	}
 
 	// Per-component BCP filter mask is updated only when decomposition
@@ -1712,38 +1717,52 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 	if (config_.unified_picker
 	    && !config_.perform_adaptive_branching
 	    && config_.forced_decisions.empty()) {
-		BranchTarget tgt = pickBranchTarget(comp, separator);
+		BranchTarget tgt = pickBranchTarget(comp, separator, nd_node);
 		if (tgt.score < 0.0f) {
 			return 1;
 		}
+		// Rate framework may pick SEPARATOR as the whole-sep candidate.
+		// Fall through to the legacy Stage-2 sep-consumption path below.
+		if (tgt.kind == BranchTarget::SEPARATOR) {
+			// fallthrough — don't return / don't branch on a single elem.
+		} else
 		if (tgt.kind == BranchTarget::VAR) {
 			VariableIndex v = tgt.id;
 			LiteralID lit_t(v, true), lit_f(v, false);
 			bool t_first = literal(lit_t).activity_score_
 			               > literal(lit_f).activity_score_;
-			// Pass `separator` forward unchanged: in unified-picker
-			// mode it's an immutable hint that drives the clause-bias
-			// score on subsequent picks; we do not consume from it.
-			// from_separator=false: learning is enabled for var
-			// branches under the unified picker (we no longer rely
-			// on strict L/R descent that could be broken by learned
-			// clauses; mapToChild==-2 is already softened to -1).
+			// Var picks are always non-sep-spine: when the kill flag
+			// is on, drop ND descent here. `separator` is forwarded
+			// so sep_var_set / sep_clause_set still drive the boost.
+			int nd_fwd = config_.picker_non_sep_kills_nd ? -1 : nd_node;
 			mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp,
-			                              separator, false, depth, nd_node,
+			                              separator, false, depth, nd_fwd,
 			                              /*from_separator=*/false,
 			                              reactive_metis_skip_until_depth);
 			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp,
-			                              separator, false, depth, nd_node,
+			                              separator, false, depth, nd_fwd,
 			                              /*from_separator=*/false,
 			                              reactive_metis_skip_until_depth);
 			return A + B;
 		} else {
 			ClauseOfs ofs = (ClauseOfs)tgt.id;
+			// Sep-clause picks are the consumption spine — keep
+			// nd_node alive so descendants can install fresh seps.
+			// Non-sep clause picks are off-spine, treat like vars.
+			bool is_sep_clause = false;
+			for (const auto &nd : separator) {
+				if (nd.kind == CutNode::CLAUSE && nd.id == (unsigned)ofs) {
+					is_sep_clause = true;
+					break;
+				}
+			}
+			int nd_fwd = (config_.picker_non_sep_kills_nd && !is_sep_clause)
+			                 ? -1 : nd_node;
 			mpz_class A = branchOnClause(ofs, comp, separator, false,
-			                              false, depth, nd_node,
+			                              false, depth, nd_fwd,
 			                              reactive_metis_skip_until_depth);
 			mpz_class B = branchOnClause(ofs, comp, separator, false,
-			                              true, depth, nd_node,
+			                              true, depth, nd_fwd,
 			                              reactive_metis_skip_until_depth);
 			return A - B;
 		}
@@ -2306,13 +2325,32 @@ VariableIndex Solver::pickBranchVariable(Component &comp) {
 			best = *it;
 		}
 	}
+	if (config_.log_branches && best != 0) {
+		float freq = (float)comp_manager_.scoreOf(best);
+		float act  = 10.0f * literal(LiteralID(best, true)).activity_score_
+		           + 10.0f * literal(LiteralID(best, false)).activity_score_;
+		bool in_bitmap = config_.separator_vars_as_bias
+		                  && best < sep_bias_active_.size()
+		                  && sep_bias_active_[best];
+		std::cerr << "LEG_PICK v=" << best
+		          << " freq=" << freq
+		          << " act=" << act
+		          << " bias=" << (in_bitmap ? 1 : 0)
+		          << " score=" << best_score
+		          << "\n";
+	}
 	return best;
 }
 
 Solver::BranchTarget Solver::pickBranchTarget(Component &comp,
-                                              const std::vector<CutNode> &separator) {
-	// Mode dispatch: multiplicative path is implemented in a separate
-	// helper so the legacy additive code below is untouched.
+                                              const std::vector<CutNode> &separator,
+                                              int nd_node) {
+	// Mode dispatch: rate framework > multiplicative > additive.
+	if (config_.picker_rate_framework
+	    && config_.unified_picker_mode ==
+	       SolverConfiguration::UnifiedPickerMode::MULTIPLICATIVE) {
+		return pickBranchTargetRate(comp, separator, nd_node);
+	}
 	if (config_.unified_picker_mode ==
 	    SolverConfiguration::UnifiedPickerMode::MULTIPLICATIVE) {
 		return pickBranchTargetMultiplicative(comp, separator);
@@ -2438,20 +2476,27 @@ Solver::BranchTarget Solver::pickBranchTarget(Component &comp,
 	return best;
 }
 
-// Multiplicative-mode picker (Regime A: γ=0).
+// Multiplicative-mode picker.
 //
-//   base(v)  = picker_var_weight · max(ε, freq + 20·activity + cheapW·cheap)
+//   base(v)  = picker_var_weight · max(ε,
+//                  freq + 10·a+ + 10·a- + cheapW·cheap + cascadeW·cascade(v))
 //   base(C)  = picker_clause_weight · sigmoid(β·(L − mid))
-//   boost(x) = 1 + picker_alpha · exp(−picker_lambda · rel_k) · 1[x ∈ sep]
+//   boost(v) = 1 + picker_alpha_var    · exp(−picker_lambda_var    · rel_k) · 1[v ∈ sep]
+//   boost(C) = 1 + picker_alpha_clause · exp(−picker_lambda_clause · rel_k) · 1[C ∈ sep]
 //   S(x)     = base(x) · boost(x)
 //   rel_k    = (active sep elements) / N_active_vars
 //
 // Type-pure: var-base never sums clause terms, vice versa. Cross-type
 // competition only via picker_var_weight / picker_clause_weight ratio.
 // Sep boost is constant across all sep elements at this node — within-
-// sep ranking is preserved purely through base. Cascade boost is
-// disabled (γ=0) for Regime A — the deliberate first-ship scope to
-// validate the multiplicative form without per-call cascade cost.
+// sep ranking is preserved purely through base.
+//
+// Cascade signal lives in the additive `raw` channel only (cascadeW > 0).
+// A previous Regime-B multiplicative-cascade form was tested and found
+// inert: log-compressed depth ratios capped the boost, and cascade-rich
+// vars typically had low base, so multiplying their floor by any finite γ
+// could not promote them above high-base winners (REGIME_B diagnostic,
+// 2026-05-07). picker_gamma is now unused.
 Solver::BranchTarget Solver::pickBranchTargetMultiplicative(
     Component &comp,
     const std::vector<CutNode> &separator) {
@@ -2478,19 +2523,25 @@ Solver::BranchTarget Solver::pickBranchTargetMultiplicative(
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it)
 		if (isActive(LiteralID(*it, true))) n_active_vars++;
 
-	// Separator-shortness gate (constant across all sep elements).
+	// Separator-shortness gate (constant across all sep elements at
+	// this node; type-specific α and λ produce two boost values).
 	const double rel_k = (n_active_vars > 0)
 	    ? (double)n_sep_active / (double)n_active_vars
 	    : 0.0;
-	const double alpha  = config_.picker_alpha;
-	const double lambda = config_.picker_lambda;
-	const float boost_sep_value =
-	    (float)(alpha * std::exp(-lambda * rel_k));
+	const double alpha_var     = config_.picker_alpha_var;
+	const double lambda_var    = config_.picker_lambda_var;
+	const double alpha_clause  = config_.picker_alpha_clause;
+	const double lambda_clause = config_.picker_lambda_clause;
+	const float boost_sep_value_var =
+	    (float)(alpha_var * std::exp(-lambda_var * rel_k));
+	const float boost_sep_value_clause =
+	    (float)(alpha_clause * std::exp(-lambda_clause * rel_k));
 
-	const double varW    = config_.picker_var_weight;
-	const double clauseW = config_.picker_clause_weight;
-	const double cheap_w = config_.cheap_score_weight;
-	const float  eps     = (float)config_.picker_base_floor;
+	const double varW      = config_.picker_var_weight;
+	const double clauseW   = config_.picker_clause_weight;
+	const double cheap_w   = config_.cheap_score_weight;
+	const double cascade_w = config_.cascade_score_weight;
+	const float  eps       = (float)config_.picker_base_floor;
 
 	// Optional cheap-score precomputation (matches additive path).
 	std::vector<double> cheap_scores;
@@ -2500,21 +2551,40 @@ Solver::BranchTarget Solver::pickBranchTargetMultiplicative(
 		                    cheap_scores, cheap_candidates);
 	}
 
+	// Diagnostic: dump the first N picks where the separator has been
+	// (mostly) exhausted — i.e., post-branching state. n_sep_active
+	// counts active sep elements; we only dump when it's 0, so cascade
+	// scores reflect the residual after separator consumption.
+	static long long g_dump_pick_count = 0;
+	const long long DUMP_PICK_LIMIT = 5;
+	const size_t TOP_K_DUMP = 8;
+	bool do_dump = config_.log_branches
+	               && g_dump_pick_count < DUMP_PICK_LIMIT
+	               && n_sep_active == 0;
+	struct CandEntry { char kind; unsigned id; float raw; float base;
+	                    float boost; float score; int in_sep; unsigned len; };
+	std::vector<CandEntry> entries;
+	if (do_dump) entries.reserve(64);
+
 	// Phase 2a: score VARs.
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
 		if (!isActive(LiteralID(*it, true))) continue;
-		// raw = freq + 20·activity + cheapW·cheap
 		float raw = (float)comp_manager_.scoreOf(*it);
 		raw += 10.0f * literal(LiteralID(*it, true)).activity_score_;
 		raw += 10.0f * literal(LiteralID(*it, false)).activity_score_;
 		if (cheap_w > 0.0 && *it < cheap_scores.size()) {
 			raw += (float)(cheap_w * cheap_scores[*it]);
 		}
+		if (cascade_w > 0.0) {
+			raw += (float)(cascade_w * computeBcpGainScore(*it));
+		}
 		if (raw < eps) raw = eps;
 		float base = (float)varW * raw;
-		float boost = 1.0f
-		    + (sep_var_set.count(*it) ? boost_sep_value : 0.0f);
+		bool is_sep = sep_var_set.count(*it) > 0;
+		float boost = 1.0f + (is_sep ? boost_sep_value_var : 0.0f);
 		float s = base * boost;
+		if (do_dump) entries.push_back({'V', *it, raw, base, boost,
+		                                 s, is_sep ? 1 : 0, 0});
 		if (s > best.score) {
 			best.kind  = BranchTarget::VAR;
 			best.id    = *it;
@@ -2538,10 +2608,12 @@ Solver::BranchTarget Solver::pickBranchTargetMultiplicative(
 			    (1.0 + std::exp(-beta * ((double)active_len - mid)));
 			float base = (float)(clauseW * sig);
 			if (base < eps) base = eps;
-			float boost = 1.0f
-			    + (sep_clause_set.count((unsigned)ofs)
-			       ? boost_sep_value : 0.0f);
+			bool is_sep = sep_clause_set.count((unsigned)ofs) > 0;
+			float boost = 1.0f + (is_sep ? boost_sep_value_clause : 0.0f);
 			float s = base * boost;
+			if (do_dump) entries.push_back({'C', (unsigned)ofs, (float)sig,
+			                                 base, boost, s,
+			                                 is_sep ? 1 : 0, active_len});
 			if (s > best.score) {
 				best.kind  = BranchTarget::CLAUSE;
 				best.id    = (unsigned)ofs;
@@ -2550,6 +2622,201 @@ Solver::BranchTarget Solver::pickBranchTargetMultiplicative(
 		}
 	}
 
+	if (do_dump) {
+		g_dump_pick_count++;
+		std::sort(entries.begin(), entries.end(),
+		          [](const CandEntry &a, const CandEntry &b)
+		          { return a.score > b.score; });
+		std::cerr << "===== PICK_DUMP #" << g_dump_pick_count
+		          << " rel_k=" << rel_k
+		          << " sep_var_active=" << sep_var_set.size()
+		          << " sep_clause_active=" << sep_clause_set.size()
+		          << " boost_var=" << boost_sep_value_var
+		          << " boost_clause=" << boost_sep_value_clause
+		          << " (top " << std::min(TOP_K_DUMP, entries.size())
+		          << " of " << entries.size() << ") =====\n";
+		for (size_t i = 0; i < std::min(TOP_K_DUMP, entries.size()); ++i) {
+			const auto &e = entries[i];
+			std::cerr << "  " << (i+1) << ". kind=" << e.kind
+			          << " id=" << e.id
+			          << " in_sep=" << e.in_sep
+			          << (e.kind == 'C' ? " len=" : "")
+			          << (e.kind == 'C' ? std::to_string(e.len) : std::string(""))
+			          << " raw=" << e.raw
+			          << " base=" << e.base
+			          << " boost=" << e.boost
+			          << " score=" << e.score << "\n";
+		}
+	}
+
+	if (config_.log_branches) {
+		bool in_sep = (best.kind == BranchTarget::VAR
+		                ? sep_var_set.count(best.id) > 0
+		                : sep_clause_set.count(best.id) > 0);
+		float bs = (best.kind == BranchTarget::VAR
+		             ? boost_sep_value_var
+		             : boost_sep_value_clause);
+		std::cerr << "MULT_PICK kind="
+		          << (best.kind == BranchTarget::VAR ? "VAR" : "CLAUSE")
+		          << " id=" << best.id
+		          << " in_sep=" << (in_sep ? 1 : 0)
+		          << " rel_k=" << rel_k
+		          << " boost_sep=" << bs
+		          << " score=" << best.score
+		          << "\n";
+	}
+	return best;
+}
+
+// Rate-based picker. For each candidate, compute its per-var exponential
+// growth rate; pick argmin (smallest rate = slowest growth).
+//   var rate     = τ(pos_gain + ε·act_pos, neg_gain + ε·act_neg)
+//   clause rate  = τ(σ(L − m), L)
+//   sep   rate   = 2^(α + β)   where α = sep_active/n_active,
+//                              β = max(active_left, active_right)/n_active
+//   sep elements get rate / sep_boost (lower effective rate, more
+//   competitive). The whole separator candidate is unboosted (the rate
+//   formula already accounts for sep size via α).
+// Caller dispatches BranchTarget::SEPARATOR by falling through to the
+// legacy Stage-2 sep-consumption path.
+Solver::BranchTarget Solver::pickBranchTargetRate(
+    Component &comp,
+    const std::vector<CutNode> &separator,
+    int nd_node) {
+	// Score convention here: 1 / effective_rate. Bigger = better (lower
+	// growth rate). Best.score = -1 sentinels "no candidate" so that
+	// the existing caller's `tgt.score < 0` empty-component test works.
+	BranchTarget best;
+	best.score = -1.0f;
+
+	// Sep sets (filtered to active members).
+	std::unordered_set<unsigned> sep_var_set;
+	std::unordered_set<unsigned> sep_clause_set;
+	for (const auto &nd : separator) {
+		if (nd.kind == CutNode::VAR) sep_var_set.insert(nd.id);
+		else                         sep_clause_set.insert(nd.id);
+	}
+
+	unsigned n_sep_active = 0;
+	for (unsigned vid : sep_var_set)
+		if (isActive(LiteralID(vid, true))) n_sep_active++;
+	for (unsigned ofs : sep_clause_set)
+		if (!isClauseRemoved((ClauseOfs)ofs)
+		    && !isSatisfied((ClauseOfs)ofs)) n_sep_active++;
+
+	unsigned n_active_vars = 0;
+	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it)
+		if (isActive(LiteralID(*it, true))) n_active_vars++;
+
+	if (n_active_vars == 0) return best;   // empty: best.score=-1 sentinel
+
+	// rel_k for sep boost.
+	const double rel_k = (double)n_sep_active / (double)n_active_vars;
+	const double alpha_sep    = config_.picker_alpha_var;
+	const double lambda_sep   = config_.picker_lambda_var;
+	const double sep_boost = 1.0 + alpha_sep * std::exp(-lambda_sep * rel_k);
+
+	// α (sep size fraction) and β (larger child fraction).
+	const double alpha = (double)n_sep_active / (double)n_active_vars;
+	double beta = 0.5;   // default when hierarchy unavailable
+	if (nd_node >= 0 && nd_hierarchy_.valid) {
+		int lc = nd_hierarchy_.left_child[nd_node];
+		int rc = nd_hierarchy_.right_child[nd_node];
+		if (lc >= 0 && rc >= 0) {
+			int L_lo = nd_hierarchy_.leaf_lo[lc];
+			int L_hi = nd_hierarchy_.leaf_hi[lc];
+			int R_lo = nd_hierarchy_.leaf_lo[rc];
+			int R_hi = nd_hierarchy_.leaf_hi[rc];
+			unsigned act_L = 0, act_R = 0;
+			for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
+				if (!isActive(LiteralID(*it, true))) continue;
+				if ((size_t)*it >= nd_hierarchy_.var_leaf.size()) continue;
+				int leaf = nd_hierarchy_.var_leaf[*it];
+				if (leaf < 0) continue;
+				if (leaf >= L_lo && leaf <= L_hi) act_L++;
+				else if (leaf >= R_lo && leaf <= R_hi) act_R++;
+			}
+			unsigned tot = act_L + act_R;
+			if (tot > 0) {
+				beta = (double)std::max(act_L, act_R) / (double)tot;
+			}
+		}
+	}
+
+	// 1. Whole-separator candidate.
+	if (n_sep_active > 0) {
+		double rate_sep = std::pow(2.0, alpha + beta);
+		float score = (float)(1.0 / rate_sep);
+		if (score > best.score) {
+			best.kind = BranchTarget::SEPARATOR;
+			best.id = 0;
+			best.score = score;
+		}
+	}
+
+	const double eps = 0.1;   // bonus weight on activity / Δ-2c contributions
+
+	// 2. Var candidates (all active vars, polarity-split BCP gain via
+	//    occurrence_lists_ + binary_links_; cheap, no real probing).
+	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
+		if (!isActive(LiteralID(*it, true))) continue;
+		auto pn = computeBcpGainPolarities(*it);
+		double a = (double)pn.first
+		    + eps * (double)literal(LiteralID(*it, true)).activity_score_;
+		double b = (double)pn.second
+		    + eps * (double)literal(LiteralID(*it, false)).activity_score_;
+		// Newton needs strictly positive a, b. Floor at small ε.
+		if (a < 1e-3) a = 1e-3;
+		if (b < 1e-3) b = 1e-3;
+		double tau = tauBranchingNumber(a, b);
+		double rate_eff = sep_var_set.count(*it) ? (tau / sep_boost) : tau;
+		float score = (float)(1.0 / rate_eff);
+		if (score > best.score) {
+			best.kind = BranchTarget::VAR;
+			best.id = *it;
+			best.score = score;
+		}
+	}
+
+	// 3. Clause candidates (length ≥ clause_branch_min_length).
+	if (config_.perform_clause_branching) {
+		const double beta_steep = config_.clause_length_steepness;
+		const double mid        = config_.clause_length_midpoint;
+		for (auto ct = comp.clsBegin(); *ct != clsSENTINEL; ++ct) {
+			ClauseOfs ofs = comp_manager_.clauseOfsOf(*ct);
+			if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+			if (isClauseRemoved(ofs) || isSatisfied(ofs)) continue;
+			unsigned active_len = 0;
+			for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt)
+				if (literal_values_[*lt] == X_TRI) active_len++;
+			if (active_len < config_.clause_branch_min_length) continue;
+			double sig = 1.0 /
+			    (1.0 + std::exp(-beta_steep * ((double)active_len - mid)));
+			if (sig < 1e-3) sig = 1e-3;
+			double tau = tauBranchingNumber(sig, (double)active_len);
+			double rate_eff = sep_clause_set.count((unsigned)ofs)
+			                      ? (tau / sep_boost) : tau;
+			float score = (float)(1.0 / rate_eff);
+			if (score > best.score) {
+				best.kind = BranchTarget::CLAUSE;
+				best.id = (unsigned)ofs;
+				best.score = score;
+			}
+		}
+	}
+
+	if (config_.log_branches) {
+		std::cerr << "RATE_PICK kind="
+		          << (best.kind == BranchTarget::VAR ? "VAR" :
+		              best.kind == BranchTarget::CLAUSE ? "CLAUSE" : "SEP")
+		          << " id=" << best.id
+		          << " neg_score=" << best.score
+		          << " effective_rate=" << -best.score
+		          << " alpha=" << alpha << " beta=" << beta
+		          << " rel_k=" << rel_k
+		          << " sep_boost=" << sep_boost
+		          << "\n";
+	}
 	return best;
 }
 

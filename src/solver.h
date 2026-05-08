@@ -473,7 +473,7 @@ private:
 	// Stage C: result of the unified picker — either a VAR (id is a
 	// variable index) or a CLAUSE (id is a clause offset).
 	struct BranchTarget {
-		enum Kind { VAR, CLAUSE };
+		enum Kind { VAR, CLAUSE, SEPARATOR };
 		Kind kind = VAR;
 		unsigned id = 0;
 		float score = -1.0f;
@@ -484,13 +484,21 @@ private:
 	// binaries (which collapse to var-branching anyway). Clauses in
 	// `sep_clauses` get the separator-bias bonus on their score.
 	BranchTarget pickBranchTarget(Component &comp,
-	                              const std::vector<CutNode> &sep_clauses);
+	                              const std::vector<CutNode> &sep_clauses,
+	                              int nd_node = -1);
 
 	// Multiplicative-mode picker (S = base · boost). Regime A only:
 	// γ=0, no per-call cascade-cost overhead. See solver_rec.cpp.
 	BranchTarget pickBranchTargetMultiplicative(
 	    Component &comp,
 	    const std::vector<CutNode> &separator);
+
+	// Rate-based unified picker. Returns SEPARATOR / VAR / CLAUSE
+	// per the smallest exponential growth rate. See solver_rec.cpp.
+	BranchTarget pickBranchTargetRate(
+	    Component &comp,
+	    const std::vector<CutNode> &separator,
+	    int nd_node);
 
 	// Phase 4: implicant learning helpers (see solver_config.h for design).
 	// Walks the antecedent chain backward from `l_star` and collects the
@@ -729,6 +737,19 @@ private:
 	// Discrete coeff^k BCP-cascade addend with min aggregation over
 	// polarities. See solver.cpp for details.
 	float computeCascadeScore(VariableIndex v);
+	// Gain-based BCP cascade estimate: sum over the two polarities of
+	// hypothetical(v=lit) → (#literals BCP would force) + 0.33·(#3-clauses
+	// shortened to binaries). Walks forced literals up to
+	// cascade_score_depth levels via binary_links_ + occurrence_lists_.
+	float computeBcpGainScore(VariableIndex v);
+	// Polarity-split version of the same gain walker: returns
+	// (pos_gain, neg_gain) so the caller can feed them to Newton's
+	// τ-branching-number computation.
+	std::pair<float, float> computeBcpGainPolarities(VariableIndex v);
+
+	// Newton-iterate τ from τ^(-a) + τ^(-b) = 1. Returns the unique
+	// τ > 1 satisfying the equation. Precondition: a, b > 0.
+	static double tauBranchingNumber(double a, double b);
 
 	// Mark VAR elements of an accepted separator as preferred branch
 	// targets. Lazy-resizes sep_bias_active_ on first call.

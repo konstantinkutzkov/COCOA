@@ -1184,8 +1184,6 @@ bool Solver::hierarchySeparatorAcceptable(int nd_node,
 // Phase 3: adaptive branching (Tier 2)
 // ----------------------------------------------------------------------------
 
-// Solve τ^(-a) + τ^(-b) = 1 for τ via Newton's method.
-// Precondition: a, b > 0. Returns a value in (1, 2].
 static double newton_branching_number(double a, double b) {
 	// Degenerate safety (callers should ensure a,b > 0).
 	if (a <= 0.0 || b <= 0.0) return 2.0;
@@ -1205,6 +1203,12 @@ static double newton_branching_number(double a, double b) {
 		if (std::abs(step) < 1e-12) break;
 	}
 	return tau;
+}
+
+// Public wrapper exposing newton_branching_number as a Solver static method
+// so callers in other translation units (e.g. solver_rec.cpp) can access it.
+double Solver::tauBranchingNumber(double a, double b) {
+	return newton_branching_number(a, b);
 }
 
 // Compute Stage 0 cheap scores for every active variable in `comp`.
@@ -1296,6 +1300,147 @@ float Solver::computeCascadeScore(VariableIndex v) {
 	visited.clear();
 	float neg = walk(LiteralID(v, false), depth);
 	return std::min(pos, neg);
+}
+
+// Gain-based BCP cascade estimate.
+// gain(v=lit, d) = (# lits forced at this level) + 0.33·(# 3-clauses → binaries)
+//                  + Σ_{forced lits fl} gain(fl, d-1)
+// Hypothesis: setting `lit` true makes complement(lit) false. Clauses
+// containing complement(lit) lose one literal:
+//   - len 2 (binary, or len-3 with 1 already-false): become unit → forces remaining lit
+//   - len 3 (3-clause with 0 false, all unassigned): becomes binary → 0.33
+//   - len 4+: ignored
+// Returns sum over the two polarities (v=true, v=false).
+float Solver::computeBcpGainScore(VariableIndex v) {
+	if (!isActive(LiteralID(v, true))) return 0.0f;
+	const int max_depth = config_.cascade_score_depth;
+	std::unordered_set<unsigned> visited;
+	visited.reserve(64);
+
+	std::function<float(LiteralID, int)> gain =
+	    [&](LiteralID hypothetical_lit, int d) -> float {
+		if (d == 0) return 0.0f;
+		if (!visited.insert(hypothetical_lit.raw()).second) return 0.0f;
+		LiteralID complement = hypothetical_lit.neg();
+		float g = 0.0f;
+		std::vector<LiteralID> forced_lits;
+
+		// Binary chain: clauses where complement is one literal.
+		// Setting hypothetical_lit true → complement is false → other lit
+		// is forced.
+		const auto &blinks = literal(complement).binary_links_;
+		for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
+			if (literal_values_[*bt] != X_TRI) continue;
+			forced_lits.push_back(*bt);
+		}
+		g += (float)forced_lits.size();
+
+		// Long-clause effects: iterate complement's occurrence list.
+		const auto &occ = occurrence_lists_[complement];
+		for (ClauseOfs ofs : occ) {
+			if (isClauseRemoved(ofs)) continue;
+			if (isSatisfied(ofs)) continue;
+			// Count unassigned and track them (cap at 3 — we only care
+			// about active_len ∈ {2, 3}; longer clauses are ignored).
+			LiteralID u0 = SENTINEL_LIT, u1 = SENTINEL_LIT, u2 = SENTINEL_LIT;
+			int n_unassigned = 0;
+			for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt) {
+				if (literal_values_[*lt] == X_TRI) {
+					if (n_unassigned == 0) u0 = *lt;
+					else if (n_unassigned == 1) u1 = *lt;
+					else if (n_unassigned == 2) u2 = *lt;
+					n_unassigned++;
+					if (n_unassigned > 3) break;  // length 4+, ignore
+				}
+			}
+			if (n_unassigned == 2) {
+				// After hypothesis, becomes unit → forces the OTHER
+				// unassigned literal.
+				LiteralID other = (u0 == complement) ? u1 : u0;
+				if (literal_values_[other] == X_TRI)
+					forced_lits.push_back(other);
+				g += 1.0f;
+			} else if (n_unassigned == 3) {
+				// One of u0/u1/u2 is the complement; the others form a
+				// new binary. Just count, no recursion.
+				g += 0.33f;
+			}
+			// n_unassigned > 3: ignore.
+		}
+
+		// Recurse on forced lits (newly-derived units → cascade further).
+		if (d > 1) {
+			for (LiteralID fl : forced_lits)
+				g += gain(fl, d - 1);
+		}
+		return g;
+	};
+
+	float pos = gain(LiteralID(v, true), max_depth);
+	visited.clear();
+	float neg = gain(LiteralID(v, false), max_depth);
+	return pos + neg;   // SUM, not min — both branches contribute.
+}
+
+// Polarity-split gain: same walker as computeBcpGainScore, returns
+// (pos_gain, neg_gain) so the caller can compute τ(pos+ε·act_pos, neg+ε·act_neg).
+std::pair<float, float> Solver::computeBcpGainPolarities(VariableIndex v) {
+	if (!isActive(LiteralID(v, true))) return {0.0f, 0.0f};
+	const int max_depth = config_.cascade_score_depth;
+	std::unordered_set<unsigned> visited;
+	visited.reserve(64);
+
+	std::function<float(LiteralID, int)> gain =
+	    [&](LiteralID hypothetical_lit, int d) -> float {
+		if (d == 0) return 0.0f;
+		if (!visited.insert(hypothetical_lit.raw()).second) return 0.0f;
+		LiteralID complement = hypothetical_lit.neg();
+		float g = 0.0f;
+		std::vector<LiteralID> forced_lits;
+
+		const auto &blinks = literal(complement).binary_links_;
+		for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
+			if (literal_values_[*bt] != X_TRI) continue;
+			forced_lits.push_back(*bt);
+		}
+		g += (float)forced_lits.size();
+
+		const auto &occ = occurrence_lists_[complement];
+		for (ClauseOfs ofs : occ) {
+			if (isClauseRemoved(ofs)) continue;
+			if (isSatisfied(ofs)) continue;
+			LiteralID u0 = SENTINEL_LIT, u1 = SENTINEL_LIT, u2 = SENTINEL_LIT;
+			int n_unassigned = 0;
+			for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt) {
+				if (literal_values_[*lt] == X_TRI) {
+					if (n_unassigned == 0) u0 = *lt;
+					else if (n_unassigned == 1) u1 = *lt;
+					else if (n_unassigned == 2) u2 = *lt;
+					n_unassigned++;
+					if (n_unassigned > 3) break;
+				}
+			}
+			if (n_unassigned == 2) {
+				LiteralID other = (u0 == complement) ? u1 : u0;
+				if (literal_values_[other] == X_TRI)
+					forced_lits.push_back(other);
+				g += 1.0f;
+			} else if (n_unassigned == 3) {
+				g += 0.33f;
+			}
+		}
+
+		if (d > 1) {
+			for (LiteralID fl : forced_lits)
+				g += gain(fl, d - 1);
+		}
+		return g;
+	};
+
+	float pos = gain(LiteralID(v, true), max_depth);
+	visited.clear();
+	float neg = gain(LiteralID(v, false), max_depth);
+	return {pos, neg};
 }
 
 VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsat) {

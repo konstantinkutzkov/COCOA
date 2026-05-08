@@ -153,13 +153,21 @@ int main(int argc, char *argv[]) {
         cout << "-pickerMode must be 'additive' or 'multiplicative'\n"; return -1;
       }
       i++;
-    } else if (strcmp(argv[i], "-pickerAlpha") == 0) {
-      if (i + 1 >= argc) { cout << "-pickerAlpha needs a number\n"; return -1; }
-      theSolver.config().picker_alpha = atof(argv[i + 1]);
+    } else if (strcmp(argv[i], "-pickerAlphaVar") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerAlphaVar needs a number\n"; return -1; }
+      theSolver.config().picker_alpha_var = atof(argv[i + 1]);
       i++;
-    } else if (strcmp(argv[i], "-pickerLambda") == 0) {
-      if (i + 1 >= argc) { cout << "-pickerLambda needs a number\n"; return -1; }
-      theSolver.config().picker_lambda = atof(argv[i + 1]);
+    } else if (strcmp(argv[i], "-pickerAlphaClause") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerAlphaClause needs a number\n"; return -1; }
+      theSolver.config().picker_alpha_clause = atof(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-pickerLambdaVar") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerLambdaVar needs a number\n"; return -1; }
+      theSolver.config().picker_lambda_var = atof(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-pickerLambdaClause") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerLambdaClause needs a number\n"; return -1; }
+      theSolver.config().picker_lambda_clause = atof(argv[i + 1]);
       i++;
     } else if (strcmp(argv[i], "-pickerGamma") == 0) {
       if (i + 1 >= argc) { cout << "-pickerGamma needs a number\n"; return -1; }
@@ -173,6 +181,10 @@ int main(int argc, char *argv[]) {
       if (i + 1 >= argc) { cout << "-pickerClauseW needs a number\n"; return -1; }
       theSolver.config().picker_clause_weight = atof(argv[i + 1]);
       i++;
+    } else if (strcmp(argv[i], "-pickerNonSepKillsNd") == 0) {
+      theSolver.config().picker_non_sep_kills_nd = true;
+    } else if (strcmp(argv[i], "-pickerRateFramework") == 0) {
+      theSolver.config().picker_rate_framework = true;
     } else if (strcmp(argv[i], "-rec") == 0) {
       // Accepted for backward compatibility; recursive is now the only solver.
     } else if (strcmp(argv[i], "-learnLevel") == 0) {
