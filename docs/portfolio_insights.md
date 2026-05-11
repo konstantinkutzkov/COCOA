@@ -117,6 +117,43 @@ rejected anyway. Still pays the build cost.
 
 **Status**: not yet wired into the analyzer. Currently user-chosen.
 
+**Threshold value (the `N` in `-sep N` = `separator_min_active_vars`) is non-obvious and instance-class-dependent.** Below this threshold, separator branching is skipped on the current sub-component and we fall through to plain variable branching. Measured on t1_021_k7_s1 (83v/80c, 1:1 var/clause sparse instance):
+
+| `-sep N` | time | decisions |
+|---|---|---|
+| 5 (current default in our test runs) | 17.97 s | 29.6 M |
+| 15 (config default) | 18.08 s | 29.6 M |
+| 30 | 11.87 s | 12.3 M |
+| 50 | 10.71 s | **6.16 M** |
+| 70 | 10.66 s | 6.16 M |
+| 100 / 1000 / no sep | TIMEOUT (> 30 s) | — |
+
+Three regimes:
+
+- **N ≤ 15**: separator fires on tiny sub-components where the cut is bad — wasteful build cost without benefit. Decision count maxes out (~30 M).
+- **N = 30–70**: separator only fires on top-level / large sub-components. Sweet spot. Decisions plateau at 6.16 M from N=50 onward.
+- **N ≥ 100** (or no separator): separator never fires; the search relies on raw variable branching at the root and explodes. Confirms the separator is **load-bearing at the root**, just **harmful below ~50 active vars** on this instance class.
+
+ganak's baseline on the same instance: 9.53 s. Our best (N=50–70) lands at 10.7 s, closing most of the gap from 18 s.
+
+**Hypothesis on why**: t1_021 is small (83 v); after the root separator splits, sub-components shrink below ~50 vars quickly, and applying the separator to those doesn't help enough to justify its build cost. On much larger instances (t1_011 with 6559 v) the sub-components stay above the threshold for many recursion levels, so a low threshold is fine — the existing default of 5 was tuned on those.
+
+**Implication for the portfolio analyzer**: the right threshold scales with instance size and structural density. A reasonable cheap proxy might be `min(50, n_active_vars / 4)` or similar. Needs measurement across more instance classes before committing.
+
+### `-unifiedPicker` and the rate / τ family (`-pickerRateFramework`, `-cascadeW`, `-pickerMode multiplicative`)
+
+**What**: replaces the legacy two-stage picker (Stage 2 forced separator consumption + Stage 3 `freq + 10·act + 1000·bias` variable picker) with a single scoring contest over all active vars and clauses. Flags subdivide further: `-pickerMode multiplicative` selects the multiplicative-boost score `raw · (1 + α·exp(−λ·rel_k))`; `-pickerRateFramework` re-routes that score through the τ-based rate framework (`−n_active_vars · log τ`); `-cascadeW W` adds an additive cascade-gain term `W · cascade_score` into `raw`. Optional `-pickerNonSepKillsNd` drops `nd_node` for non-sep picks.
+
+**When it helps in theory**: instances where the precomputed METIS ND-hierarchy cut is wrong, or where some non-sep candidate has dramatically better cascade / branching properties than the planned cut. The unified picker can override the cut.
+
+**When it hurts in measurement (so far)**: every measured instance. See 2026-05-09 entries in §4. Across t1_065 / t1_071 / t1_021_k10_s1 / t1_011, plain (no unified picker) matches or beats every unified-picker variant tested. The override flexibility introduces failure modes (scattered picks at root, picker-overhead amplification on cache-heavy instances, stale-bias-style problems via the multiplicative boost on dense instances) without earning its keep on these instances.
+
+**Quantitative cost on t1_011** (cache-heavy regime, see §4 2026-05-09 row): adding `-cascadeW 0.5` halves the search tree (215 K → 118 K decisions) but each decision becomes 6× more expensive, costing 4× wall time. The cascade signal is *informative* (smaller tree) but its computation (`computeBcpGainScore` per active var per pick) is too expensive to net out positive on instances where the picker isn't the bottleneck.
+
+**Detection**: not yet identified. There is no measured instance where the unified picker is the right choice over plain. Until we find one, treat as research scaffolding.
+
+**Status (2026-05-09)**: classify as **research path, off by default**. Production / portfolio recommendation: use plain (or legacy `-sepVarBias` per the rule in §4 2026-05-09) until an instance class is identified where the unified picker provably earns its keep.
+
 ### `-cb N` (clause branching min length)
 
 **What**: enables branching on long clauses via `#SAT(F) =
@@ -334,6 +371,241 @@ Append-only log of observations that should feed the mapping.
   - t1_011 mean_len=3.53 → medium → α=1.0
   - t1_065 mean_len=5.00 → medium → α=1.0
 
+### 2026-04-27
+
+- **t1_021_k7_s1** (83 v / 80 c, sparse 1:1 var:clause ratio,
+  produced by freezing 7 vars in t1_021). Hyperparameter sweep:
+  - **`-sep N` is the dominant lever on this instance class.**
+    `-sep 50` → 10.71 s (vs `-sep 5`: 17.97 s, **−40% wall-time, decisions
+    cut 4.8×**). `-sep 70` matches it; `-sep 100`+ or no `-sep` times
+    out > 30 s. Separator is load-bearing at the root, harmful below
+    ~50 active vars on this instance.
+  - **Adaptive picker (any α ∈ {0.5, 1.0, 2.0, auto}) is neutral-to-slightly-bad**
+    here (~18.7-18.9 s vs 17.97 s baseline). t1_049's α=0.5 sweet spot
+    doesn't transfer to t1_021. Different structural class.
+  - **`-reactiveMetis`, `-wlIter 2`, `-learnLevel 5` all neutral** (within
+    noise of baseline).
+  - **`-cb N` (clause branching min length) variations are neutral**
+    (cb=3, cb=5, cb=8 all ~18 s with `-sep 5`). The clause-branching
+    threshold doesn't move the needle on t1_021.
+  - ganak baseline on the same shrunken instance: 9.53 s. Our best
+    (`-sep 50`) at 10.71 s closes most of the 1.88× gap.
+  - **Implication**: portfolio analyzer should set `-sep N` based on
+    instance size / structural density, not a fixed `-sep 5`. Cheap
+    proxy candidate: `N ≈ min(50, n_active_vars / 4)`. Needs validation
+    on more instances before committing to the formula.
+
+- **t1_021 family (sparse 1:1 var:clause) — ganak's home turf, not ours.**
+  Continued the sweep on the same instance shrunken at multiple k values.
+  Growth rate per added variable:
+  | k | shrunken size | ganak | ours `-sep 5` |
+  |---|---|---|---|
+  | 10 | 80 v | 1.50 s | 2.40 s |
+  | 7  | 83 v | 9.53 s | 17.97 s |
+  | 4  | 86 v | 22.19 s | TIMEOUT > 600 s |
+  | full | 90 v | TIMEOUT > 1200 s | (also TIMEOUT) |
+  - Per-variable growth: ganak ≈ 1.32×, ours ≈ 3.2× → gap widens
+    super-linearly. At k=4 we can't even confirm correctness within
+    a 10-min budget while ganak finishes in 22 s.
+  - **Hypothesis**: ganak's structural advantages (Arjun gate
+    detection / equivalence reasoning, tree-decomposition–driven
+    branching, possibly vivification) are doing real work on this
+    instance class that no flag combination of ours can compensate for.
+    Confirmed: `-sep` threshold sweep, `-adaptive`/`-adaptiveAlpha`
+    sweep, `-reactiveMetis`, `-wlIter 2`, `-learnLevel 5` — none close
+    the gap measurably at k=7 (~1.6× best vs ganak), and at k=4 we
+    don't finish at all.
+  - **Portfolio implication**: classify "1:1 var:clause sparse" as
+    ganak's-home-turf class. Detection is cheap (`n_clauses ≈ n_vars`
+    after preprocessing). Driver should attempt ganak-first or
+    fall through to ganak quickly if our solver doesn't make
+    progress in a small probe budget.
+
+  - **Mechanism diagnosed (2026-04-27)**:
+    - On t1_021_k5_s1, our cache hit:store ratio is **12.5%** at best
+      (771,716 stores vs 96,358 hits with `-sep 50`); raising to
+      `-wlIter 2` reduces collision-block size 50× (max 7→2) but
+      barely changes the hit rate. So the cache machinery is fine —
+      the search tree just doesn't have many repeated sub-components.
+    - Periodic logging shows our solver makes **800k+ `solveComponent`
+      calls per second at sustained recursion depth 50–58** for the
+      whole 60s window — a deep, wide tree with no shortcut.
+    - **0 conflicts** during the run, so conflict-driven learning
+      isn't filling the gap either.
+    - ganak's verbose output reveals it computes a **tree decomposition
+      of width 26** via Flowcutter and uses Korhonen–Järvisalo's
+      tree-decomp guided counting (CP 2021). That gives 2^26 ≈ 67M
+      effective branching cost vs our naive ~2^50 (since our METIS
+      separator branching only structures one level, not the whole
+      search). The exponential gap of 2^(50−26) = 2^24 ≈ 16M
+      explains the 30+× wall-clock difference.
+    - **What we'd need**: tree-decomposition-driven variable branching
+      order. Significant implementation effort (compute TD via
+      Flowcutter or similar, then drive `pickBranchVariable` from
+      the TD's elimination order). Filed as "open architectural gap"
+      rather than a tunable. Don't try to close this with flag-tuning.
+
+  - **Refined diagnosis (2026-04-27 follow-up)**: our **ND hierarchy
+    IS already a tree decomposition** in the structural sense. Probed
+    NDHierarchy stats across the t1_021 family:
+    | variant | n_vars | our `max_sep` | ganak's TD width |
+    |---|---|---|---|
+    | k=7 | 83 | 19 | (not measured) |
+    | k=5 | 85 | **21** | **26** |
+    | k=4 | 86 | 23 | (not measured) |
+    | full | 90 | 27 | (timed out) |
+    Our max separator is *smaller* than ganak's reported tree-decomp
+    width, so the decomposition isn't the bottleneck. **The gap is in
+    HOW WE USE the hierarchy**:
+    - **Our approach (search-based)**: branch on separator elements
+      *sequentially*. A 21-element top separator yields 2^21 ≈ 2 M
+      paths at that level alone, each followed by full BCP + recursive
+      search. Cache keyed by the residual sub-component's canonical
+      form — different separator-decision orders produce different
+      residuals, which often miss cache reuse.
+    - **TD dynamic programming (ganak)**: at each ND node, enumerate
+      assignments to the bag and TABULATE the partial count, combining
+      child contributions via DP. Cache keyed by (ND node, bag-state).
+      Same 2^|bag| at heart, but per-leaf work is a table lookup, not
+      a search.
+    - **Implementation sketch**: keep our existing ND hierarchy. Replace
+      the separator-branching loop with: for each ND node, enumerate
+      all bag assignments compatible with the current trail, recursively
+      compute child contributions, store in a `(node_id, packed_bag_state)`
+      cache. Substantial but bounded: the structural primitive is
+      already there.
+
+### 2026-05-09 — Picker-design session: rate-framework dead-end, plain rises, 2-feature rule emerges
+
+This session pursued the unified-picker / rate-framework redesign on three
+structurally different instances (t1_071 sparse / small-sep, t1_021_k10_s1
+small-decomposable, t1_011 large / cache-heavy). All measurements are in
+`benchmark_log.md` 2026-05-09 entries; this section captures the **insights**
+that should feed the analyzer.
+
+#### Three signals the picker reasons about
+
+A useful conceptual decomposition that came out of this session. The picker
+trades off three distinct kinds of "good":
+
+| Signal | Rewards | Captured by | Path-dependence |
+|---|---|---|---|
+| **(i) Separator progress** | picks on the planned ND-cut → eventually decompose | `picker_alpha_var`, `picker_lambda_*`, `picker_alpha_clause`; or implicitly Stage-2 forced consumption | Low (sep set fixed at ND-build time) |
+| **(ii) BCP simplification** | picks producing strong cascades, balanced branches | `pn_pos`/`pn_neg` from `computeBcpGainPolarities` feeding into τ; or additive `cascade_score_weight` | Medium-high (BCP walk includes learned binaries; cascade-gain depends on path) |
+| **(iii) Cache reuse** | picks producing sub-components likely already cached | **— not captured by any current parameter** | Inherently global |
+
+Two empirical lessons from this session:
+
+- **(ii) and (iii) are in tension.** Stronger cascade signal in the score
+  produces smaller search trees but more path-dependent picks (different
+  recursion paths to the same logical sub-state pick differently → different
+  canonical keys → cache miss). Quantified on t1_011: adding `cascade_score_weight = 0.5`
+  halves decisions (215 K → 118 K) but each decision becomes 6× more
+  expensive (68 µs → 404 µs), so net wall time is 4× worse. The cascade
+  signal is informative but expensive to compute every time.
+- **Plain (no unified picker, Stage-2 hard-forced sep consumption) is currently
+  the most universal config.** Wins or ties on all four instances we measured
+  this session (t1_065, t1_071, t1_011) and is competitive on t1_021_k10_s1
+  (5.25 s vs legacy's 3.99 s, 1.3× slower but solves). No unified-picker
+  variant matched plain across the four.
+
+#### The bias-staleness mechanism (`-sepVarBias` failure mode)
+
+`-sepVarBias` strips separator VARs into a global persistent `bias_bitmap`;
+Stage 3's picker adds `+1000·bias[v]` to every var's score, **for the entire
+search**. The bias never expires. This is fine while the original sep VARs
+are still load-bearing in the current sub-component, but on dense /
+high-density instances BCP cascades decide most sep VARs early — yet the
+`+1000` bonus survives into deeper sub-components where the var is no longer
+at any separator boundary. The bonus then misleads picks for the rest of the
+search.
+
+Empirical demonstration (2026-05-09):
+
+| Instance | n_vars | density | Legacy `-sepVarBias` | Plain | Comment |
+|---|---|---|---|---|---|
+| t1_065 | 112 | 5.29 | **0.53 s, 75 860 dec** | 0.017 s, 614 dec | Bias 30× slower than plain on uniform 5-CNF |
+| t1_071 | 640 | 2.84 | TIMEOUT > 60 s | 0.41 s, 62 K dec | Bias times out where plain is sub-second |
+| t1_011 | 6559 | 2.21 | 13.73 s, 215 018 dec | 13.57 s, 215 018 dec | Bias bit-identical (no effect; deep ND tree absorbs bias staleness) |
+| t1_021_k10_s1 | 80 | 0.94 | **3.99 s, 879 K dec** | 5.25 s, 1.32 M dec | Low-density: bias still useful, no staleness |
+
+Bias works when BCP cascades are *weak* (low density) and the ND tree is
+*shallow* (small instance). It breaks when BCP cascades pin sep VARs early
+(high density) — the bonus survives the relevance window. It's irrelevant
+when ND tree is deep enough that the bias is dwarfed by other picks anyway
+(t1_011 case).
+
+#### Proposed 2-feature analyzer rule (hypothesis from 4 data points)
+
+```
+if  density > 1.5  OR  n_vars > 200:
+    use Plain (-rec -sep 5 -cb 3)
+else:
+    use Legacy (-rec -sep 5 -cb 3 -sepVarBias)
+```
+
+Routing check on the four 2026-05-09 instances: t1_065 (density 5.29 → plain ✓),
+t1_071 (n_vars 640 → plain ✓), t1_011 (density 2.21 → plain ✓), t1_021_k10_s1
+(density 0.94, n_vars 80 → legacy ✓).
+
+This rule is consistent with the measurements but is built from four data
+points spanning two orders of magnitude in size. Specifically untested: the
+**(small, low-density)** quadrant where plain might still beat legacy
+(would require a third feature), and the **(large, low-density)** quadrant.
+
+The mechanistic story above (bias-staleness governed by BCP-cascade strength)
+is consistent with both kept and ruled-out quadrants but should be confirmed
+on more instances before this rule lands in `analyzer.cpp`.
+
+#### Cascade-weight sweep findings (no universal value)
+
+`-cascadeW W` was swept on three instances (W ∈ {0, 0.5, 1, 2, 5, 10}) with
+mult-only picker (no rate framework, no killNd). **No single W is universally
+good:**
+
+- t1_071 wants `W ∈ [1, 2]`: `c=2` → 0.78 s; `c=0` and `c=5+` time out. Sharp
+  sweet spot around 1.5.
+- t1_021_k10_s1 wants `W = 0`: any cascade > 0 dramatically hurts (10 s →
+  TIMEOUT). On this small decomposable instance, cascade actively misleads.
+- t1_011 wants `W = 0`: matches legacy/plain at 14.7 s with bit-identical
+  trees. `W ≥ 0.5` introduces 4× wall regression purely from `computeBcpGainScore`
+  per-pick overhead.
+
+Implication: cascade as a fixed analyzer-set weight is a non-starter. If
+cascade ever lands in production it needs an instance-feature switch, and
+none of the cheap features identified so far (n_vars, density) cleanly
+predict the right value.
+
+#### Implications for §1 instance-class taxonomy
+
+Provisional refinements to the taxonomy in §1:
+
+- **§1a (sparse / low-tw)** — plain Stage-2 consumption is sufficient and
+  likely optimal. Confirmed on t1_011, t1_071. Cascade signal is harmful on
+  cache-heavy variants; sep-bias (`-sepVarBias`) is harmful on small /
+  shallow-ND variants like t1_071.
+- **§1b (dense 3-SAT)** — t1_021_k10_s1 (density 0.94) doesn't really fit
+  here despite the original log calling t1_049 dense; t1_021's structure is
+  closer to "small, low-density, decomposable" and is the one case where
+  `-sepVarBias` still wins. Suggests a fourth class.
+- **NEW §1e (small + low-density + decomposable)** — proposed. Examples:
+  t1_021_k10_s1 (and presumably the rest of the t1_021 family). Signature:
+  `n_vars ≤ ~100`, `density ≤ ~1.5`, ND-hierarchy max_sep modest. Preferred
+  flags: `-rec -sep 5 -cb 3 -sepVarBias`. Distinguishing feature from §1a:
+  small enough that bias staleness doesn't develop within the search.
+- **§1c (medium)** — characterisation needs revisiting now that t1_065
+  (density 5.29) and t1_011 (density 2.21) are both "medium" by mean-clause-length
+  but very different in size. Density alone may not be the right axis.
+
+#### What would falsify the 2-feature rule
+
+A small (n_vars ≤ 100), low-density (≤ 1.5) instance where **plain beats
+legacy `-sepVarBias`** by a meaningful margin. We don't currently have one in
+the test set. Proposed candidates to characterise: `mc2025_track1_023.cnf`,
+`mc2025_track1_025.cnf`, `mc2025_track1_027.cnf`, `mc2025_track1_041.cnf`,
+`mc2025_track1_047.cnf` — extract `(n, m, density, mean_len, ND-stats)` and
+run plain + legacy + mult c=0 with a 30 s budget. See open question Q10 below.
+
 ---
 
 ## 5. Open design questions
@@ -406,6 +678,48 @@ choices. Proposal: make mappings coarse enough (e.g., three buckets
 rather than a linear response) so small perturbations don't flip
 decisions.
 
+### Q10: Validate or falsify the (density, n_vars) → {plain, legacy} rule
+
+Provisional rule from §4 (2026-05-09): `density > 1.5 ∨ n_vars > 200 → plain;
+else → legacy -sepVarBias`. Built from 4 data points. To validate or
+falsify:
+
+- Characterise unmeasured MC2025 track-1 instances (`023, 025, 027, 041, 047,
+  053, 023, 027_reduced`, ...) along `(n_vars, n_clauses, density, mean_len,
+  ND-stats)`.
+- Run plain + legacy + mult c=0 with 30 s timeout on each.
+- Look specifically for a **falsifier**: a small (n ≤ 100), low-density
+  (≤ 1.5) instance where plain beats legacy. If we can't find one in say
+  10–15 instances, the rule holds for now. If we find one, the rule needs
+  a third feature (likely a structural property of the ND-hierarchy:
+  max_sep / n_vars ratio, fraction of vars that ever appear in any
+  separator, etc.).
+
+Until the rule is validated, the analyzer's recommendation should still be
+"use plain" as the safe default; legacy `-sepVarBias` is a special-case
+override for the small-decomposable quadrant.
+
+### Q11: Is there an instance class where the unified picker earns its keep?
+
+The 2026-05-09 sweep showed every unified-picker variant (rate framework,
+hybrid mult-during-sep, mult-only with cascade) loses to plain on every
+measured instance. The unified picker's design intent was to override the
+precomputed cut when scoring suggests a non-sep candidate is dramatically
+better. **No measured instance has shown this happening profitably.**
+
+Hypotheses to test:
+- XOR-encoded instances (none in current test set) where the cut is bad
+  due to symmetry-induced cycles in the incidence graph.
+- Circuit encodings (none) where binary-clause structure dominates and the
+  precomputed sep is poor.
+- Very large instances where plain's overhead is significant and a
+  smarter cut decision pays off.
+
+If none of these earn the unified picker's keep either, the entire
+`-unifiedPicker` code path can be deprecated or moved behind a research-only
+flag. Keep the code for now (documented in §2 entry "the unified picker"),
+deprecate after one more round of falsification attempts.
+
 ---
 
 ## 6. Relationship to portfolio driver
@@ -464,6 +778,23 @@ commit to it in code.
   doesn't matter; just solve.
 - **Very large**: preprocess first, then decide (analyzer can use
   post-preprocess shape).
+
+**Refined picker recommendations (2026-05-09; supersedes earlier picker
+guidance for instance routing):**
+
+- **Default for unknown instances**: **plain** — `-rec -sep 5 -cb 3`. No
+  unified picker, no `-sepVarBias`, no cascade. Stage-2 hard-forces sep
+  consumption in METIS order; Stage-3 picks by `freq + 10·act`. Wins or
+  ties on every measured instance class.
+- **Override only for small + low-density**: when `n_vars ≤ 200` AND
+  `density ≤ 1.5`, switch to **legacy `-sepVarBias`** — it gives an
+  additional `+1000·bias` boost in Stage-3 that targets original sep VARs.
+  Confirmed faster on t1_021_k10_s1; harmful on dense / large instances
+  due to bias-staleness (see §4 2026-05-09).
+- **Avoid the unified picker (`-unifiedPicker`, `-pickerMode multiplicative`,
+  `-pickerRateFramework`, `-cascadeW`) for production**: across all measured
+  instances it loses to plain. Treat as research scaffolding, not a
+  portfolio choice. See Q11 for the falsification programme.
 
 ---
 

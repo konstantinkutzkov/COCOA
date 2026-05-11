@@ -544,7 +544,36 @@ SOLVER_StateT Solver::countSATRec() {
 
 	Component &root = comp_manager_.superComponentOf(stack_.top());
 	int start_node = nd_hierarchy_.valid ? nd_hierarchy_.root() : -1;
-	mpz_class result = solveComponent(root, {}, true, 0, start_node);
+
+	// Preprocessing-style decomposition: peel free vars and split the
+	// root formula into connected components before main solve.
+	mpz_class result;
+	mpz_class trivial_factor = 1;
+	std::vector<Component*> subcomps =
+	    discoverComponentsOf(root, trivial_factor);
+	if (config_.verbose || !config_.quiet) {
+		unsigned root_active = 0;
+		for (auto vt = root.varsBegin(); *vt != varsSENTINEL; vt++)
+			if (isActive(LiteralID(*vt, true))) root_active++;
+		std::cerr << "ROOT_DECOMP: root_active=" << root_active
+		          << " subcomps=" << subcomps.size()
+		          << " trivial_factor=" << trivial_factor;
+		for (size_t i = 0; i < subcomps.size(); i++) {
+			unsigned sub_active = 0;
+			for (auto vt = subcomps[i]->varsBegin(); *vt != varsSENTINEL; vt++)
+				if (isActive(LiteralID(*vt, true))) sub_active++;
+			std::cerr << " sub" << i << "=" << sub_active;
+		}
+		std::cerr << "\n";
+	}
+	result = trivial_factor;
+	for (Component *sub : subcomps) {
+		mpz_class sub_count =
+		    solveComponent(*sub, {}, true, 0, start_node);
+		result *= sub_count;
+		delete sub;
+		if (result == 0) break;
+	}
 	statistics_.num_long_conflict_clauses_ = num_conflict_clauses();
 	// If solveComponent returned because of the time bound, the count is
 	// incomplete (any sub-call that hit timeout returned 0, poisoning the
@@ -592,12 +621,31 @@ mpz_class Solver::solveComponent(Component &comp,
 		key_built = true;
 		free_vars = (cached_key.num_vars > cached_key.n_in_clauses)
 		    ? (cached_key.num_vars - cached_key.n_in_clauses) : 0;
+		// Diagnostic: track distinct canonical keys (full 128-bit) vs total calls.
+		static long long total_calls = 0;
+		struct PairHash {
+			size_t operator()(const std::pair<uint64_t,uint64_t>& p) const {
+				return p.first ^ (p.second << 1);
+			}
+		};
+		static std::unordered_set<std::pair<uint64_t,uint64_t>, PairHash> distinct_keys;
+		total_calls++;
+		distinct_keys.insert({cached_key.hash, cached_key.hash_hi});
+		if (config_.log_branches && total_calls % 2000 == 0) {
+			std::cerr << "CANON_DIAG calls=" << total_calls
+			          << " distinct_keys=" << distinct_keys.size()
+			          << " duplicate_ratio="
+			          << (1.0 - (double)distinct_keys.size() / (double)total_calls)
+			          << "\n";
+		}
 		mpz_class hit;
 		if (comp_manager_.contentCache().peek(cached_key, hit)) {
+			comp_manager_.contentCache().stats_hits++;   // peek doesn't auto-count
 			mpz_class scaled = hit;
 			for (unsigned i = 0; i < free_vars; ++i) scaled *= 2;
 			return scaled;
 		}
+		comp_manager_.contentCache().stats_misses++;
 	}
 
 	mpz_class result = solveComponentImpl(
@@ -622,6 +670,21 @@ mpz_class Solver::solveComponentImpl(Component &comp,
                                   int reactive_metis_skip_until_depth) {
 	if (stopwatch_.timeBoundBroken())
 		return 0;
+	if (config_.log_branches && depth == 0) {
+		static int g_root_calls = 0;
+		g_root_calls++;
+		unsigned act = 0, total = 0;
+		for (auto vt = comp.varsBegin(); *vt != varsSENTINEL; vt++) {
+			total++;
+			if (isActive(LiteralID(*vt, true))) act++;
+		}
+		std::cerr << "ROOT_ENTRY call=" << g_root_calls
+		          << " sep_size=" << separator.size()
+		          << " sep_reset=" << separator_reset
+		          << " comp_total_vars=" << total
+		          << " comp_active=" << act
+		          << " trail=" << literal_stack_.size() << "\n";
+	}
 
 	// Top-branch CNF dump: at every solveComponent entry where
 	// depth <= dump_recursion_max_depth, snapshot the SUPER-comp
@@ -657,8 +720,9 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		cerr << "calls=" << call_count << " depth=" << rec_depth
 		     << " decisions=" << statistics_.num_decisions_
 		     << " conflicts=" << statistics_.num_conflicts_
-		     << " stores=" << statistics_.num_cached_components_
-		     << " hits=" << statistics_.num_cache_hits_
+		     << " stores=" << comp_manager_.contentCache().stats_stores
+		     << " hits=" << comp_manager_.contentCache().stats_hits
+		     << " l1_hits=" << comp_manager_.contentCache().stats_l1_hits
 		     << endl;
 	}
 
@@ -812,9 +876,10 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 					// sub_sep stays empty; acceptance at sub_nd_node
 					// will populate it.
 				}
+				int sub_nd_eff = config_.picker_root_sep_only ? -1 : sub_nd_node;
 				mpz_class sub_count = solveComponent(
 				    *sub, std::move(sub_sep), sub_reset,
-				    depth + 1, sub_nd_node,
+				    depth + 1, sub_nd_eff,
 				    reactive_metis_skip_until_depth);
 				result *= sub_count;
 				delete sub;
@@ -868,6 +933,20 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		decisions_since_connectivity_check_ = 0;
 		mpz_class trivial_factor = 1;
 		vector<Component*> subcomps = discoverComponentsOf(comp, trivial_factor);
+		// Diagnostic: count decomposition events by outcome.
+		static long long g_decomp_calls = 0, g_decomp_split = 0;
+		static long long g_decomp_trivial = 0;
+		g_decomp_calls++;
+		if (subcomps.size() > 1) g_decomp_split++;
+		else g_decomp_trivial++;
+		if (config_.log_branches && g_decomp_calls % 1000 == 0) {
+			std::cerr << "DECOMP_DIAG post_calls=" << g_decomp_calls
+			          << " post_split=" << g_decomp_split
+			          << " post_trivial=" << g_decomp_trivial
+			          << " mid_attempts=" << mid_sep_decomp_attempts_
+			          << " mid_splits=" << mid_sep_decomp_splits_
+			          << "\n";
+		}
 		// Fast path: no real decomposition (1 sub identical to comp,
 		// no peeled free vars). Recursing here would lose the parent's
 		// hierarchy lineage — child_nd_node would be -1 for sub-comps
@@ -1287,7 +1366,8 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 					}
 				}
 			} sub_filter(*this, *sub, decomposed);
-			sub_count = solveComponent(*sub, {}, true, depth + 1, child_nd_node,
+			int sub_nd = config_.picker_root_sep_only ? -1 : child_nd_node;
+			sub_count = solveComponent(*sub, {}, true, depth + 1, sub_nd,
 			                           reactive_metis_skip_until_depth);
 
 			// Diagnostic: if -dumpCompDir is set, dump this sub-component's
@@ -1471,13 +1551,14 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				                                  (unsigned)separator.size())) {
 					separator.clear();
 				}
-				// Legacy -sepVarBias path: strip VARs to bias bitmap,
-				// keep CLAUSEs in separator. NOT applied under
-				// -unifiedPicker — the picker reads VAR membership
-				// directly from `separator`, so we keep both kinds
-				// in the carried vector.
+				// Strip sep VARs to bias_bitmap, keep CLAUSEs in
+				// carried sep. This makes carried sep empty when sep
+				// has no clauses (e.g. t1_021_k10 root sep is all
+				// vars), triggering the post-consumption decompose
+				// path that peels free vars. The picker then reads
+				// sep var membership from sep_bias_active_ instead
+				// of the carried sep.
 				if (config_.separator_vars_as_bias
-				    && !config_.unified_picker
 				    && !separator.empty()) {
 					std::vector<CutNode> vars_only, clauses_only;
 					vars_only.reserve(separator.size());
@@ -1675,9 +1756,9 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 							          << " L=" << r.left_vars
 							          << " R=" << r.right_vars << std::endl;
 						}
-						if (config_.separator_vars_as_bias
-						    && !config_.unified_picker) {
-							// Legacy -sepVarBias path: strip VARs to bias.
+						if (config_.separator_vars_as_bias) {
+							// Strip VARs to bias_bitmap so carried sep can
+							// be exhausted (triggering free-var peeling).
 							std::vector<CutNode> vars_only, clauses_only;
 							vars_only.reserve(r.separator.size());
 							clauses_only.reserve(r.separator.size());
@@ -1718,8 +1799,14 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 	    && !config_.perform_adaptive_branching
 	    && config_.forced_decisions.empty()) {
 		BranchTarget tgt = pickBranchTarget(comp, separator, nd_node);
-		if (tgt.score < 0.0f) {
-			return 1;
+		// Empty-component sentinel: legacy/multiplicative uses score=-1.0f
+		// (any negative score means empty since their scores are ≥ 0).
+		// Rate framework log scoring uses score=-infinity. The
+		// !isfinite() catches -inf without triggering on log scores.
+		if (config_.picker_rate_framework) {
+			if (!std::isfinite(tgt.score)) return 1;
+		} else {
+			if (tgt.score < 0.0f) return 1;
 		}
 		// Rate framework may pick SEPARATOR as the whole-sep candidate.
 		// Fall through to the legacy Stage-2 sep-consumption path below.
@@ -1731,17 +1818,27 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			LiteralID lit_t(v, true), lit_f(v, false);
 			bool t_first = literal(lit_t).activity_score_
 			               > literal(lit_f).activity_score_;
-			// Var picks are always non-sep-spine: when the kill flag
-			// is on, drop ND descent here. `separator` is forwarded
-			// so sep_var_set / sep_clause_set still drive the boost.
-			int nd_fwd = config_.picker_non_sep_kills_nd ? -1 : nd_node;
+			// Sep VAR pick = consuming a planned separator element →
+			// from_separator=true (suppress learning, matches legacy
+			// Stage-2). Non-sep VAR = freely branched, learning enabled.
+			bool v_in_sep = false;
+			for (const auto &nd : separator) {
+				if (nd.kind == CutNode::VAR && nd.id == (unsigned)v) {
+					v_in_sep = true;
+					break;
+				}
+			}
+			// kills_nd: drop ND descent for non-sep var picks. Sep var
+			// picks keep nd_node alive (consumption spine).
+			int nd_fwd = (config_.picker_non_sep_kills_nd && !v_in_sep)
+			                 ? -1 : nd_node;
 			mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp,
 			                              separator, false, depth, nd_fwd,
-			                              /*from_separator=*/false,
+			                              v_in_sep,
 			                              reactive_metis_skip_until_depth);
 			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp,
 			                              separator, false, depth, nd_fwd,
-			                              /*from_separator=*/false,
+			                              v_in_sep,
 			                              reactive_metis_skip_until_depth);
 			return A + B;
 		} else {
@@ -1923,6 +2020,28 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		for (auto l : literal_stack_)
 			if (!var(l).ante.isAnt())
 				std::cerr << to_orig_lit(l) << ",";
+		// State hash: simple FNV over (full literal_stack_ in order) +
+		// (sorted active clause IDs that aren't satisfied/removed).
+		uint64_t h = 14695981039346656037ULL;
+		for (auto l : literal_stack_) {
+			h ^= (uint64_t)l.toInt();
+			h *= 1099511628211ULL;
+		}
+		std::vector<unsigned> active_cls;
+		for (unsigned i = 0; i < removed_clauses_.size() + 1000 && i < 50000; i++) {
+			(void)i;
+		}
+		// Iterate active orig clauses via instance stats — quick proxy:
+		// hash the count of currently-active vars (sufficient with trail
+		// hash for verifying same state across solvers).
+		unsigned act_v = 0;
+		for (unsigned v = 1; v <= num_variables(); v++)
+			if (isActive(LiteralID(v, true))) act_v++;
+		h ^= (uint64_t)act_v;
+		h *= 1099511628211ULL;
+		std::cerr << " state_hash=0x" << std::hex << h << std::dec
+		          << " active=" << act_v
+		          << " trail=" << literal_stack_.size();
 		std::cerr << "\n";
 	}
 
@@ -2317,8 +2436,10 @@ vector<Component*> Solver::discoverComponentsOf(Component &super_comp,
 VariableIndex Solver::pickBranchVariable(Component &comp) {
 	VariableIndex best = 0;
 	float best_score = -1.0f;
+	unsigned active_count = 0;
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
 		if (!isActive(LiteralID(*it, true))) continue;
+		active_count++;
 		float s = scoreOf(*it);
 		if (s > best_score) {
 			best_score = s;
@@ -2326,16 +2447,21 @@ VariableIndex Solver::pickBranchVariable(Component &comp) {
 		}
 	}
 	if (config_.log_branches && best != 0) {
-		float freq = (float)comp_manager_.scoreOf(best);
-		float act  = 10.0f * literal(LiteralID(best, true)).activity_score_
-		           + 10.0f * literal(LiteralID(best, false)).activity_score_;
-		bool in_bitmap = config_.separator_vars_as_bias
-		                  && best < sep_bias_active_.size()
-		                  && sep_bias_active_[best];
-		std::cerr << "LEG_PICK v=" << best
-		          << " freq=" << freq
-		          << " act=" << act
-		          << " bias=" << (in_bitmap ? 1 : 0)
+		static long long g_leg_call = 0;
+		g_leg_call++;
+		float fq = (float)comp_manager_.scoreOf(best);
+		float ap = literal(LiteralID(best, true)).activity_score_;
+		float an = literal(LiteralID(best, false)).activity_score_;
+		bool bm = config_.separator_vars_as_bias
+		          && best < sep_bias_active_.size()
+		          && sep_bias_active_[best];
+		std::cerr << "PICK_CALL_LEG id=" << g_leg_call
+		          << " active=" << active_count
+		          << " v=" << best
+		          << " freq=" << fq
+		          << " ap=" << ap
+		          << " an=" << an
+		          << " bias=" << (bm ? 1 : 0)
 		          << " score=" << best_score
 		          << "\n";
 	}
@@ -2683,18 +2809,28 @@ Solver::BranchTarget Solver::pickBranchTargetRate(
     Component &comp,
     const std::vector<CutNode> &separator,
     int nd_node) {
-	// Score convention here: 1 / effective_rate. Bigger = better (lower
-	// growth rate). Best.score = -1 sentinels "no candidate" so that
-	// the existing caller's `tgt.score < 0` empty-component test works.
+	// Score convention: -log(ρ · τ^N). Bigger = better (lower compound
+	// rate). Best.score = -infinity sentinel for "no candidate". Caller
+	// uses isfinite() check rather than score < 0 since log-scores can
+	// be any real number.
 	BranchTarget best;
-	best.score = -1.0f;
+	best.score = -std::numeric_limits<float>::infinity();
 
 	// Sep sets (filtered to active members).
+	// When separator_vars_as_bias is on, sep VARs were stripped to the
+	// bias_bitmap, so the carried sep has only clauses. Read var
+	// membership from sep_bias_active_ for vars currently in the comp.
 	std::unordered_set<unsigned> sep_var_set;
 	std::unordered_set<unsigned> sep_clause_set;
 	for (const auto &nd : separator) {
 		if (nd.kind == CutNode::VAR) sep_var_set.insert(nd.id);
 		else                         sep_clause_set.insert(nd.id);
+	}
+	if (config_.separator_vars_as_bias && !sep_bias_active_.empty()) {
+		for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
+			if (*it < sep_bias_active_.size() && sep_bias_active_[*it])
+				sep_var_set.insert(*it);
+		}
 	}
 
 	unsigned n_sep_active = 0;
@@ -2710,13 +2846,10 @@ Solver::BranchTarget Solver::pickBranchTargetRate(
 
 	if (n_active_vars == 0) return best;   // empty: best.score=-1 sentinel
 
-	// rel_k for sep boost.
-	const double rel_k = (double)n_sep_active / (double)n_active_vars;
-	const double alpha_sep    = config_.picker_alpha_var;
-	const double lambda_sep   = config_.picker_lambda_var;
-	const double sep_boost = 1.0 + alpha_sep * std::exp(-lambda_sep * rel_k);
-
-	// α (sep size fraction) and β (larger child fraction).
+	// α: sep size as fraction of total active vars.
+	// β: larger sub-component as fraction of total active vars.
+	// Invariant: α + β ≤ 1 (sep + sub1 + sub2 ≤ n_active).
+	// rate_sep_strategic = 2^(α+β) ∈ [√2, 2]; smaller = better separator.
 	const double alpha = (double)n_sep_active / (double)n_active_vars;
 	double beta = 0.5;   // default when hierarchy unavailable
 	if (nd_node >= 0 && nd_hierarchy_.valid) {
@@ -2736,41 +2869,126 @@ Solver::BranchTarget Solver::pickBranchTargetRate(
 				if (leaf >= L_lo && leaf <= L_hi) act_L++;
 				else if (leaf >= R_lo && leaf <= R_hi) act_R++;
 			}
-			unsigned tot = act_L + act_R;
-			if (tot > 0) {
-				beta = (double)std::max(act_L, act_R) / (double)tot;
+			if (act_L + act_R > 0) {
+				// Normalize by n_active_vars (NOT by act_L+act_R) so β
+				// is the fraction of TOTAL active vars in the larger
+				// sub-component, preserving the α+β ≤ 1 invariant.
+				beta = (double)std::max(act_L, act_R) / (double)n_active_vars;
 			}
 		}
 	}
 
-	// 1. Whole-separator candidate.
-	if (n_sep_active > 0) {
-		double rate_sep = std::pow(2.0, alpha + beta);
-		float score = (float)(1.0 / rate_sep);
-		if (score > best.score) {
-			best.kind = BranchTarget::SEPARATOR;
-			best.id = 0;
-			best.score = score;
+	// ρ for sep elements: 2^(α + β − (1−α)/2) = 2^(1.5α + β − 0.5).
+	// Subtracts the balanced-case minimum β_balanced = (1−α)/2, so:
+	//   - balanced sep gives ρ = 2^α (grows with sep size — large seps
+	//     are inherently more costly via αn decisions)
+	//   - imbalanced gives ρ > 2^α (additional penalty for imbalance)
+	//   - α=0: ρ = 1 (no cost)
+	//   - α=1: ρ = 2 (no advantage over default)
+	double rate_sep_strategic = std::pow(2.0, 1.5 * alpha + beta - 0.5);
+	if (rate_sep_strategic > 2.0) rate_sep_strategic = 2.0;
+	if (rate_sep_strategic < 1.0) rate_sep_strategic = 1.0;
+	const double rate_default = 2.0;   // for non-sep elements
+	const double w_rho = config_.picker_rho_exp;
+	// Apply exponent up-front so the inner-loop multiplications use
+	// the boosted value: rho_eff = rho^w_rho.
+	const double rho_sep_eff = std::pow(rate_sep_strategic, w_rho);
+	const double rho_default_eff = std::pow(rate_default, w_rho);
+
+	// Front-of-separator bonus: identify the FIRST currently-active
+	// element in the carried separator vector (METIS-order). That single
+	// element gets its score divided by `picker_front_bonus`, biasing
+	// the picker to consume the separator in the planned order while
+	// still allowing cascade-rich non-front candidates to override
+	// when their τ·ρ improvement is large enough.
+	const double front_bonus = config_.picker_front_bonus;
+	int front_kind = -1;            // 0 = VAR, 1 = CLAUSE, -1 = none
+	unsigned front_id = 0;
+	for (const auto &nd : separator) {
+		if (nd.kind == CutNode::VAR) {
+			if (isActive(LiteralID(nd.id, true))) {
+				front_kind = 0;
+				front_id = nd.id;
+				break;
+			}
+		} else {
+			if (!isClauseRemoved((ClauseOfs)nd.id)
+			    && !isSatisfied((ClauseOfs)nd.id)) {
+				front_kind = 1;
+				front_id = nd.id;
+				break;
+			}
 		}
 	}
 
-	const double eps = 0.1;   // bonus weight on activity / Δ-2c contributions
+	const double eps = 0.1;   // bonus weight on activity contributions
 
 	// 2. Var candidates (all active vars, polarity-split BCP gain via
 	//    occurrence_lists_ + binary_links_; cheap, no real probing).
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
 		if (!isActive(LiteralID(*it, true))) continue;
-		auto pn = computeBcpGainPolarities(*it);
-		double a = (double)pn.first
-		    + eps * (double)literal(LiteralID(*it, true)).activity_score_;
-		double b = (double)pn.second
-		    + eps * (double)literal(LiteralID(*it, false)).activity_score_;
-		// Newton needs strictly positive a, b. Floor at small ε.
-		if (a < 1e-3) a = 1e-3;
-		if (b < 1e-3) b = 1e-3;
+		float pn_pos = 0.0f, pn_neg = 0.0f;
+		if (!config_.picker_no_cascade_gain) {
+			auto pn = computeBcpGainPolarities(*it);
+			pn_pos = pn.first;
+			pn_neg = pn.second;
+		}
+		// Match legacy's weight ratio: activity weighted 10× freq.
+		// Legacy: scoreOf = freq + 10·a_pos + 10·a_neg → freq:activity 1:10.
+		// We use freq_w = 0.1, activity_w = 1.0 to keep the same ratio
+		// while keeping a, b in a τ-friendly range.
+		double freq_term = 0.1 * (double)comp_manager_.scoreOf(*it);
+		double a = 1.0 + (double)pn_pos + freq_term
+		    + 1.0 * (double)literal(LiteralID(*it, true)).activity_score_;
+		double b = 1.0 + (double)pn_neg + freq_term
+		    + 1.0 * (double)literal(LiteralID(*it, false)).activity_score_;
 		double tau = tauBranchingNumber(a, b);
-		double rate_eff = sep_var_set.count(*it) ? (tau / sep_boost) : tau;
-		float score = (float)(1.0 / rate_eff);
+		double rho = sep_var_set.count(*it) ? rho_sep_eff : rho_default_eff;
+		// Compound the per-var rate τ over N remaining vars: total
+		// cost ≈ ρ · τ^N. In log space: log_rate = log(ρ) + N·log(τ).
+		// Score = -log_rate (argmax). This properly weighs that small
+		// τ differences compound into large total-cost differences.
+		// Design (G): mult-style when sep is active (path-independent
+		// ordering of sep candidates → cache stability); τ-based when
+		// sep is exhausted (where its branching model applies and
+		// path-dependence matters less).
+		float raw_v = (float)comp_manager_.scoreOf(*it)
+		    + 10.0f * literal(LiteralID(*it, true)).activity_score_
+		    + 10.0f * literal(LiteralID(*it, false)).activity_score_;
+		double rel_k_v = (n_active_vars > 0)
+		    ? (double)n_sep_active / (double)n_active_vars : 0.0;
+		double boost_sep_value_var =
+		    config_.picker_alpha_var * std::exp(-config_.picker_lambda_var * rel_k_v);
+		float mult_boost_v = sep_var_set.count(*it) > 0
+		    ? (float)(1.0 + boost_sep_value_var) : 1.0f;
+		double log_rate = (double)n_active_vars * std::log(tau);
+		float score;
+		if (n_sep_active > 0) {
+			score = raw_v * mult_boost_v;
+		} else {
+			if (front_kind == 0 && front_id == (unsigned)*it && front_bonus > 1.0) {
+				log_rate -= std::log(front_bonus);
+			}
+			score = (float)(-log_rate);
+		}
+		// Diagnostic dump: also include legacy-style score for cross-solver comparison.
+		static long long g_var_dump = 0;
+		if (config_.log_branches && g_var_dump < 800) {
+			float fq = (float)comp_manager_.scoreOf(*it);
+			float ap = literal(LiteralID(*it, true)).activity_score_;
+			float an = literal(LiteralID(*it, false)).activity_score_;
+			float legacy_score = fq + 10.0f*ap + 10.0f*an;
+			std::cerr << "  V_SCORE id=" << *it
+			          << " in_sep=" << (sep_var_set.count(*it) ? 1 : 0)
+			          << " freq=" << fq
+			          << " ap=" << ap << " an=" << an
+			          << " legacy=" << legacy_score
+			          << " a=" << a << " b=" << b
+			          << " tau=" << tau
+			          << " score=" << score
+			          << "\n";
+			g_var_dump++;
+		}
 		if (score > best.score) {
 			best.kind = BranchTarget::VAR;
 			best.id = *it;
@@ -2794,9 +3012,26 @@ Solver::BranchTarget Solver::pickBranchTargetRate(
 			    (1.0 + std::exp(-beta_steep * ((double)active_len - mid)));
 			if (sig < 1e-3) sig = 1e-3;
 			double tau = tauBranchingNumber(sig, (double)active_len);
-			double rate_eff = sep_clause_set.count((unsigned)ofs)
-			                      ? (tau / sep_boost) : tau;
-			float score = (float)(1.0 / rate_eff);
+			double rho = sep_clause_set.count((unsigned)ofs)
+			                 ? rho_sep_eff : rho_default_eff;
+			// Design (G) for clauses.
+			double rel_k_c = (n_active_vars > 0)
+			    ? (double)n_sep_active / (double)n_active_vars : 0.0;
+			double boost_sep_value_clause =
+			    config_.picker_alpha_clause * std::exp(-config_.picker_lambda_clause * rel_k_c);
+			float mult_boost_c = sep_clause_set.count((unsigned)ofs) > 0
+			    ? (float)(1.0 + boost_sep_value_clause) : 1.0f;
+			float clause_base = (float)(config_.picker_clause_weight * sig);
+			double log_rate = (double)n_active_vars * std::log(tau);
+			float score;
+			if (n_sep_active > 0) {
+				score = clause_base * mult_boost_c;
+			} else {
+				if (front_kind == 1 && front_id == (unsigned)ofs && front_bonus > 1.0) {
+					log_rate -= std::log(front_bonus);
+				}
+				score = (float)(-log_rate);
+			}
 			if (score > best.score) {
 				best.kind = BranchTarget::CLAUSE;
 				best.id = (unsigned)ofs;
@@ -2805,16 +3040,38 @@ Solver::BranchTarget Solver::pickBranchTargetRate(
 		}
 	}
 
-	if (config_.log_branches) {
-		std::cerr << "RATE_PICK kind="
-		          << (best.kind == BranchTarget::VAR ? "VAR" :
-		              best.kind == BranchTarget::CLAUSE ? "CLAUSE" : "SEP")
-		          << " id=" << best.id
-		          << " neg_score=" << best.score
-		          << " effective_rate=" << -best.score
+	static long long cnt_var_sep = 0, cnt_var_nonsep = 0;
+	static long long cnt_cl_sep = 0, cnt_cl_nonsep = 0;
+	static long long g_rate_call = 0;
+	g_rate_call++;
+	if (best.kind == BranchTarget::VAR)
+		(sep_var_set.count(best.id) ? cnt_var_sep : cnt_var_nonsep)++;
+	else if (best.kind == BranchTarget::CLAUSE)
+		(sep_clause_set.count(best.id) ? cnt_cl_sep : cnt_cl_nonsep)++;
+	if (config_.log_branches && best.kind == BranchTarget::VAR) {
+		float fq = (float)comp_manager_.scoreOf(best.id);
+		float ap = literal(LiteralID(best.id, true)).activity_score_;
+		float an = literal(LiteralID(best.id, false)).activity_score_;
+		std::cerr << "PICK_CALL_RATE id=" << g_rate_call
+		          << " active=" << n_active_vars
+		          << " v=" << best.id
+		          << " freq=" << fq
+		          << " ap=" << ap
+		          << " an=" << an
+		          << " in_sep=" << (sep_var_set.count(best.id) ? 1 : 0)
+		          << " score=" << best.score
+		          << "\n";
+	}
+	long long total = cnt_var_sep + cnt_var_nonsep
+	                  + cnt_cl_sep + cnt_cl_nonsep;
+	if (config_.log_branches && total > 0 && total % 1000 == 0) {
+		std::cerr << "RATE_TOTALS total=" << total
+		          << " var_sep=" << cnt_var_sep
+		          << " var_nonsep=" << cnt_var_nonsep
+		          << " cl_sep=" << cnt_cl_sep
+		          << " cl_nonsep=" << cnt_cl_nonsep
 		          << " alpha=" << alpha << " beta=" << beta
-		          << " rel_k=" << rel_k
-		          << " sep_boost=" << sep_boost
+		          << " rate_sep=" << rate_sep_strategic
 		          << "\n";
 	}
 	return best;

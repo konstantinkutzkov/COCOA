@@ -273,6 +273,34 @@ struct SolverConfiguration {
   // -pickerNonSepKillsNd.
   bool picker_non_sep_kills_nd = false;
 
+  // Exponent on the ρ factor in the rate-framework score:
+  //   score(v) = ρ(v)^picker_rho_exp · τ_var(v)
+  // ρ for sep elements ∈ [1, √2]; for non-sep ρ = 2. Larger w_ρ amplifies
+  // the discount on sep elements. CLI: -pickerRhoExp, default 1.0.
+  double picker_rho_exp = 1.0;
+
+  // When true, sub-components reached via decomposition (post-consumption
+  // and mid-consumption decompose paths) get nd_node = -1 forwarded
+  // unconditionally — no fresh ND-sep is installed at any depth below
+  // the root. Tests whether deep seps add value or are pure overhead.
+  // CLI: -pickerRootSepOnly.
+  bool picker_root_sep_only = false;
+
+  // When true, the rate-framework picker skips the BCP cascade gain
+  // contribution to (a, b) — uses only `1 + ε·activity` for τ inputs.
+  // Diagnostic to test whether cascade gain biases picks badly on
+  // binary-rich instances. CLI: -pickerNoCascadeGain.
+  bool picker_no_cascade_gain = false;
+
+  // Front-of-separator bonus: the FIRST currently-active element in the
+  // carried separator vector (METIS-order) gets its rate divided by this
+  // factor in the rate framework. > 1 means the front element is
+  // preferred (effective rate smaller); = 1 disables the bonus. Tunes
+  // how strictly the picker respects the planned consumption order:
+  // larger values make the picker stick to METIS order; smaller values
+  // allow more cascade-driven deviations. CLI: -pickerFrontBonus.
+  double picker_front_bonus = 2.0;
+
   // Rate-based unified picker (per-var-growth-rate framework):
   //   var rate     = τ(pos_gain + ε·act_pos, neg_gain + ε·act_neg)
   //                  via Newton's method on τ^(-a) + τ^(-b) = 1

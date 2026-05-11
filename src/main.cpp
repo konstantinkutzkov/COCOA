@@ -185,6 +185,18 @@ int main(int argc, char *argv[]) {
       theSolver.config().picker_non_sep_kills_nd = true;
     } else if (strcmp(argv[i], "-pickerRateFramework") == 0) {
       theSolver.config().picker_rate_framework = true;
+    } else if (strcmp(argv[i], "-pickerRhoExp") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerRhoExp needs a number\n"; return -1; }
+      theSolver.config().picker_rho_exp = atof(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-pickerFrontBonus") == 0) {
+      if (i + 1 >= argc) { cout << "-pickerFrontBonus needs a number\n"; return -1; }
+      theSolver.config().picker_front_bonus = atof(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-pickerNoCascadeGain") == 0) {
+      theSolver.config().picker_no_cascade_gain = true;
+    } else if (strcmp(argv[i], "-pickerRootSepOnly") == 0) {
+      theSolver.config().picker_root_sep_only = true;
     } else if (strcmp(argv[i], "-rec") == 0) {
       // Accepted for backward compatibility; recursive is now the only solver.
     } else if (strcmp(argv[i], "-learnLevel") == 0) {

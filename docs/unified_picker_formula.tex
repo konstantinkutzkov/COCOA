@@ -1,0 +1,274 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+
+\title{Unified Picker: Multiplicative Score Formula\\
+       \large Regime A (default), with Regime B extension}
+\author{sharpsat-separator (Phase 1)}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Score formula (Regime A, $\gamma = 0$)}
+
+For each active branch candidate $x$ in the current sub-component, the picker
+computes
+\[
+S(x) \;=\; \operatorname{base}(x) \cdot \operatorname{boost}(x),
+\qquad
+\operatorname{pick} \;=\; \arg\max_{x \in \text{candidates}} S(x).
+\]
+
+\subsection*{Type-pure base score}
+
+\[
+\operatorname{base}(x) \;=\;
+\begin{cases}
+\, w_v \cdot \max\!\bigl(\varepsilon,\; \operatorname{freq}(v) + 10\,\operatorname{activity}(v) + w_c \cdot \operatorname{cheap}(v)\bigr)
+   & x = v \text{ (variable)} \\[4pt]
+\, w_C \cdot \sigma\!\bigl(\beta\,(L(C) - m)\bigr)
+   & x = C \text{ (clause)}
+\end{cases}
+\]
+
+
+The clause-base parameters $\beta$ and $m$ control the shape of the
+length-sigmoid.
+
+\noindent The length-decayed clause-density proxy:
+\[
+\operatorname{cheap}(v) \;=\; \sum_{C \,\ni\, v,\;\text{active}} 2^{-\alpha_d \, |C|_{\text{active}}}
+\;+\; \operatorname{binPart}(v) \cdot 2^{-2\alpha_d},
+\]
+where
+$\text{binPart}(v)$
+is the count of length-2 clauses still actively constraining $v$
+under the current partial assignment.
+
+\subsection*{Multiplicative separator boost}
+
+\[
+\operatorname{boost}(x) \;=\; 1 \;+\; \alpha \cdot \exp(-\lambda \cdot \operatorname{rel}_k) \cdot \mathbf{1}[x \in \mathrm{sep}],
+\]
+
+\[
+\operatorname{rel}_k \;=\; \frac{\#\{\text{active separator elements}\}}{\#\{\text{active variables in comp}\}}.
+\]
+
+Above we use the bold-one indicator
+\[
+\mathbf{1}[P] \;=\; \begin{cases} 1 & \text{if predicate } P \text{ is true} \\ 0 & \text{otherwise.} \end{cases}
+\]
+
+\subsection*{Properties}
+
+\begin{itemize}
+  \item $\operatorname{base}(x) > 0$ for every active candidate (the
+        $\varepsilon$ floor on var-base prevents the degenerate
+        all-zero case), hence $S(x) > 0$ always. No ``no candidate found'' edge case.
+  \item $\operatorname{boost}(x) \in [1,\; 1+\alpha]$ --- never penalizes a candidate;
+        only multiplicatively rewards separator membership.
+  \item Within a type, ranking is monotone in $\operatorname{base}$: at a
+        given node, $\operatorname{boost}$ is the same across all candidates of one
+        type that share the same separator-membership status.
+  \item Cross-type competition (var vs.\ clause) happens entirely via the
+        ratio $w_v \, \overline{\operatorname{base}_v} \;:\; w_C \, \overline{\operatorname{base}_C}$.
+        The defaults $w_v = 1, w_C = 7$ are calibrated so a length-4 clause
+        ($\sigma(1) \approx 0.731$) has base $\approx 5$, comparable to a typical
+        active variable's $\operatorname{freq} + 20\,\operatorname{activity}$.
+\end{itemize}
+
+\section{Regime B extension (not yet enabled; $\gamma > 0$)}
+
+When the cascade boost is enabled, the multiplier acquires a third additive
+component proportional to how strongly the variable's BCP-cascade dominates
+its peers in the current sub-component:
+
+\[
+\operatorname{boost}_{\text{Regime B}}(v) \;=\; 1
+   \;+\; \alpha \cdot e^{-\lambda \, \operatorname{rel}_k} \cdot \mathbf{1}[v \in \mathrm{sep}]
+   \;+\; \gamma \cdot \max\!\Bigl(0,\; \frac{\operatorname{depth}(v)}{\operatorname{depth}_{\mathrm{med}}} \;-\; 1\Bigr),
+\]
+
+\[
+\operatorname{depth}(v) \;=\; \log_2 \max\bigl(1,\; \mathtt{computeCascadeScore}(v)\bigr),
+\]
+
+with $\operatorname{depth}_{\mathrm{med}}$ estimated as the median over a uniform
+random sample of $K = 30$ active variables in the comp (full-set median is
+prohibitively expensive per pickBranchTarget call).
+
+The boost is \emph{relative to the local median}: vars at or below the median
+contribute $0$, and the contribution grows linearly above it. A var with
+$\operatorname{depth}(v) = 2 \cdot \operatorname{depth}_{\mathrm{med}}$ adds $\gamma$;
+a var with $5 \cdot \operatorname{depth}_{\mathrm{med}}$ adds $4\gamma$.
+
+This calibrates automatically per-node: cascade-rich components reward only
+top-cascade outliers; cascade-poor components recognize modest cascades as
+locally exceptional. No absolute threshold.
+
+For clauses, $\operatorname{boost}_{\text{cas}}(C) = 0$ --- the cascade boost
+applies only to variables.
+
+\section{Symbol table}
+
+\begin{center}
+\begin{tabular}{lll>{\raggedright\arraybackslash}p{8cm}}
+\toprule
+Symbol & Code knob & Default & Role \\
+\midrule
+$w_v$         & \texttt{picker\_var\_weight}        & $1.0$   & Variable-base anchor. \\
+$w_C$         & \texttt{picker\_clause\_weight}     & $7.0$   & Clause-base anchor (calibrated against typical var-base on real instances; see \S\ref{sec:cal}). \\
+$w_c$         & \texttt{cheap\_score\_weight}       & $0.0$   & Cheap-score addend weight inside variable base; default off. \\
+$\varepsilon$ & \texttt{picker\_base\_floor}        & $0.01$  & Floor on variable base, keeps $S(x) > 0$. \\
+$\beta$       & \texttt{clause\_length\_steepness}  & $1.0$   & Sigmoid slope in clause base. \\
+$m$           & \texttt{clause\_length\_midpoint}   & $3.0$   & Sigmoid midpoint in clause base. \\
+$\alpha$      & \texttt{picker\_alpha}              & $15.0$  & Separator-boost gain; sep candidates at $\operatorname{rel}_k = 0$ get a $1+\alpha = 16\times$ multiplier. \\
+$\lambda$     & \texttt{picker\_lambda}             & $5.0$   & Separator-boost decay rate; smooth fade as separator grows relative to comp. \\
+$\gamma$      & \texttt{picker\_gamma}              & $0.0$   & Cascade-boost gain; $0$ in Regime A. \\
+$\alpha_d$    & \texttt{stage0\_length\_decay}      & auto    & Cheap-score length decay; auto-tuned at preprocess. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Definitions}
+
+\noindent The variable-base components are defined as follows.
+
+\paragraph{Frequency.}
+$\operatorname{freq}(v)$ is the number of active original clauses containing
+the variable $v$ (either polarity), counted at the current node:
+\[
+\operatorname{freq}(v) \;=\; \#\bigl\{\, C \in \text{active original clauses}
+\;:\; v \in \operatorname{vars}(C) \,\bigr\}.
+\]
+``Active'' here means the clause is not yet satisfied or removed under the
+current partial assignment, and contains at least one unassigned literal.
+This is the length-agnostic clause-count proxy for $v$'s structural
+prominence.
+
+\paragraph{Activity (VSIDS).}
+$\operatorname{activity}(v)$ is the sum over both polarities of the
+recency-weighted ``conflict involvement'' counter from the
+\emph{Variable State Independent Decaying Sum} heuristic:
+\[
+\operatorname{activity}(v) \;=\; a^{+}(v) \;+\; a^{-}(v),
+\]
+where $a^{+}(v)$ and $a^{-}(v)$ are the per-literal activity scores
+(\texttt{literal(LiteralID(v,sign)).activity\_score\_} in the code) maintained
+as follows during search:
+\begin{itemize}
+	\item All activities start at $0$.
+	\item On every conflict, each literal that participated in the conflict
+	analysis (UIP-derived learned clause, etc.) has its activity
+	\emph{bumped} by an increment $\Delta_{\mathrm{bump}}$.
+	\item Every $N$ decisions (in this codebase, every $128$), all activities
+	are scaled by a decay factor $0 < d < 1$
+	(\texttt{decayActivities()} in \texttt{solver.cpp}).
+\end{itemize}
+This produces a recency-biased measure of how often the literal has
+recently appeared in conflicts. The factor $10$ in the variable-base
+formula scales the summed two-polarity activity into the same magnitude
+range as $\operatorname{freq}$ ($\sim 0\text{--}100$ in typical search,
+versus $\operatorname{freq} \in 0\text{--}10$); empirical default in
+\texttt{Solver::scoreOf}.
+
+
+\subsection*{Clause length weighting for clause branching}
+
+\paragraph{Binary clauses part}
+
+\[
+\operatorname{binPart}(v) \;=\;
+\#\bigl\{ C = (\ell_v, \ell_b) \in \mathcal{B}
+\;:\; \ell_v \text{ is a literal of } v,\;
+\ell_v \text{ unassigned},\;
+\ell_b \text{ unassigned} \bigr\}
+\]
+is the count of \emph{live} (currently neither satisfied nor unit) binary
+clauses in $\mathcal{B}$ containing $v$. Here $\mathcal{B}$ is the set of
+binary clauses stored in \texttt{binary\_links\_} --- original binaries plus
+in-scope learned binaries.
+Equivalently: the number of length-2 clauses still actively constraining $v$
+under the current partial assignment.
+
+\paragraph{The standard sigmoid}
+\[
+\sigma(z) \;=\; \frac{1}{1 + e^{-z}},
+\]
+
+
+\begin{itemize}
+	\item $m$ (\emph{midpoint}, default $3$) is the active clause length at which
+	the sigmoid output equals $\tfrac{1}{2}$. Below $m$, the base shrinks
+	toward $0$; above $m$, it saturates toward $1$.
+	\item $\beta$ (\emph{steepness}, default $1$) controls how sharply the
+	transition occurs around $m$. Small $\beta$ ($\to 0$) flattens the
+	curve and treats all clause lengths almost equally; large $\beta$
+	($\to \infty$) approaches a hard step at $L = m$. Concrete values at
+	$m = 3$:
+	\begin{center}
+		\begin{tabular}{ccccc}
+			\toprule
+			$L$ & $\beta = 0.3$ & $\beta = 1$ (default) & $\beta = 5$ \\
+			\midrule
+			$2$ & $0.43$ & $0.27$ & $0.007$ \\
+			$3$ & $0.50$ & $0.50$ & $0.50$  \\
+			$4$ & $0.57$ & $0.73$ & $0.99$  \\
+			$5$ & $0.65$ & $0.88$ & $\approx 1$ \\
+			\bottomrule
+		\end{tabular}
+	\end{center}
+	Default $\beta = 1$ gives a moderate gradient: length-$4$ scores
+	$\sim 1.5\times$ length-$3$, length-$5$ scores $\sim 1.8\times$ length-$3$.
+	This implements a \emph{soft} preference for longer clauses
+	(longer $\Rightarrow$ more lits pinned in the negate-all branch
+	$\Rightarrow$ deeper BCP cascade), without forcing a hard threshold.
+\end{itemize}
+
+
+\section{Calibration rationale}\label{sec:cal}
+
+The default $w_C = 7$ is not arbitrary. On instances with $\operatorname{freq}(v) \approx 3\text{--}5$
+(typical for sparse 3-SAT with $\sim$1:1 var:clause ratio) and $\operatorname{activity}(v) \approx 0$
+(early in search, before learning has fired), the variable base is in $[3, 5]$. A length-4 clause
+has $\sigma(\beta(4 - 3)) = \sigma(1) \approx 0.731$. Setting $w_C \cdot 0.731 \approx 5$
+gives $w_C \approx 7$, equating clause base to typical var base for $L = 4$ clauses.
+
+The default $\alpha = 15$ was chosen so that a separator candidate at $\operatorname{rel}_k = 0$
+gets a $16\times$ multiplier on its base, dominating any non-separator candidate by a wide
+margin. This approximates the legacy \texttt{-sepVarBias} mode's near-strict ``consume
+separator first'' preference.
+
+These defaults are starting points for the manual sensitivity sweep prescribed in
+docs/unified\_picker\_redesign.md (Phase 4). The doc's originally-suggested ranges
+(e.g.\ $w_C \in [0.3, 3.0]$) were two orders of magnitude too small relative to the
+sigmoid-clamped clause-base range $(0, 1)$ once real var-base magnitudes were measured;
+the calibration here resolves that.
+
+\section{Worked example (Regime A)}
+
+A sub-component with $N_{\text{active vars}} = 80$, separator size $3$ ($2$ vars $+ 1$ clause):
+\[
+\operatorname{rel}_k = \tfrac{3}{80} = 0.0375, \qquad
+\alpha \cdot e^{-\lambda \cdot 0.0375} = 15 \cdot e^{-0.1875} \approx 15 \cdot 0.83 \approx 12.4.
+\]
+A separator candidate gets a multiplier $1 + 12.4 = 13.4\times$ on its base. With
+default weights, a length-3 separator clause has base $w_C \cdot \sigma(0) = 7 \cdot 0.5 = 3.5$,
+yielding $S = 3.5 \cdot 13.4 \approx 47$. A typical non-separator var with base $\approx 5$
+yields $S = 5$. The separator clause wins decisively.
+
+When the separator inflates to $20$ elements ($\operatorname{rel}_k = 0.25$):
+\[
+\alpha \cdot e^{-1.25} \approx 15 \cdot 0.287 \approx 4.3,
+\]
+the multiplier drops to $5.3\times$, and the separator clause's $S \approx 18.6$ now competes
+much more closely with high-base non-separator candidates --- the smooth handover regime the
+formula was designed to produce, with no thresholds.
+
+\end{document}

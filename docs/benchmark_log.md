@@ -406,3 +406,301 @@ So:
 | 2026-04-29 00:18 | `<dirty: position-bonus removed>` | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -sepMode metis` | /tmp/t1_071.cnf (md5 `e88123bdbf87205e36a681f2a3111e7c`) | 0.63 s | on battery; baseline reference. count `4562956...076272640`. Decisions 62,046; conflicts 5,094. |
 | 2026-04-29 00:18 | `<dirty>` | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -sepMode metis -unifiedPicker -clauseScoreW 100 -sepBiasW 1000 -sepImpA 1.0 -decomposeAfterK 1000` | /tmp/t1_071.cnf | 1.29 s | on battery; picker ~2× baseline. Decisions 286,434; conflicts 33,271 (~6× baseline due to learning enabled in picker var-branches). |
 | 2026-04-29 00:18 | `<dirty>` | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | (same picker flags, NO `-decomposeAfterK`) | /tmp/t1_071.cnf | TIMEOUT > 60 s | on battery; default `decompose_after_k=6` interferes with picker's hierarchy descent. |
+| 2026-04-29 01:11 | `fdd0893` | `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64` | `-rec -sep 5 -cb 3 -sepMode metis -sepVarBias` | /tmp/t1_021_k7_s1.cnf | **20.81 s** | on battery; count `2978382486464633072`; decisions 5,582,534. With `-sepVarBias` (no `-unifiedPicker`), separator VARs strip into the bias bitmap and the legacy `pickBranchVariable` boosts them. Baseline (no `-sepVarBias`) historically TIMEd out at 60s on this instance — this is the qualitative "TIMEOUT → finishes" win documented in conversation but not previously logged. |
+
+---
+
+## 2026-05-03 23:06 — Ganak: `--td 0` is dramatically faster than default on t1_011
+
+Fresh ganak build from upstream `main` at commit `8614351e868ba5241e030ecb2494639efa2d0881` (FetchContent of cryptominisat5, cadical, cadiback, arjun, approxmc, sbva, treedecomp at their `master`/`main` tips). Built static-release: `cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF` + `cmake --build . --target ganak-bin -j8`. Apple Clang 21.0.0, arm64-darwin. Note: deps' baked-in `-O2` (CryptoMiniSat) and `-fno-omit-frame-pointer` (CaDiCaL) currently override the parent `-O3` due to last-wins flag order — not yet patched.
+
+Default invocation (`--td 1`, the default — flowcutter with `--tditers 900 --tdsteps 100000`) was killed at >9 min CPU time on t1_011. Disabling tree decomposition with `--td 0` finishes the same instance in **25.19 s** (count correct).
+
+Implication: on t1_011 today, FlowCutter-based tree decomposition is the bottleneck — not search. The historical "ganak 111.6 s" reference in the 2026-04-26 cascade-landing row was likely captured against a different `treedecomp` upstream commit; we can't reproduce it because FetchContent pulls latest at configure time.
+
+| Timestamp | Solver | Solver flags | Instance | Wall | Notes |
+|---|---|---|---|---|---|
+| 2026-05-03 23:06 | ganak `8614351` (fresh static-release) | `--verb 0 --td 0` | /Users/konstantin.kutzkov/Desktop/Code/SharpSAT/temp_cnf/mc2025_track1_011.cnf (md5 `4be5e40e8a1660b130a690981ebdea88`) | **25.19 s** (Total time Arjun+GANAK; real 25.35 s) | load avg 1.82 → 1.68 (cpptools suspended for the run); count `536870912306`; matches log; same md5 as the historical `/tmp/t1_011.cnf` row. |
+| 2026-05-03 22:30 | ganak `8614351` (same build) | `--verb 0` (default `--td 1`) | same | **>9 min, killed** | load avg ~2.5; ganak running at 99% CPU, not stuck — TD computation eating the wall time. |
+| 2026-05-03 23:10 | sharpSAT `fdd0893` (existing build) | `-rec -sep 5 -cb 3 -sepMode metis` | same | **12.72 s** | load avg 1.64 → 2.08 (cpptools suspended, same machine state as the ganak rows above); count `536870912306`; decisions 215,018. **~2× faster than ganak `--td 0`** on this instance under identical conditions. Note: today's 12.72 s is +45% over the log's 8.79 s for this instance under commit `892a4ea` (2026-04-26 20:30, line 339) — picker-related code paths landed at `fdd0893` may carry residual overhead even when the picker is off. |
+
+---
+
+## 2026-05-04 00:30 — t1_021 shrink-ladder probe to find a "ganak in [20s, 60s]" working instance
+
+Goal: find a shrunken variant of t1_021 such that ganak (default or `--td 0`) finishes in 20–60 s — useful as a moderately-hard benchmark for measuring picker / sharpSAT improvements without burning minutes per probe.
+
+Strategy: start fast (heavily-frozen, k=20) and unfreeze (smaller k = fewer frozen vars = harder) until the wall hits the band. Cheaper than starting full and shrinking.
+
+CNF generation: `python3 sharpsat-separator/tests/shrink_cnf.py temp_cnf/mc2025_track1_021.cnf temp_cnf/mc2025_track1_021_k<K>_s1.cnf <K> --seed 1`. All variants persistent in `temp_cnf/`. Original `mc2025_track1_021.cnf` md5 unchanged across both originals, here as the parent.
+
+Build: ganak `8614351` (fresh static-release, deps `-O2` not yet patched), sharpSAT `fdd0893`. cpptools suspended; load avg ~1.7 throughout.
+
+| Variant | n / m | ganak default `--td 1` | ganak `--td 0` | sharpSAT `-rec -sep 5 -cb 3 -sepMode metis -sepVarBias` | Count |
+|---|---|---|---|---|---|
+| `t1_021_k20_s1` | 70v / 62c | — | 0.03 s | — | `275877611080320` |
+| `t1_021_k15_s1` | 74v / 69c | — | 0.85 s | — | `3131285320468328` |
+| `t1_021_k10_s1` | 80v / 75c | — | 9.43 s | — | `430052389882336036` |
+| **`t1_021_k7_s1`** | **83v / 90c** | **9.48 s** | **38.58 s** | 20.81 s (log line 409, 2026-04-29) | `2978382486464633072` |
+
+**Selected working instance: `temp_cnf/mc2025_track1_021_k7_s1.cnf`** (md5 from `shrink_cnf.py` --seed=1). Frozen vars: `x18=0, x73=1, x9=0, x33=1, x16=0, x64=0, x58=0`. Ganak `--td 0` lands at 38.58 s — in target band.
+
+Observations:
+- TD helps decisively when the formula has small separators: ganak default 9.48 s vs `--td 0` 38.58 s on k7_s1 (TD 4× speedup). On t1_011 — which lacks small separators — TD blew up at >9 min. The difference is structural (separator/treewidth), not the size of the formula.
+- ganak `--td 0` time scales rapidly with k: 0.03 → 0.85 → 9.43 → 38.58 s as k goes 20 → 15 → 10 → 7. Roughly 4× per step.
+- sharpSAT's 20.81 s on k7_s1 (with `-sepVarBias`) lands between ganak's two configs — slower than ganak default's 9.48 s, faster than ganak `--td 0`'s 38.58 s. Comparable-magnitude search.
+
+---
+
+## 2026-05-05 — Multiplicative-mode unified picker (Phase 1) on t1_011 / k15
+
+Phase 1 of the unified-picker redesign documented in
+[unified_picker_redesign.md](unified_picker_redesign.md). The
+multiplicative score combines a type-pure `base(x)` with a smooth
+multiplicative separator boost:
+
+```
+base(v)  = picker_var_weight · max(picker_base_floor,
+                                   freq + 10·activity + cheapW·cheap)
+base(C)  = picker_clause_weight · sigmoid(β·(L − mid))
+boost(x) = 1 + picker_alpha · exp(−picker_lambda · rel_k) · 1[x ∈ sep]
+S(x)     = base(x) · boost(x)
+rel_k    = (active sep elements) / N_active_vars
+```
+
+with cascade boost gated behind `picker_gamma > 0` (Regime B,
+empirically a no-op on these instances; see below).
+
+**Default Regime A parameters** (calibrated to match the typical
+var-base magnitude `freq + 10·activity ≈ 3–100` against the
+sigmoid-clamped clause-base `(0,1)`):
+
+| Symbol | Code field | Default | CLI flag |
+|---|---|---|---|
+| α | `picker_alpha` | **15.0** | `-pickerAlpha` |
+| λ | `picker_lambda` | **5.0** | `-pickerLambda` |
+| γ | `picker_gamma` | **0.0** (Regime A) | `-pickerGamma` |
+| w_v | `picker_var_weight` | **1.0** | `-pickerVarW` |
+| w_C | `picker_clause_weight` | **7.0** | `-pickerClauseW` |
+| ε | `picker_base_floor` | **0.01** | (no CLI) |
+
+The `clauseW = 7` default makes a length-4 clause base
+(σ(1) ≈ 0.731 → base ≈ 5) comparable to a typical var base
+`freq + 10·activity ≈ 5`. The `α = 15` default gives a separator
+candidate at `rel_k = 0` a 16× score multiplier — strong enough to
+match legacy `-sepVarBias`'s near-strict "consume separator first"
+preference. An earlier draft of the design doc suggested
+`clauseW ∈ [0.3, 3.0]`; that range is two orders of magnitude too
+small relative to real var-base magnitudes.
+
+**Build**: HEAD `e9e8bd1` (Phase 1 multiplicative picker landed),
+`-O3 -DNDEBUG -std=c++11 -Wall -arch arm64`. cpptools suspended
+throughout. `decomposeAfterK 1000` matches the picker's recommended
+invocation (see 2026-04-29 row).
+
+| Timestamp | Solver flags | Instance | Wall | Decisions | Conflicts | Stores | Notes |
+|---|---|---|---|---|---|---|---|
+| 2026-05-05 19:31 | `-rec -sep 5 -cb 3 -sepMode metis -sepVarBias` | t1_011.cnf (md5 `4be5e40e8a1660b130a690981ebdea88`) | 12.6 s | — | 17,447 | 131,239 | Today's legacy reference at HEAD `e9e8bd1`; +44% over historical 8.79 s (commit `892a4ea`, 2026-04-26 row 339). |
+| 2026-05-05 19:31 | `-rec -sep 5 -cb 3 -sepMode metis -unifiedPicker -decomposeAfterK 1000` | t1_011.cnf | **TIMEOUT > 60 s** | — | — | — | Default additive unified picker fails to finish within 60s. |
+| 2026-05-05 19:31 | `-rec -sep 5 -cb 3 -sepMode metis -unifiedPicker -decomposeAfterK 1000 -pickerMode multiplicative` | t1_011.cnf | **14.96 s** | 215,018 | 17,447 | 131,239 | Multiplicative Regime A with default α=15, λ=5, γ=0, w_v=1, w_C=7. **Tree size matches legacy exactly** (same decisions, conflicts, stores). +19% wall vs today's legacy (12.6 s) — overhead from per-pick cheap-score / sep-set lookups, not from worse picks. **Multiplicative finishes where additive times out.** |
+| 2026-05-05 19:31 | (above) + `-pickerGamma 1` | t1_011.cnf | 21.37 s | 215,018 | 17,447 | 131,239 | Regime B (γ=1). Decision sequence bit-identical to Regime A — the cascade boost has zero effect because the median cascade depth across active vars is 0 (most vars don't have any forced lits in their `binary_links_` walk, and the `depth_med > 0` gate blocks the boost). +43% wall over Regime A is pure per-call cost from `computeCascadeScore` evaluated on every active var per pickBranchTarget call. Confirms the design doc's prediction that Regime B without sampled-median + lazy-skip is too expensive. |
+| 2026-05-05 19:05 | `-rec -sep 5 -cb 3 -sepMode metis -unifiedPicker -decomposeAfterK 1000` | t1_021_k15_s1.cnf (shrunken from t1_021 with 15 vars frozen, seed 1; see 2026-05-04 ladder section) | 0.60 s | 215,544 | 67 | 114,052 | Additive picker reference on the smaller k15 instance. |
+| 2026-05-05 19:05 | (above) + `-pickerMode multiplicative` | t1_021_k15_s1.cnf | 0.78 s | 278,380 | 78 | 142,689 | Multiplicative Regime A. +29% decisions / +30% wall vs additive on this instance — within calibration-tunable range. |
+
+**Headline finding**: on `t1_011`, the multiplicative-mode picker
+finishes in 14.96 s while the **additive-mode picker times out
+> 60 s**. Multiplicative reproduces the legacy's tree exactly
+(decisions, conflicts, stores all bit-identical), with a +19% wall
+overhead from picker per-call work. This is the first concrete
+signal that the multiplicative redesign behaves better than the
+additive one on a hard instance, not just differently.
+
+**On k15** (smaller instance), the additive picker still works
+(0.60 s) and multiplicative is slightly slower (+30%) — calibration
+trade-off, expected to be tunable by sweeping α, λ, w_C.
+
+**Regime B (γ > 0) is a no-op as currently designed** because the
+cascade-depth median across active vars is 0 on every instance
+tested (k15, k7_s1, t1_011), even on t1_011 with 17k learned
+binaries. The `depth_med > 0` gate consequently blocks the boost
+on every candidate. The median-relative cascade design needs
+re-thinking before it can produce signal: either drop the gate,
+use percentile-based ranking instead, or change the depth-counting
+formula to surface the rare non-zero values.
+
+**Open**: parameter sensitivity sweep across α, λ, w_C on t1_011
+(can the multiplicative picker close the +19% wall gap to legacy?)
+and a fix for Regime B's degenerate median (otherwise γ has no
+effect we can measure).
+
+---
+
+## 2026-05-09 — Hybrid picker (mult during sep + τ post-sep) and α_var sensitivity on t1_071
+
+Picker change under investigation in this session: the `-pickerRateFramework` (rate / τ-based) score is replaced by a regime-split scoring inside `pickBranchTargetRate`:
+
+- **Sep-active regime** (`n_sep_active > 0`): mult-style score `raw · (1 + α·exp(−λ·rel_k))` for vars and `clauseW · sig · (1 + α_c·exp(−λ_c·rel_k))` for clauses. This is the same formula `pickBranchTargetMultiplicative` uses.
+- **Sep-exhausted regime** (`n_sep_active == 0`): rate-style `−n_active_vars · log(τ)` where τ = `tauBranchingNumber(a, b)` for vars and `tauBranchingNumber(sig, L)` for clauses. Cascade gain from `computeBcpGainPolarities` always on (no opt-out flag in this configuration).
+
+Build: HEAD with the regime-split patch in `solver_rec.cpp` (uncommitted, "dirty: regime-split picker"). Compile flags: `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64`. Default build present at `sharpsat-separator/build/sharpSAT`. Three parameters held fixed throughout this section: `clause_branch_min_length = 3` (via `-cb 3`), `cascade_score_depth = 3` (compile-time default), `picker_no_cascade_gain = false` (cascade always on).
+
+CLI invocation under investigation:
+```
+-rec -sep 5 -cb 3 -sepMode metis -unifiedPicker -pickerMode multiplicative -pickerRateFramework -pickerNonSepKillsNd
+```
+
+### Results on three structurally different instances
+
+Reference numbers were captured under load avg ~3.5–4.5 (VS Code + Claude Helper + WindowServer competing). Absolute timings inflated vs the historical clean-machine numbers earlier in this log; relative comparisons within today's session are valid.
+
+| Instance | Plain (`-rec -sep 5 -cb 3 -sepMode metis`) | Default rate (untuned) | Hybrid (Design G) default | Notes |
+|---|---|---|---|---|
+| `mc2025_track1_065.cnf` | 0.01 s (hist) | 0.02 s | 0.02 s | Trivially fast; picker overhead dominates. No tuning needed. |
+| `mc2025_track1_021_k10_s1.cnf` (80v / 75c) | ~0.4 s (hist) | TIMEOUT > 60 s | **12.7 s** (clean) / 32 s (loaded) | Pure rate framework times out; hybrid solves. Mult-only solves in ~9.6 s on clean machine. |
+| `mc2025_track1_071.cnf` (640v / 1818c) | 0.43 s | 6.93 s | 6.93 s default (α_v=15) → **1.05 s** with α_v=100 | Big sensitivity to α_var (see sweep below). |
+
+`mc2025_track1_011.cnf`: hybrid TIMEOUT > 60 s in this session (vs legacy `-sepVarBias` at ~14 s). Open question — held for future investigation.
+
+### α_var sweep on t1_071 (15 s timeout per run)
+
+All other parameters at defaults (α_clause=110, λ_var=5, λ_clause=5, varW=1, clauseW=1.5, frontBonus=2). Decision count reported alongside wall time.
+
+| α_var | Wall time | Decisions |
+|---|---|---|
+| 1 | TIMEOUT > 15 s | — |
+| 5 | TIMEOUT > 15 s | — |
+| 15 (default) | 6.93 s | 308,904 |
+| 30 | 7.77 s | 332,628 |
+| **50** | **1.14 s** | **64,000** |
+| **100** | **1.05 s** | **56,372** |
+| 200 | 1.15 s | 64,384 |
+| 500 | 1.11 s | 59,564 |
+| 1000 | 1.14 s | 59,564 (saturated) |
+
+Single-axis sweeps on the other parameters (one at a time, others at default) on t1_071:
+
+| Parameter | Best non-default | Time at best | Time at default |
+|---|---|---|---|
+| `α_clause` | no movement (30..600 all ~7 s) | — | 6.94 s |
+| `λ_var` | 10 → 3.87 s | 3.87 s | 6.98 s |
+| `λ_clause` | no movement | — | 6.95 s |
+| `picker_clause_weight` | 5.0 → 2.74 s | 2.74 s | 6.99 s |
+| `picker_front_bonus` | no movement | — | 6.93 s |
+
+Combinations of α_v=100 with the other improved values (λ_v=10 and/or w_c=5) did not beat α_v=100 alone on t1_071 (1.05 s remained the best). Saturation at α_v=50–100 is sharp: below that threshold the picker scatters non-sep picks into the sep-active regime; above that, sep is consumed first and the search shrinks ~5.5×.
+
+At the best setting (α_v=100), Design (G) on t1_071 produces 56,372 decisions vs plain's 62,046 — fewer decisions than the plain configuration, with picker overhead accounting for the residual 1.05 s vs 0.43 s wall-time gap.
+
+### Observations and tentative hypotheses
+
+These are observations from this single session, on three instances. They have not been verified at scale.
+
+1. **t1_071 (sparse, well-structured, small separators)** — the picker's value depends critically on consuming the separator early enough to trigger decomposition. With default α_var=15 the multiplicative sep boost at typical `rel_k ≈ 0.27` is only ~5×, which on this instance is below the threshold where a sep var beats a high-cascade non-sep var. At α_var=100 the boost at the same `rel_k` is ~32×, comfortably above that threshold. Sep is consumed first and decomposition fires on schedule.
+
+2. **t1_021_k10_s1 (medium, decomposable shrunken instance)** — default Design (G) parameters work. The hybrid solves where the default rate framework times out. The earlier finding from this session: τ-based scoring during the sep regime corrupts cache reuse because cascade-driven τ varies across recursion paths visiting the same logical state, so sep elements get picked in different orders → different sub-problems → cache miss. Mult-style scoring during sep keeps ordering path-independent.
+
+3. **t1_065** — trivially fast; picker overhead is the entire timing. Not informative for picker design.
+
+4. **t1_011** — failed in this session under hybrid + Design (G) defaults. Per the existing benchmark log, this instance is dominated by `buildCanonicalKey` work and has very high cache hit rates (74.6% L1). Hypothesis (untested): the post-sep regime is the bulk of search on t1_011, so τ's path-dependent ordering hurts there too — not just during the sep regime. Either way, t1_011 is the next instance to characterize.
+
+### Toward instance-driven parameter selection
+
+The single-instance result on t1_071 suggests α_var should not be a fixed constant. The default α_var=15 was calibrated for instances like t1_011 / k15 (per the 2026-05-05 entry above); t1_071 needs ~100. Possible structural signals to drive selection (untested):
+
+- **Separator quality fraction**: instances where the precomputed METIS hierarchy returns small balanced cuts (low `α + β` in the rate framework's `ρ_sep_strategic` formula) probably benefit from high α_var, because the decomposition payoff per consumed sep element is large. The 2026-04-24 row notes t1_071 fits this pattern; the same row notes reactive METIS regresses on it because the pre-computed hierarchy is already good.
+- **Density**: dense instances (t1_011, t1_049) need different scoring than sparse ones (t1_071). The 2026-04-24 12:30 α-sweep on Stage-0 found a similar pattern (lower α for dense, higher for sparse) — a cross-validation of the same intuition.
+- **Cache hit rate during search**: high-L1-hit-rate instances (t1_011) may need to *avoid* path-dependent picker variation altogether, even post-sep.
+
+These are hypotheses to test, not conclusions. The point of this entry is to record the observations cleanly so the parameter-selection question can be approached with a concrete starting point on the next instance. The goal stated in conversation: not a per-instance optimum, but parameter values selectable from cheap structural statistics of the instance.
+
+### Open questions for the next session
+
+- Does α_var=100 hurt t1_021_k10_s1 (where defaults work)? Test before generalising.
+- What parameter setting (or parameter-selection rule) closes the gap on t1_011?
+- Is the post-sep τ regime *itself* the cost on t1_011, or just the within-sep portion as on t1_021_k10_s1? Diagnostic: check first-N picks under hybrid on t1_011 and compare to legacy's picks at corresponding states.
+
+---
+
+## 2026-05-09 (continued) — Cascade-weight sweep + the case for "plain" as a universal default
+
+After the t1_011 sweep above showed that *no* parameter setting of the hybrid (rate-framework) picker solves t1_011 (19 configurations all timed out at 60 s), we stepped back from the rate-framework path and ran a wider experiment: **drop `-pickerRateFramework` entirely, sweep `cascade_score_weight`** (the additive cascade signal already exposed via `-cascadeW`) on instances spanning four structural regimes.
+
+Build: same as the previous entry (HEAD with regime-split picker patch in `solver_rec.cpp`, "dirty"). The diagnostic patch is irrelevant when `-pickerRateFramework` is off — `pickBranchTargetMultiplicative` is invoked instead. Compile flags `-O3 -DNDEBUG -std=c++11 -Wall -arch arm64`. Load avg ~3–4 throughout (VS Code + Claude Helper + WindowServer competing). 60 s timeout per run.
+
+Configurations tested:
+- **Legacy** (`-rec -sep 5 -cb 3 -sepMode metis -sepVarBias`) — separator VARs stripped to bias bitmap; carried sep has clauses only; Stage 3 picker scores `freq + 10·act + 1000·bias`.
+- **Plain** (`-rec -sep 5 -cb 3 -sepMode metis`) — no unified picker; full sep (VARs + CLAUSEs) consumed sequentially in METIS order via Stage 2; Stage 3 scores `freq + 10·act` (no bias).
+- **Mult c=W** (`-rec -sep 5 -cb 3 -sepMode metis -unifiedPicker -pickerMode multiplicative -cascadeW W`) — unified multiplicative picker with cascade weight `W`. No `-pickerRateFramework`, no `-pickerNonSepKillsNd`.
+
+### Per-instance results
+
+| Instance | n_vars | n_clauses | density (m/n) | Best | Legacy | Plain | Mult c=0 | Mult c=0.5 | Mult c=1 | Mult c=2 | Mult c=5 | Mult c=10 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| t1_065 | 112 | 592 | 5.29 | Plain (0.017 s) | **0.53 s** (75 860 dec) | 0.017 s (614 dec) | 0.016 s | 0.019 s | 0.015 s | 0.019 s | 0.020 s | — |
+| t1_021_k10_s1 | 80 | 75 | 0.94 | Legacy (3.99 s) | 3.99 s (879 K dec) | 5.25 s (1.32 M dec) | 10.08 s (3.18 M) | T/O | T/O | T/O | T/O | T/O |
+| t1_071 | 640 | 1818 | 2.84 | Plain (0.41 s) | T/O | 0.41 s (62 K dec) | T/O | 14.10 s (1.5 M) | 0.90 s (101 K) | 0.78 s (89 K) | T/O | T/O |
+| t1_011 | 6559 | 14515 | 2.21 | Plain ≈ Legacy ≈ Mult c=0 (~13.6 s) | 13.73 s (215 018 dec) | 13.57 s (215 018 dec) | 14.69 s (215 018 dec) | 47.80 s (118 K) | 49.71 s (120 K) | 40.79 s (99 K) | T/O | T/O |
+
+All counts verified correct against the historical entries above (t1_065 `377…568`, t1_021_k10_s1 `430052389882336036`, t1_071 `4562956…272640`, t1_011 `536870912306`).
+
+### The (ii) ↔ (iii) tension on t1_011 — quantified
+
+Three configurations, all on the same hardware run, with matching counts:
+
+| Config | Decisions | Conflicts | l2_stores | l2_hits | Wall | μs / decision |
+|---|---|---|---|---|---|---|
+| Mult c=0 | 215 018 | 17 447 | 138 758 | 75 771 | 14.7 s | 68 |
+| Mult c=0.5 | 118 292 | 13 897 | 74 594 | 39 984 | 47.8 s | 404 |
+| Mult c=1 | 119 598 | 16 209 | 76 985 | 37 751 | 49.7 s | 416 |
+| Mult c=2 | 99 218 | 14 527 | 61 857 | 31 310 | 40.8 s | 411 |
+
+Adding cascade *halves* the search tree (215 K → 99 K decisions) but each decision becomes ~6× more expensive. Cache-hit ratio is roughly preserved (35 % → 34 %); cache-store volume scales down proportionally with decisions. So the 4× wall regression is **picker-time per call**, not a cache-reuse collapse: `computeBcpGainScore` runs per active var per pick, and on t1_011's deep sub-components that cost dominates everything the smaller tree saves.
+
+This is concrete evidence for the (ii)↔(iii) tension we hypothesized: cascade signal is informative (smaller tree) but its computation is expensive enough that on cache-heavy instances it's a net loss.
+
+### The plain vs `-sepVarBias` divergence — the bias-staleness story
+
+Plain matches legacy on t1_011 *bit-for-bit* (215 018 decisions, 138 758 stores, 75 771 hits — identical search tree). But plain dramatically beats legacy on **t1_065** (×30) and **t1_071** (T/O → 0.41 s).
+
+Legacy's only difference vs plain is the `-sepVarBias` mechanism: original separator VARs are stripped to a persistent global `bias_bitmap`, and Stage 3's picker adds `+1000·bias[v]` to every var's score for the entire search. The bias never expires.
+
+On t1_065 (uniform 5-CNF, density 5.29, strong BCP cascades) and t1_071 (density 2.84, deep ND-hierarchy), the original sep VARs are quickly decided by BCP early in the search, but the `+1000` bonus survives into deeper sub-components where those vars are no longer at any separator boundary — they're just *historically* at one. The bonus then misleads picks for the rest of the search.
+
+On t1_021_k10_s1 (low density 0.94, weak BCP) the bias stays accurate longer; legacy beats plain (3.99 s vs 5.25 s). On t1_011 the ND-hierarchy is so deep that the bias is mostly irrelevant by the time the search reaches deep sub-components — legacy and plain converge.
+
+### Headline finding: a 2-feature rule fits all four instances
+
+The data fits a simple if-then-else:
+
+```
+if  density > 1.5  OR  n_vars > 200:
+    use Plain (-rec -sep 5 -cb 3)
+else:
+    use Legacy (-rec -sep 5 -cb 3 -sepVarBias)
+```
+
+Routing check across four instances: t1_065 (density 5.29 → plain ✓), t1_071 (n_vars 640 → plain ✓), t1_011 (density 2.21 → plain ✓), t1_021_k10_s1 (density 0.94, n_vars 80 → legacy ✓).
+
+**Strength of this finding** (caveats explicit): four data points, all from the MC2025 track-1 family. No instance yet in the small-and-low-density quadrant where plain beats legacy (would falsify the rule). No instance yet in the large-and-low-density quadrant either. The mechanistic story (BCP cascade strength governing bias staleness) is consistent with the data but unverified.
+
+**Implications recorded in `portfolio_insights.md` §4 (2026-05-09).**
+
+### Why this re-frames the whole picker direction
+
+The unified picker (`-unifiedPicker`) was built to allow the picker to *override* the precomputed cut when scoring suggests a non-sep candidate would be better. On these four instances **the override is consistently a net negative**:
+
+- On t1_065 / t1_071 / t1_011 plain matches or beats every unified-picker variant.
+- On t1_021_k10_s1 legacy matches plain after removing the bias bitmap's stale-bonus issue, and *no* unified-picker variant lands within 1.5× of legacy.
+
+Plain's advantage is structural: Stage 2 hard-forces sep consumption in METIS order. There's no scoring competition, no soft preference. When the cut is correct (which it is on these instances), there's nothing to mess up.
+
+**This means the entire unified-picker code path (`-unifiedPicker`, `-pickerMode multiplicative`, `-pickerRateFramework`, `-cascadeW`, the rate / τ machinery in `pickBranchTargetRate`) should currently be considered research scaffolding, not a production path.** It introduces failure modes (scattered picks, picker-overhead amplification, stale-bias amplification) and we don't yet have a single instance where it earns its keep over plain.
+
+### Open questions logged for later
+
+- Is there an instance class in the (small, low-density) quadrant where *plain* beats *legacy* — i.e., where the rule needs a third feature?
+- What's the right tie-breaker between plain and legacy when both work but one is slightly better?
+- Could the unified picker earn its keep on instance classes we haven't tested (XOR-encoded, circuit-encoded)?
+- The unified picker's cascade-driven "smarter tree" *does* materialize on t1_011 (118 K vs 215 K decisions). If `computeBcpGainScore` could be made ~10× cheaper, the wall regression would flip to a win. Is per-pick caching of cascade gains plausible?
+
+

@@ -6,6 +6,7 @@ SET(SOURCES alt_component_analyzer.cpp
 	instance.cpp
 	nd_hierarchy.cpp
 	preprocessor.cpp
+	probe_preprocessor.cpp
 	solver.cpp
 	solver_rec.cpp
 	statistics.cpp)

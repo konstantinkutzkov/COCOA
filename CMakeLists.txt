@@ -3,7 +3,22 @@ project (SHARPSAT_SEPARATOR)
 
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -std=c++11 -Wall")
 
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -std=c++11 -O3 -DNDEBUG -Wall")
+# Release flags. The three additions over plain -O3:
+#   -fno-stack-protector: skip stack-canary insertion. Safe for a
+#       research-only CLI (no untrusted attack surface). 1-3% on hot
+#       functions with stack arrays. Confirmed used by ganak.
+#   -D_FORTIFY_SOURCE=0: disables glibc bounds-checking on str/mem
+#       functions. No-op on macOS (libSystem doesn't use FORTIFY) but
+#       harmless. Confirmed used by ganak.
+#   -mcpu=native (only when CMAKE_SYSTEM_PROCESSOR is arm64): allow the
+#       compiler to use the full Apple Silicon instruction set on the
+#       build machine. Sacrifices binary portability for ~1-5% on
+#       inner loops; acceptable since this is a research solver and
+#       we don't redistribute binaries.
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -std=c++11 -O3 -DNDEBUG -Wall -fno-stack-protector -D_FORTIFY_SOURCE=0")
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -mcpu=native")
+endif()
 
 set(CMAKE_CXX_FLAGS_PROFILING "${CMAKE_CXX_FLAGS_PROFILING} -std=c++11 -O3 -g -DNDEBUG -Wall")
 
@@ -52,5 +67,29 @@ target_link_libraries (test_canonical_key_invariance libsharpSAT ${GMP_LIB} ${GM
 add_executable (test_canonical_key_learned tests/test_canonical_key_learned.cpp)
 target_include_directories (test_canonical_key_learned PRIVATE src)
 target_link_libraries (test_canonical_key_learned libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a)
+
+add_executable (test_probe_preprocessor_harness tests/test_probe_preprocessor_harness.cpp)
+target_include_directories (test_probe_preprocessor_harness PRIVATE src)
+target_link_libraries (test_probe_preprocessor_harness libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a)
+
+add_executable (test_probe_preprocessor_lift tests/test_probe_preprocessor_lift.cpp)
+target_include_directories (test_probe_preprocessor_lift PRIVATE src)
+target_link_libraries (test_probe_preprocessor_lift libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a)
+
+add_executable (test_probe_preprocessor_r4 tests/test_probe_preprocessor_r4.cpp)
+target_include_directories (test_probe_preprocessor_r4 PRIVATE src)
+target_link_libraries (test_probe_preprocessor_r4 libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a)
+
+add_executable (test_probe_preprocessor_filter tests/test_probe_preprocessor_filter.cpp)
+target_include_directories (test_probe_preprocessor_filter PRIVATE src)
+target_link_libraries (test_probe_preprocessor_filter libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
     ${GKLIB_DIR}/build/libGKlib.a)
