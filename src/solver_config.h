@@ -53,6 +53,14 @@ struct SolverConfiguration {
   // explicitly via -learnLevel 5 once the rewrite is known good.
   int learn_level = 4;
 
+  // When true (default), allow conflict-clause learning during the
+  // consumption of a precomputed separator (from_separator=true call
+  // sites). Per-sub-component membership filter (binary lane filter +
+  // learnedClauseInComponent for size ≥ 3) gates the resulting clauses,
+  // so a cross-cut learned clause cannot bridge components in BCP.
+  // Set to false to restore the legacy suppression for A/B comparison.
+  bool allow_learning_in_separator_branching = true;
+
   // When true, run the extra end-of-minimization resolution-replay
   // verification (opt-in, expensive). For each literal dropped during
   // minimization we stored the antecedent clause used; the replay
@@ -118,6 +126,13 @@ struct SolverConfiguration {
   // subtrees of the current hierarchy node.
   double separator_max_ratio   = 0.20;
   double separator_min_balance = 0.30;
+
+  // Per-variable centrality score derived from the ND-hierarchy position.
+  // Adds `nd_centrality_weight * nd_centrality_score[v]` to scoreOf(v).
+  // The score is (max_depth - leaf_depth) so vars in shallow nodes (closer
+  // to the root) rank higher. Default 0.0 = off (no behavior change).
+  // Analogous in spirit to ganak's `td_weight * tdscore[v]` term.
+  double nd_centrality_weight  = 0.0;
 
   // Mid-consumption decomposition: at every solveComponent entry
   // with a non-empty separator, run discoverComponentsOf to detect

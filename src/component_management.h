@@ -34,7 +34,8 @@ public:
   }
 
   void initialize(LiteralIndexedVector<Literal> & literals,
-        vector<LiteralID> &lit_pool);
+        vector<LiteralID> &lit_pool,
+        unsigned original_lit_pool_size);
 
   unsigned scoreOf(VariableIndex v) {
       return ana_.scoreOf(v);

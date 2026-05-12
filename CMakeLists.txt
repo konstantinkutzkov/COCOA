@@ -45,12 +45,29 @@ set(GKLIB_DIR "${CMAKE_SOURCE_DIR}/../GKlib" CACHE PATH "Path to GKlib source")
 include_directories(${METIS_DIR}/include ${GKLIB_DIR}/include)
 add_definitions(-DIDXTYPEWIDTH=32 -DREALTYPEWIDTH=32)
 
+# CryptoMiniSat5 — used by preprocessor_light.cpp for count-preserving
+# CNF simplification (Arjun-light). Points at the static lib already
+# built under ganak's _deps tree to avoid a second build.
+set(CMS5_DIR "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cryptominisat5-src/src"
+    CACHE PATH "Path to CryptoMiniSat5 headers")
+set(CMS5_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cryptominisat5-build/lib/libcryptominisat5.a"
+    CACHE FILEPATH "Path to CryptoMiniSat5 static library")
+set(CADICAL_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cadical-build/libcadical.a"
+    CACHE FILEPATH "Path to Cadical static library")
+set(CADIBACK_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cadiback-build/libcadiback.a"
+    CACHE FILEPATH "Path to Cadiback static library")
+set(SBVA_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/sbva-build/lib/libsbva.a"
+    CACHE FILEPATH "Path to SBVA static library")
+include_directories(${CMS5_DIR})
+set(CMS5_DEPS ${CMS5_LIB} ${CADIBACK_LIB} ${CADICAL_LIB} ${SBVA_LIB})
+
 add_subdirectory(src)
 
 add_executable (sharpSAT src/main.cpp)
 target_link_libraries (sharpSAT libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
-    ${GKLIB_DIR}/build/libGKlib.a)
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
 
 add_executable (test_probe tests/test_probe.cpp)
 target_include_directories (test_probe PRIVATE src)

@@ -1,7 +1,14 @@
 #include "solver.h"
+#include "preprocessor_light.h"
 
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
+#include <tuple>
+#include <unistd.h>
+#include <vector>
 
 using namespace std;
 
@@ -10,6 +17,9 @@ int main(int argc, char *argv[]) {
 
   string input_file;
   Solver theSolver;
+  bool arjun_light = false;
+  unsigned arjun_light_verbosity = 0;
+  string arjun_light_dump_and_exit;
 
 
   if (argc <= 1) {
@@ -65,6 +75,8 @@ int main(int argc, char *argv[]) {
       theSolver.config().perform_component_caching = false;
     if (strcmp(argv[i], "-noLearn") == 0)
       theSolver.config().perform_conflict_clause_learning = false;
+    if (strcmp(argv[i], "-noSepLearn") == 0)
+      theSolver.config().allow_learning_in_separator_branching = false;
     if (strcmp(argv[i], "-noIBCP") == 0)
       theSolver.config().perform_failed_lit_test = false;
     if (strcmp(argv[i], "-noPP") == 0)
@@ -248,6 +260,11 @@ int main(int argc, char *argv[]) {
         theSolver.config().reactive_metis_sigma_beta = atof(argv[i + 1]);
         i++;
       }
+    } else if (strcmp(argv[i], "-ndCentralityW") == 0) {
+      if (i + 1 < argc) {
+        theSolver.config().nd_centrality_weight = atof(argv[i + 1]);
+        i++;
+      }
     } else if (strcmp(argv[i], "-implicantLearn") == 0) {
       theSolver.config().perform_implicant_learning = true;
     } else if (strcmp(argv[i], "-implicantMaxSize") == 0) {
@@ -416,10 +433,95 @@ int main(int argc, char *argv[]) {
         return -1;
       }
       theSolver.statistics().maximum_cache_size_bytes_ = atol(argv[i + 1]) * (uint64_t) 1000000;
+    } else if (strcmp(argv[i], "-arjunLight") == 0) {
+      arjun_light = true;
+    } else if (strcmp(argv[i], "-arjunLightVerbose") == 0) {
+      arjun_light = true;
+      arjun_light_verbosity = 1;
+    } else if (strcmp(argv[i], "-arjunLightDumpAndExit") == 0) {
+      if (argc <= i + 1) { cout << "-arjunLightDumpAndExit needs a path\n"; return -1; }
+      arjun_light_dump_and_exit = argv[i + 1];
+      i++;
     } else
       input_file = argv[i];
   }
 
+  // Dump-and-exit mode: just produce the simplified CNF + equivalence
+  // sidecar at the requested path and skip the solver entirely.
+  if (!arjun_light_dump_and_exit.empty() && !input_file.empty()) {
+    string dump_sidecar = arjun_light_dump_and_exit + ".eqv";
+    if (!PreprocessorLight::simplify(input_file, arjun_light_dump_and_exit,
+                                     1, dump_sidecar)) {
+      cerr << "[arjun-light] simplification failed\n";
+      return -1;
+    }
+    cout << "c o [arjun-light] dumped simplified CNF to "
+         << arjun_light_dump_and_exit << "\n"
+         << "c o [arjun-light] dumped equivalence sidecar to "
+         << dump_sidecar << "\n";
+    return 0;
+  }
+
+  // Arjun-light: count-preserving CMS5 simplification on the input CNF.
+  // Writes the simplified CNF to a temp file and routes the solver at it.
+  // See preprocessor_light.h for the pass selection rationale.
+  // Also extracts SCC equivalences to a sidecar and injects them into
+  // the solver's redundant-binary lane (BCP-only, invisible to component
+  // decomposition and the canonical-key cache).
+  string simplified_path;
+  string equiv_sidecar_path;
+  if (arjun_light && !input_file.empty()) {
+    char tmpl[] = "/tmp/sharpsat_arjunlight_XXXXXX.cnf";
+    int fd = mkstemps(tmpl, 4);
+    if (fd < 0) {
+      cerr << "[arjun-light] mkstemps failed; skipping preprocessing\n";
+    } else {
+      close(fd);
+      simplified_path = tmpl;
+      equiv_sidecar_path = simplified_path + ".eqv";
+      if (!PreprocessorLight::simplify(input_file, simplified_path,
+                                       arjun_light_verbosity,
+                                       equiv_sidecar_path)) {
+        cerr << "[arjun-light] simplification failed; using original CNF\n";
+        unlink(simplified_path.c_str());
+        unlink(equiv_sidecar_path.c_str());
+        simplified_path.clear();
+        equiv_sidecar_path.clear();
+      } else {
+        cout << "c o [arjun-light] simplified CNF written to "
+             << simplified_path << "\n";
+        input_file = simplified_path;
+
+        // Load equivalences from sidecar and queue them with the solver.
+        std::ifstream eqv_in(equiv_sidecar_path);
+        if (eqv_in) {
+          std::vector<std::tuple<unsigned, unsigned, bool>> equivs;
+          std::string line;
+          unsigned expected = 0;
+          bool have_count = false;
+          while (std::getline(eqv_in, line)) {
+            if (line.empty() || line[0] == 'c') continue;
+            std::istringstream ss(line);
+            if (!have_count) { ss >> expected; have_count = true; continue; }
+            unsigned v1 = 0, v2 = 0;
+            char pol = '+';
+            if (ss >> v1 >> v2 >> pol)
+              equivs.emplace_back(v1, v2, pol == '+');
+          }
+          cout << "c o [arjun-light] sidecar reported " << equivs.size()
+               << " equivalences (expected " << expected << ")\n";
+          theSolver.setPendingRedundantEquivalences(std::move(equivs));
+        }
+      }
+    }
+  }
+
   theSolver.solve(input_file);
+
+  // Retain the simplified CNF when verbose, so it can be inspected.
+  if (!simplified_path.empty() && arjun_light_verbosity == 0) {
+    unlink(simplified_path.c_str());
+    unlink(equiv_sidecar_path.c_str());
+  }
   return 0;
 }

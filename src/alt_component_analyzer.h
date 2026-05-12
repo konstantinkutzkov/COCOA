@@ -41,8 +41,16 @@ public:
     return archetype_;
   }
 
+  // original_lit_pool_size: cap for the long-clause walk so learned long
+  // clauses (which live past this offset in lit_pool) cannot enter the
+  // analyzer's frozen connectivity. Today's call-site invokes initialize
+  // before any search-time learning, so the cap is a no-op there; but
+  // it makes the invariant load-bearing rather than timing-dependent,
+  // and protects against re-init paths (e.g. test helpers, future
+  // dynamic-reinit features) that may run after some learning.
   void initialize(LiteralIndexedVector<Literal> & literals,
-      vector<LiteralID> &lit_pool);
+      vector<LiteralID> &lit_pool,
+      unsigned original_lit_pool_size);
 
 
   bool isUnseenAndActive(VariableIndex v){

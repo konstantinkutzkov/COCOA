@@ -126,6 +126,15 @@ protected:
   // conflict clauses
   unsigned original_lit_pool_size_;
 
+  // Set by createfromFile when the input CNF contains an empty clause
+  // (a "0" line with no literals). Such a formula is trivially UNSAT;
+  // the count is 0 regardless of any other clauses. Checked at the top
+  // of simplePreProcess so the UNSAT short-circuit fires even with
+  // -noPP. Without this, the parser silently dropped the empty clause
+  // (the `assert(!literals.empty())` is compiled out in Release builds)
+  // and the solver returned a non-zero count.
+  bool parsed_trivially_unsat_ = false;
+
   LiteralIndexedVector<Literal> literals_;
 
   LiteralIndexedVector<vector<ClauseOfs> > occurrence_lists_;
@@ -460,6 +469,23 @@ protected:
 
   inline bool addBinaryClause(LiteralID litA, LiteralID litB);
 
+  // Inject an equivalence x = (y if same_polarity else ¬y) into the
+  // redundant-binary lane. Sound only when the equivalence is implied
+  // by the original CNF (e.g. detected by CMS5's SCC pass at
+  // preprocessing time). Each equivalence corresponds to two binary
+  // clauses, each stored at both endpoints' lanes (4 lane entries total).
+  //
+  // The redundant lane is BCP-visible (so the equivalence propagates)
+  // and analyzer/cache-key-invisible (so it never bridges components
+  // or alters cache keys). See Literal::redundant_binary_links_ for
+  // soundness rationale.
+  //
+  // Returns true if at least one entry was added; false if the
+  // equivalence was already redundant or if either variable is
+  // out of range / inactive.
+  inline bool addRedundantBinaryEquivalence(unsigned var_x, unsigned var_y,
+                                             bool same_polarity);
+
   /////////////////////////////////////////////////////////
   // BEGIN access to variables, literals, clauses
   /////////////////////////////////////////////////////////
@@ -609,6 +635,46 @@ bool Instance::addBinaryClause(LiteralID litA, LiteralID litB) {
    literal(litA).increaseActivity();
    literal(litB).increaseActivity();
    return true;
+ }
+
+bool Instance::addRedundantBinaryEquivalence(unsigned var_x, unsigned var_y,
+                                              bool same_polarity) {
+   // Storage convention (mirrors addBinaryClause): for a clause (a ∨ b),
+   // BCP walks a's neg-lane when a becomes false to find that b is now
+   // forced. addBinaryClause(a, b) stores b in a's lane and a in b's lane.
+   //
+   // x ↔ y encoded as (¬x ∨ y) ∧ (¬y ∨ x):
+   //   (¬x ∨ y): store y_pos in x_neg-lane and x_neg in y_pos-lane.
+   //   (¬y ∨ x): store x_pos in y_neg-lane and y_neg in x_pos-lane.
+   //
+   // x ↔ ¬y encoded as (¬x ∨ ¬y) ∧ (x ∨ y):
+   //   (¬x ∨ ¬y): store y_neg in x_neg-lane and x_neg in y_neg-lane.
+   //   (x ∨ y):   store y_pos in x_pos-lane and x_pos in y_pos-lane.
+   if (var_x == 0 || var_y == 0 || var_x == var_y) return false;
+   if (var_x >= variables_.size() || var_y >= variables_.size()) return false;
+
+   LiteralID x_pos(var_x, false), x_neg(var_x, true);
+   LiteralID y_pos(var_y, false), y_neg(var_y, true);
+
+   bool added = false;
+   auto add_one = [&](LiteralID side, LiteralID other) {
+     auto &lane = literal(side).redundant_binary_links_;
+     for (auto &e : lane) {
+       if (e == other) return;
+       if (e == SENTINEL_LIT) break;
+     }
+     literal(side).addRedundantBinLinkTo(other);
+     added = true;
+   };
+
+   if (same_polarity) {
+     add_one(x_neg, y_pos);  add_one(y_pos, x_neg);
+     add_one(x_pos, y_neg);  add_one(y_neg, x_pos);
+   } else {
+     add_one(x_neg, y_neg);  add_one(y_neg, x_neg);
+     add_one(x_pos, y_pos);  add_one(y_pos, x_pos);
+   }
+   return added;
  }
 
 

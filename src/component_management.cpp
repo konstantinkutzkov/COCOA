@@ -10,9 +10,10 @@
 #include "component_management.h"
 
 void ComponentManager::initialize(LiteralIndexedVector<Literal> & literals,
-    vector<LiteralID> &lit_pool) {
+    vector<LiteralID> &lit_pool,
+    unsigned original_lit_pool_size) {
 
-  ana_.initialize(literals, lit_pool);
+  ana_.initialize(literals, lit_pool, original_lit_pool_size);
 
   component_stack_.clear();
   component_stack_.reserve(ana_.max_variable_id() + 2);

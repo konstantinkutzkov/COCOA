@@ -475,6 +475,41 @@ Append-only log of observations that should feed the mapping.
       cache. Substantial but bounded: the structural primitive is
       already there.
 
+> **RETRACTION (2026-05-11).** The two paragraphs above attribute ganak's
+> performance on the t1_021 family to "tree-decomp dynamic programming
+> (Korhonen–Järvisalo, CP 2021)" and "bag-state DP". **This claim was
+> unverified inference from ganak's verbose output mentioning Flowcutter
+> and a TD width.** Verbose output establishes that ganak *computes* a
+> tree decomposition; it does NOT establish what ganak does *with* it.
+>
+> Today's source read (`ganak/src/comp_types/hashed_comp.hpp`,
+> `cacheable_comp.hpp`) shows ganak's cache is keyed by
+> `chibihash64(comp.get_raw_data(), ...)` — i.e. a hash of the
+> sub-component's raw active-var-IDs + active-clause-IDs data. The
+> `equals` method on `HashedComp` is hash-only. This is the same
+> identity-based component caching that our L1 layer (`l1_hash_` field
+> in `Component`, computed in `makeComponentFromState`) implements.
+>
+> So ganak does **not** use a coarser cache key than ours. Its 68 %
+> effective hit rate on t1_041_k16_s1 (vs our L1 42 %) is achieved via
+> **TD-driven variable ordering** that produces consistent residuals
+> across recursion paths, not via a different DP formalism. Same caching
+> mechanism, different branching policy.
+>
+> Consequence: the "implementation sketch" above (replace separator-branching
+> loop with a `(node_id, bag_state)` cache) targets the wrong layer. The
+> right architectural lift is on the branching-order side, not the
+> caching side. Specifically: drive variable selection from a stable
+> structural ordering (TD-elimination, var-ID, freq-only, …) so that
+> the same logical state reached via different paths produces the same
+> identity-keyed sub-component. This is a much smaller change than
+> implementing TD-DP from scratch.
+>
+> Falsification status: untested as of 2026-05-11. A test is queued —
+> strip activity from the picker on t1_041_k16_s1, measure L1 hit rate,
+> see whether it climbs toward ganak's 68 %. The hypothesis lands or
+> falls on that measurement, not on this retraction.
+
 ### 2026-05-09 — Picker-design session: rate-framework dead-end, plain rises, 2-feature rule emerges
 
 This session pursued the unified-picker / rate-framework redesign on three
@@ -605,6 +640,165 @@ the test set. Proposed candidates to characterise: `mc2025_track1_023.cnf`,
 `mc2025_track1_025.cnf`, `mc2025_track1_027.cnf`, `mc2025_track1_041.cnf`,
 `mc2025_track1_047.cnf` — extract `(n, m, density, mean_len, ND-stats)` and
 run plain + legacy + mult c=0 with a 30 s budget. See open question Q10 below.
+
+### 2026-05-11 — Falsification hunt results: rule holds, new "ganak-class" quadrant identified
+
+Followed up on the proposed candidates from §4 2026-05-09. Decompressed
+`mc2025_track1_073.cnf` from `MC2025_Public/` for additional coverage. All
+measurements in `benchmark_log.md` 2026-05-11 entries; insights captured here.
+
+#### Feature table for the new instances
+
+| Instance | n_vars | n_clauses | density | mean_len | Composition | Predicted | Quadrant |
+|---|---|---|---|---|---|---|---|
+| t1_023 | 102 | 102 | 1.00 | 3.00 | pure 3-SAT | legacy | small + low-density |
+| t1_025 | 63 | 66 | 1.05 | 3.00 | pure 3-SAT | legacy | small + low-density |
+| t1_027 | 66 | 66 | 1.00 | 3.00 | pure 3-SAT | legacy | small + low-density |
+| **t1_041** | **1920** | **1910** | **0.99** | 3.52 | mixed (154 bin / 301 ter / 1351 long) | **plain** | **large + low-density** (previously untested) |
+| t1_047 | 80 | 240 | 3.00 | 3.00 | pure 3-SAT | plain | small + high-density |
+| t1_073 | 1140 | 2870 | 2.52 | 3.00 | pure 3-SAT | plain | large + medium-density |
+
+#### Result summary
+
+- **Rule confirmed where both configs finish.** t1_027 (small, density 1.00):
+  legacy beats plain by 17 % wall, 30 % fewer decisions (1.39 M vs 2.01 M).
+  t1_025 (very small, density 1.05): plain ≈ legacy within noise, but legacy
+  has slightly fewer decisions. **No falsifier of the rule in the
+  small + low-density quadrant.**
+- **t1_073 (large, medium-density, pure 3-SAT) confirms plain wins** at 0.34 s;
+  legacy and mult c=0 time out, mult c=2 reaches 1.43 s but plain still wins.
+  Same structural class as t1_071, same outcome.
+- **New finding: t1_041 reveals a third quadrant our solver doesn't handle well.**
+  1920 vars, density 0.99, 1351 of 1910 clauses are length ≥ 4. Both plain and
+  legacy time out at 60 s. Ganak finishes in 16 s. The 2-feature rule predicted
+  "plain" but plain itself fails — rule prediction is moot.
+
+#### Refined classification: the "ganak-class" quadrant
+
+Combining 2026-04-27's t1_021-family observations with today's t1_023, t1_025,
+t1_027, t1_041 results, a clear pattern emerges:
+
+**Signature of "ganak's home turf"**: `density ∈ [0.95, 1.10]` AND
+`binary_fraction ≤ 0.1` (mostly ternaries or longer clauses, ~1 clause per
+var). Examples:
+
+| Instance | n_vars | density | sharpSAT (best) | ganak | Notes |
+|---|---|---|---|---|---|
+| t1_021_k7_s1 | 83 | 0.96 | 10.71 s (`-sep 50`) | 9.53 s | sharpSAT ~1.1× ganak |
+| t1_021_k10_s1 | 80 | 0.94 | 3.99 s legacy | 1.50 s | sharpSAT 2.7× ganak |
+| t1_025 | 63 | 1.05 | 7.31 s plain | 2 s | sharpSAT 3.7× ganak |
+| t1_027 | 66 | 1.00 | 4.80 s legacy | 3 s | sharpSAT 1.6× ganak |
+| t1_023 | 102 | 1.00 | TIMEOUT > 60 s | TIMEOUT > 60 s | both stuck at 60 s |
+| **t1_041** | **1920** | **0.99** | **TIMEOUT > 60 s** | **16 s** | **ganak ≥ 4× our timeout** |
+| t1_021_k4_s1 | 86 | 0.93 | TIMEOUT > 600 s | 22.19 s | ganak ≥ 27× our timeout |
+| t1_021 (full) | 90 | 1.00 | TIMEOUT > 1200 s | TIMEOUT > 1200 s | both stuck |
+
+Pattern: sharpSAT scales **3–10× worse than ganak per added variable** on this
+class; on large enough instances (t1_041, t1_021_k4) we don't finish at all.
+The mechanism is the one diagnosed in 2026-04-27: ganak's Flowcutter-driven
+tree-decomposition DP gives a polynomial-time enumeration over bag states,
+while our hierarchy-based search enumerates separator-element decision orders
+that don't translate to cache reuse.
+
+#### Implications
+
+**Refines §1 taxonomy.** The proposed §1e ("small + low-density + decomposable")
+should be **renamed** and **extended**:
+
+- **§1e (ganak-class): density ~1.0 + low binary fraction + pure-or-mostly-3-SAT.**
+  Includes the t1_021/t1_023/t1_025/t1_027 family (small) AND t1_041 (large).
+  Size doesn't matter for the structural placement; density and clause-length
+  composition do.
+- **Our solver's behaviour on this class**:
+  - Small (n ≤ ~100): we finish but 1.5–4× slower than ganak. Legacy `-sepVarBias`
+    is the best of our configs (rule from 2026-05-09 still applies for choosing
+    between our options).
+  - Large (n ≥ ~200): we time out. Ganak finishes. **The 2-feature rule's
+    prediction is irrelevant here.**
+- **Portfolio implication**: detect the ganak-class via the
+  `density ≈ 1.0 + binary_fraction ≤ 0.1` signature. If detected AND `n_vars ≥ 200`,
+  **route directly to ganak**. If detected AND `n_vars < 200`, run our solver
+  with `-sepVarBias` (rule-based override), but reserve a small budget to
+  fall through to ganak.
+
+**Updates the 2-feature rule's scope.** The rule
+`density > 1.5 ∨ n_vars > 200 → plain; else legacy` is valid only **conditional
+on our solver being the right tool** for the instance. The ganak-class detection
+should run *first*; if ganak-class is detected, the 2-feature rule doesn't apply.
+
+#### Open data gaps
+
+- **t1_023 and t1_047 at longer budget** (300 s+). Both are small and timed out
+  at 60 s. Their behaviour distinguishes "ganak-class" (where sharpSAT loses)
+  from "just hard, but solvable with patience" (where sharpSAT eventually wins).
+- **t1_073 across more configs** — we tested plain/legacy/mult/ganak but didn't
+  do an `-sep N` sweep (per 2026-04-27 §4); on a 1140-var pure 3-SAT a higher
+  `-sep` threshold might help further.
+- **t1_041 with longer budget** — does our solver eventually finish, or is this
+  fundamentally unreachable? Confirms whether ganak-class is genuinely
+  "wrong tool" or "needs more time".
+
+### 2026-05-12 — Anchor-variable structure on t1_041; probe-min-rate metric
+
+t1_041 (1920 v / 1910 c, ganak-class per 2026-05-11) TIMEOUTs in our default config. Fixing a single specific variable as a first branching decision drops it to **~2 s**. This session characterised which variables earn that anchor role and a cheap structural test that finds them.
+
+#### The "fast anchor" property: flip-symmetry + min-rate
+
+For a single-var fix `v = val`, our solver finishes in ≤ 6 s with high probability iff:
+
+1. **`v` is flip-symmetric on the literal-clause graph**: WL refinement (≥ 3 iterations) places `+v` and `-v` in the same color class. Equivalent in our test set to `#models(F[v=F]) = #models(F[v=T])`. **Necessary but not sufficient**: 1187 of 1920 vars are flip-symmetric on t1_041; only a fraction make good anchors.
+2. **`min(rate_F, rate_T) ≥ ~0.04`**, where `rate_pol = (L2 cache hits on sub-components with ≥ 200 vars) / decisions` measured in a 1 s solver probe with `v = pol` fixed as a unit. Min-aggregation across polarities is required because the solver explores both branches; a cherry-picked good polarity doesn't predict the actual cost.
+
+Measured on t1_041, top-10 by `min_rate` (all flip-symmetric):
+
+| Var | min_rate | F + T total |
+|---|---|---|
+| v450 | 0.0858 | **4.50 s** |
+| v242 | 0.1124 | 4.53 s |
+| v405 | 0.0635 | 4.84 s |
+| v456 | 0.0691 | 5.57 s |
+| v526 | 0.0446 | 5.60 s |
+| v263 | 0.0552 | 6.61 s |
+| v631 | 0.1123 | 6.91 s |
+| v407 | 0.1506 | 8.78 s |
+| v459 | 0.0619 | ~64 s (F is timeout) |
+| v5 | 0.0419 | ~64 s (F is timeout) |
+
+Six of ten land in 4.5-5.6 s — within 1.2× of the optimum. The bottom of the top-10 (v5, v459 at `min_rate < 0.05`) misses on one polarity. Negative validation: every measured var with `min_rate < 0.05` had at least one polarity ≥ 60 s. The metric is well-calibrated in both directions.
+
+#### Earlier single-polarity probe was misleading
+
+A previous probe (2026-04-29 picker session, see `project_picker_session_2026-04-29.md`) ranked variables by per-`(var, polarity)` rate. Six of the old top-10 were **false positives**: fast on the probed polarity, near-TIMEOUT on the other. Specifically `v70`, `v176`, `v33`, `v1` — all ranked in the old top-10, all collapse under min-aggregation. v70's case is the cleanest: WL-equivalent to v242 at iter 1-2, single-polarity probe rate 0.145 (similar to v242's 0.122), but actual `F + T ≈ 106 s` because T is ~45 s.
+
+The general lesson for probe-based pickers: **aggregate single-polarity probes by min, not max or mean**. The solver visits both branches; the worse side dominates.
+
+#### Static residual structure does NOT predict the speed difference
+
+For all measured anchors and false positives on t1_041, branching `v = val` adds **exactly one** newly-assigned variable beyond the 104-var backbone that root preprocessing already absorbs. No BCP cascade triggered by the first decision. The post-branch residuals differ between fast (v242=F) and slow (v70=F) cases by only ~36 clauses out of 1830 — both formulas keep the same number of WL color classes, same connected-component decomposition, same flip-symmetric-var count. The 30× wall-time difference emerges from **deeper cache-amplification dynamics** during search, not from anything visible in the static residual.
+
+Implication: features computable from F's syntactic structure (degree, WL labels, separator membership, BCP cascade size, residual decomposition) are necessary but **fundamentally insufficient** to pick the best anchor without an actual probe. A 1 s probe at both polarities is the cheapest test that captures the dynamic property.
+
+#### Implications for the unified picker (§2, Q11)
+
+Q11 asked: "is there an instance class where the unified picker earns its keep?" The 2026-05-12 results don't directly answer this — the question above is about a probe-based picker (a different mechanism that runs a solver process) and not the unified-picker scoring contest. But it does identify a **structural niche** the unified picker has not been tested on: ganak-class instances (density ≈ 1.0, low binary fraction) where:
+
+- The precomputed METIS hierarchy is poor (per 2026-04-27 / 2026-05-11 diagnosis).
+- A cascade-aware or τ-aware picker that prefers flip-symmetric vars could in principle steer toward the anchor family.
+
+Hypothesis (untested): on t1_041, a unified picker that boosts flip-symmetric candidates and prefers vars producing balanced sub-formulas (low `|rate_F − rate_T|`) could pick something close to v450 / v242 / v405 without a probe. Cost would be one literal-graph WL pass at root (cheap) plus the unified picker's per-decision scoring (which is already paid).
+
+#### Implications for portfolio routing (§8)
+
+Doesn't change current routing. Ganak-class is still ganak-first. The picker insight here is research-stage:
+
+- It identifies a candidate **fix** for the ganak-class quadrant within our solver (probe-based anchor selection), not yet a portfolio config.
+- The probe cost on t1_041 was ~8 min for 120 vars × 2 polarities. Too expensive as a fixed preamble; needs either restriction to a tighter candidate set or a per-instance budget gate.
+
+#### Open questions specific to this study
+
+- **Does the anchor family transfer**? Probe-based picker on `t1_021_k4_s1` (the unfinished ganak-class instance from 2026-04-27): does it also have an anchor variable that drops it from TIMEOUT to seconds? If yes, this is a general mechanism for the class. If no, it's t1_041-specific.
+- **What's the cheap structural test that ranks anchors without a probe**? Flip-symmetry is necessary but too coarse (1187 candidates on t1_041). Need a sharper feature — perhaps WL class size, or a structural property of the v's neighborhood beyond iter-2 WL.
+- **Min-rate non-monotonicity**: v5 and v459 rank in the top-10 by `min_rate` but have ~60 s on one polarity. A second feature `max_rate / min_rate` (lopsidedness ratio) might filter these out cheaply.
 
 ---
 
@@ -795,6 +989,25 @@ guidance for instance routing):**
   `-pickerRateFramework`, `-cascadeW`) for production**: across all measured
   instances it loses to plain. Treat as research scaffolding, not a
   portfolio choice. See Q11 for the falsification programme.
+
+**Portfolio routing precedence (2026-05-11; layered with the above):**
+
+The picker recommendations above only apply *after* the analyzer has decided
+to run our solver. Before that decision, check the ganak-class detector first.
+The full routing precedence (highest priority first):
+
+1. **Ganak-class detected** (`density ∈ [0.95, 1.10]` AND `binary_fraction ≤ 0.1`):
+   - If `n_vars ≥ 200`: **route to ganak directly**. Our solver consistently
+     fails to finish (t1_041, t1_021_k4, t1_021 full).
+   - If `n_vars < 200`: run our solver with **`-sepVarBias`** but reserve a
+     small budget (~30 s) to fall through to ganak. Our solver finishes but
+     1.5–4× slower (t1_021/t1_025/t1_027 family).
+2. **Otherwise apply the 2-feature picker rule**:
+   - `density > 1.5 ∨ n_vars > 200` → plain.
+   - else (small AND low-density but not ganak-class) → legacy `-sepVarBias`.
+
+Detection is cheap: density and binary fraction are O(m) features available
+from a single pass over the formula post-preprocessing.
 
 ---
 

@@ -56,6 +56,13 @@ public:
 
   /// number of all decisions made
   unsigned long num_decisions_ = 0;
+
+  // Per-solveComponent-entry component-size accumulation. ratio
+  // (sum_comp_vars_at_entry_ / num_comp_entries_) gives the average
+  // component size we recurse into — small = lots of fragmentation,
+  // large = monolithic searches.
+  unsigned long long sum_comp_vars_at_entry_ = 0;
+  unsigned long long num_comp_entries_ = 0;
   /// number of all implications derived
   unsigned long num_implications_ = 0;
   // number of all failed literal detections
@@ -69,6 +76,12 @@ public:
   // Dedup drops across ALL learning sites (conflict-UIP + implicant).
   // See instance.h's ClauseSigFilter / maybeDedupClause.
   unsigned long num_learned_dedup_dropped_ = 0;
+  // Counts BCP firings that the per-sub-component membership filter
+  // rejected on the binary lanes (binary_links_ past
+  // original_binary_link_count_, plus the redundant lane). The size ≥ 3
+  // learned clauses go through learnedClauseInComponent at watch time
+  // and are not counted here.
+  unsigned long long num_learned_binary_filtered_ = 0;
 
   // Dynamic subsumption measurement (see analyze_dynamic_subsumption
   // in solver_config.h). All zero unless flag is enabled.

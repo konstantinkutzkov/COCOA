@@ -116,6 +116,68 @@ std::vector<LiteralID> Solver::deriveDecisionImplicant(
   return impl;
 }
 
+// Compute a per-variable centrality score from the ND-hierarchy.
+// Score = (max_depth − depth_of(v's leaf in the ND-tree)).  Variables
+// in shallow leaves (closer to the root) rank higher; variables in deep
+// leaves rank lower.  Conceptually analogous to ganak's td_score (which
+// derives from TD-centroid distances) — both give a static, per-variable
+// structural ranking to anchor branching order across recursion paths.
+//
+// Indexed by COMPACT var IDs (same indexing as nd_hierarchy_.var_leaf).
+// Activated by `config_.nd_centrality_weight > 0`.
+void Solver::computeNdCentrality() {
+  nd_centrality_score_.clear();
+  if (!nd_hierarchy_.valid) return;
+  const int n_nodes = (int)nd_hierarchy_.left_child.size();
+  if (n_nodes == 0) return;
+
+  // BFS from root to assign per-node depth.
+  std::vector<int> depth(n_nodes, -1);
+  const int root = nd_hierarchy_.root();
+  if (root < 0 || root >= n_nodes) return;
+  depth[root] = 0;
+  std::queue<int> q;
+  q.push(root);
+  int max_depth = 0;
+  while (!q.empty()) {
+    int u = q.front(); q.pop();
+    if (depth[u] > max_depth) max_depth = depth[u];
+    int lc = nd_hierarchy_.left_child[u];
+    int rc = nd_hierarchy_.right_child[u];
+    if (lc >= 0 && lc < n_nodes && depth[lc] < 0) { depth[lc] = depth[u]+1; q.push(lc); }
+    if (rc >= 0 && rc < n_nodes && depth[rc] < 0) { depth[rc] = depth[u]+1; q.push(rc); }
+  }
+
+  // Map leaf_id → tree_node_id (leaves have leaf_lo == leaf_hi and no children).
+  int max_leaf = -1;
+  for (int n = 0; n < n_nodes; ++n) {
+    bool is_leaf = (nd_hierarchy_.left_child[n] < 0 && nd_hierarchy_.right_child[n] < 0);
+    if (is_leaf && nd_hierarchy_.leaf_lo[n] >= 0) {
+      if (nd_hierarchy_.leaf_lo[n] > max_leaf) max_leaf = nd_hierarchy_.leaf_lo[n];
+    }
+  }
+  if (max_leaf < 0) return;
+  std::vector<int> leaf_to_node(max_leaf + 1, -1);
+  for (int n = 0; n < n_nodes; ++n) {
+    bool is_leaf = (nd_hierarchy_.left_child[n] < 0 && nd_hierarchy_.right_child[n] < 0);
+    if (is_leaf && nd_hierarchy_.leaf_lo[n] >= 0
+        && nd_hierarchy_.leaf_lo[n] == nd_hierarchy_.leaf_hi[n]) {
+      leaf_to_node[nd_hierarchy_.leaf_lo[n]] = n;
+    }
+  }
+
+  // Per-variable centrality. Score = max_depth − depth_of(leaf_node(v)).
+  const size_t n_v = nd_hierarchy_.var_leaf.size();
+  nd_centrality_score_.assign(n_v, 0.0f);
+  for (size_t v = 1; v < n_v; ++v) {
+    int leaf_id = nd_hierarchy_.var_leaf[v];
+    if (leaf_id < 0 || leaf_id > max_leaf) continue;
+    int node = leaf_to_node[leaf_id];
+    if (node < 0 || depth[node] < 0) continue;
+    nd_centrality_score_[v] = (float)(max_depth - depth[node]);
+  }
+}
+
 void Solver::maybeLearnImplicants(unsigned bcp_start_ofs)
 {
   if (!config_.perform_implicant_learning) return;
@@ -459,6 +521,7 @@ SOLVER_StateT Solver::countSATRec() {
 		                     ? (int)(guard_var_ - 1)
 		                     : (int)num_variables();
 		nd_hierarchy_.build(build_n_vars, clause_list, binary_pairs);
+		computeNdCentrality();
 	}
 
 	// Diagnostic: dump ND-hierarchy state and exit before search.
@@ -604,6 +667,12 @@ mpz_class Solver::solveComponent(Component &comp,
                                   int reactive_metis_skip_until_depth) {
 	if (stopwatch_.timeBoundBroken())
 		return 0;
+	// Diagnostics: accumulate component sizes seen at solveComponent entry.
+	// Lets us compute avg comp size processed vs avg comp size that hits
+	// the cache, telling apart "we cache big amortized chunks" from
+	// "we cache trivial singletons".
+	statistics_.sum_comp_vars_at_entry_ += comp.num_variables();
+	statistics_.num_comp_entries_++;
 
 	bool can_cache = config_.perform_component_caching
 	                 && comp.num_variables() >= 3;
@@ -640,7 +709,12 @@ mpz_class Solver::solveComponent(Component &comp,
 		}
 		mpz_class hit;
 		if (comp_manager_.contentCache().peek(cached_key, hit)) {
-			comp_manager_.contentCache().stats_hits++;   // peek doesn't auto-count
+			auto &cc = comp_manager_.contentCache();
+			cc.stats_hits++;
+			cc.stats_hit_vars_sum += cached_key.num_vars;
+			if (cached_key.num_vars > cc.stats_max_hit_size)
+				cc.stats_max_hit_size = cached_key.num_vars;
+			cc.stats_hit_buckets[ContentCache::size_bucket(cached_key.num_vars)]++;
 			mpz_class scaled = hit;
 			for (unsigned i = 0; i < free_vars; ++i) scaled *= 2;
 			return scaled;
@@ -2089,7 +2163,17 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		//   level 4 → + binary padding
 		//   level 5 → + minimization (handled in minimizeAndStoreUIPClause)
 		const int L = config_.learn_level;
-		if (!from_separator
+		// Suppression-gate. The legacy invariant was "do not learn during
+		// separator consumption" because a learned clause might bridge
+		// the hierarchy's children. With the per-sub-component membership
+		// filter in place (binary lane + long-clause learnedClauseInComponent),
+		// any such bridge clause is dismissed at the next descent — so the
+		// suppression is no longer load-bearing for soundness. Default is
+		// to allow; set config_.allow_learning_in_separator_branching =
+		// false to restore the legacy behaviour for A/B measurement.
+		bool sep_gate_ok = !from_separator
+		                || config_.allow_learning_in_separator_branching;
+		if (sep_gate_ok
 		    && config_.perform_conflict_clause_learning
 		    && L >= 1
 		    && !uip_clauses_.empty() && uip_clauses_.back().size() >= 2

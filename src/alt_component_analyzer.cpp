@@ -11,7 +11,8 @@
 
 
 void AltComponentAnalyzer::initialize(LiteralIndexedVector<Literal> & literals,
-    vector<LiteralID> &lit_pool) {
+    vector<LiteralID> &lit_pool,
+    unsigned original_lit_pool_size) {
 
   max_variable_id_ = literals.end_lit().var() - 1;
 
@@ -33,10 +34,17 @@ void AltComponentAnalyzer::initialize(LiteralIndexedVector<Literal> & literals,
   clause_id_to_ofs_.clear();
   clause_id_to_ofs_.push_back(0); // dummy for index 0 (clause IDs are 1-based)
 
-  for (auto it_lit = lit_pool.begin(); it_lit < lit_pool.end(); it_lit++) {
+  // Cap walk at original_lit_pool_size: long clauses past this offset are
+  // learned and must not enter the analyzer's frozen connectivity graph.
+  // canonical_key.cpp:108-119 enforces the matching invariant for the
+  // cache key side via an explicit abort.
+  auto pool_end = lit_pool.begin() + original_lit_pool_size;
+  if (pool_end > lit_pool.end()) pool_end = lit_pool.end();
+
+  for (auto it_lit = lit_pool.begin(); it_lit < pool_end; it_lit++) {
     if (*it_lit == SENTINEL_LIT) {
 
-      if (it_lit + 1 == lit_pool.end())
+      if (it_lit + 1 >= pool_end)
         break;
 
       max_clause_id_++;
@@ -76,14 +84,26 @@ void AltComponentAnalyzer::initialize(LiteralIndexedVector<Literal> & literals,
   unified_variable_links_lists_pool_.push_back(0);
   for (unsigned v = 1; v < occs.size(); v++) {
     // BEGIN data for binary clauses
+    // Cap at original_binary_link_count_: learned binaries (from
+    // empty-scope addUIPConflictClause) are appended to binary_links_
+    // past this offset and must not enter the analyzer's frozen
+    // connectivity. canonical_key.cpp:150-154 caps the cache-key side
+    // identically.
     variable_link_list_offsets_[v] = unified_variable_links_lists_pool_.size();
-    for (auto l : literals[LiteralID(v, false)].binary_links_)
-      if (l != SENTINEL_LIT)
-        unified_variable_links_lists_pool_.push_back(l.var());
-
-    for (auto l : literals[LiteralID(v, true)].binary_links_)
-      if (l != SENTINEL_LIT)
-        unified_variable_links_lists_pool_.push_back(l.var());
+    {
+      const auto &bl_pos = literals[LiteralID(v, false)].binary_links_;
+      unsigned orig_pos = literals[LiteralID(v, false)].original_binary_link_count_;
+      for (unsigned i = 0; i < orig_pos && i < bl_pos.size(); i++)
+        if (bl_pos[i] != SENTINEL_LIT)
+          unified_variable_links_lists_pool_.push_back(bl_pos[i].var());
+    }
+    {
+      const auto &bl_neg = literals[LiteralID(v, true)].binary_links_;
+      unsigned orig_neg = literals[LiteralID(v, true)].original_binary_link_count_;
+      for (unsigned i = 0; i < orig_neg && i < bl_neg.size(); i++)
+        if (bl_neg[i] != SENTINEL_LIT)
+          unified_variable_links_lists_pool_.push_back(bl_neg[i].var());
+    }
 
     unified_variable_links_lists_pool_.push_back(0);
 

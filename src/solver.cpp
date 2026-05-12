@@ -49,6 +49,10 @@ timeval StopWatch::getElapsedTime() {
 
 
 bool Solver::simplePreProcess() {
+	// Trivially-UNSAT short-circuit: createfromFile flags this when the
+	// input CNF contains an empty clause. Check first, before the -noPP
+	// early return, so the flag is honored under any solver config.
+	if (parsed_trivially_unsat_) return false;
 
 	if (!config_.perform_pre_processing)
 		return true;
@@ -611,7 +615,46 @@ void Solver::solve(const string &file_name) {
 		// and the user hasn't pinned α via -adaptiveAlpha.
 		analyzeAndSetHyperparameters();
 
-		comp_manager_.initialize(literals_, literal_pool_);
+		// Inject redundant equivalences queued via
+		// setPendingRedundantEquivalences. Translate from input-CNF var
+		// space (what the equivalences were computed in) to the
+		// post-compactification space using compact_to_orig_.
+		// Equivalences whose vars were eliminated by preprocessing are
+		// silently dropped — the elimination already captures the
+		// equivalence's effect on the count.
+		if (!pending_redundant_equivs_.empty()) {
+			std::vector<unsigned> input_to_compact;
+			if (!compact_to_orig_.empty()) {
+				unsigned max_orig = 0;
+				for (unsigned c = 1; c < compact_to_orig_.size(); c++)
+					max_orig = std::max(max_orig, compact_to_orig_[c]);
+				input_to_compact.assign(max_orig + 1, 0);
+				for (unsigned c = 1; c < compact_to_orig_.size(); c++)
+					input_to_compact[compact_to_orig_[c]] = c;
+			}
+			auto translate = [&](unsigned v_input) -> unsigned {
+				if (input_to_compact.empty()) return v_input;
+				if (v_input >= input_to_compact.size()) return 0;
+				return input_to_compact[v_input];
+			};
+			unsigned injected = 0, dropped = 0;
+			for (const auto &eq : pending_redundant_equivs_) {
+				unsigned vx = translate(std::get<0>(eq));
+				unsigned vy = translate(std::get<1>(eq));
+				bool same_pol = std::get<2>(eq);
+				if (vx == 0 || vy == 0 || vx == vy) { dropped++; continue; }
+				if (addRedundantBinaryEquivalence(vx, vy, same_pol))
+					injected++;
+				else
+					dropped++;
+			}
+			if (!config_.quiet)
+				cout << "c o [arjun-light] injected " << injected
+				     << " redundant equivalences (dropped " << dropped << ")\n";
+			pending_redundant_equivs_.clear();
+		}
+
+		comp_manager_.initialize(literals_, literal_pool_, original_lit_pool_size_);
 		comp_manager_.setRemovedClauses(&removed_clauses_);
 		// Note: verify_cache logic is implemented in solver_rec.cpp at the
 		// decomposition site. The ContentCache's own verify_mode is NOT
@@ -662,6 +705,47 @@ void Solver::solve(const string &file_name) {
 	          << " decomp_attempts=" << mid_sep_decomp_attempts_
 	          << " decomp_splits=" << mid_sep_decomp_splits_
 	          << std::endl;
+	std::cerr << "LEARN_FILTER_STATS"
+	          << " learned_clauses=" << statistics_.num_clauses_learned_
+	          << " dedup_dropped=" << statistics_.num_learned_dedup_dropped_
+	          << " binary_filter_fires=" << statistics_.num_learned_binary_filtered_
+	          << std::endl;
+	double avg_comp = statistics_.num_comp_entries_
+	                    ? (double)statistics_.sum_comp_vars_at_entry_ / statistics_.num_comp_entries_
+	                    : 0.0;
+	double avg_cascade = statistics_.num_decisions_
+	                       ? (double)statistics_.num_implications_ / statistics_.num_decisions_
+	                       : 0.0;
+	{
+		auto &cc2 = comp_manager_.contentCache();
+		double avg_hit_size  = cc2.stats_hits  ? (double)cc2.stats_hit_vars_sum   / cc2.stats_hits   : 0.0;
+		double avg_store_size= cc2.stats_stores? (double)cc2.stats_store_vars_sum / cc2.stats_stores : 0.0;
+		std::cerr << "DIAG_STATS"
+		          << " num_decisions=" << statistics_.num_decisions_
+		          << " avg_bcp/dec=" << avg_cascade
+		          << " avg_comp_at_entry=" << avg_comp
+		          << " avg_L2_hit_size=" << avg_hit_size
+		          << " max_L2_hit_size=" << cc2.stats_max_hit_size
+		          << " avg_L2_store_size=" << avg_store_size
+		          << " max_L2_store_size=" << cc2.stats_max_store_size
+		          << std::endl;
+		std::cerr << "L2_HIT_HIST"
+		          << " [0-25)=" << cc2.stats_hit_buckets[0]
+		          << " [25-50)=" << cc2.stats_hit_buckets[1]
+		          << " [50-100)=" << cc2.stats_hit_buckets[2]
+		          << " [100-200)=" << cc2.stats_hit_buckets[3]
+		          << " [200-400)=" << cc2.stats_hit_buckets[4]
+		          << " [400+)=" << cc2.stats_hit_buckets[5]
+		          << std::endl;
+		std::cerr << "L2_STORE_HIST"
+		          << " [0-25)=" << cc2.stats_store_buckets[0]
+		          << " [25-50)=" << cc2.stats_store_buckets[1]
+		          << " [50-100)=" << cc2.stats_store_buckets[2]
+		          << " [100-200)=" << cc2.stats_store_buckets[3]
+		          << " [200-400)=" << cc2.stats_store_buckets[4]
+		          << " [400+)=" << cc2.stats_store_buckets[5]
+		          << std::endl;
+	}
 	{
 		auto &cc = comp_manager_.contentCache();
 		std::cerr << "FULL_CACHE_STATS"
@@ -809,23 +893,72 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 	for (unsigned int i = start_at_stack_ofs; i < literal_stack_.size(); i++) {
 		LiteralID unLit = literal_stack_[i].neg();
 		//BEGIN Propagate Bin Clauses
-		for (auto bt = literal(unLit).binary_links_.begin();
-				*bt != SENTINEL_LIT; bt++) {
-			if (isResolved(*bt)) {
-				if (config_.log_conflicts) {
-					std::cerr << "CONFLICT_BIN clause=[" << unLit.toInt()
-					          << "," << bt->toInt() << "] DL="
-					          << stack_.get_decision_level() << " decisions=";
-					for (auto l : literal_stack_)
-						if (!var(l).ante.isAnt()) std::cerr << l.toInt() << ",";
-					std::cerr << "\n";
+		// For LEARNED binaries (idx >= original_binary_link_count_) we
+		// apply the component-membership filter, mirroring the long-clause
+		// gate at learnedClauseInComponent: skip the binary when the
+		// other endpoint's var is outside current_sub_varset_ AND still
+		// active (X_TRI). Same rule as long clauses — assigned outside
+		// vars are constants and don't bridge; only active outside vars
+		// pose a cross-sub hazard. Original binaries (idx < orig_count)
+		// are unfiltered: they're structural and always sound to fire.
+		{
+			unsigned orig_count = literal(unLit).original_binary_link_count_;
+			unsigned idx = 0;
+			for (auto bt = literal(unLit).binary_links_.begin();
+					*bt != SENTINEL_LIT; bt++, idx++) {
+				if (idx >= orig_count && !current_sub_varset_.empty()) {
+					unsigned v = bt->var();
+					bool in_mask = (v < current_sub_varset_.size()
+					                && current_sub_varset_[v]);
+					if (!in_mask
+					    && literal_values_[LiteralID(v, true)] == X_TRI) {
+						statistics_.num_learned_binary_filtered_++;
+						continue;
+					}
 				}
+				if (isResolved(*bt)) {
+					if (config_.log_conflicts) {
+						std::cerr << "CONFLICT_BIN clause=[" << unLit.toInt()
+						          << "," << bt->toInt() << "] DL="
+						          << stack_.get_decision_level() << " decisions=";
+						for (auto l : literal_stack_)
+							if (!var(l).ante.isAnt()) std::cerr << l.toInt() << ",";
+						std::cerr << "\n";
+					}
+					setConflictState(unLit, *bt);
+					return false;
+				}
+				setLiteralIfFree(*bt, Antecedent(unLit));
+			}
+		}
+		//END Propagate Bin Clauses
+		//BEGIN Propagate Redundant Binaries
+		// Redundant lane: global lemmas implied by F (e.g. SCC
+		// equivalences extracted by preprocessing). Sound to propagate
+		// everywhere since they hold in every model of F. Not walked by
+		// the component analyzer or canonical-key, so they never bridge
+		// components in the cache-key sense. Same membership filter as
+		// above: never propagate when the other endpoint is outside the
+		// current sub-component AND active.
+		for (auto bt = literal(unLit).redundant_binary_links_.begin();
+				*bt != SENTINEL_LIT; bt++) {
+			if (!current_sub_varset_.empty()) {
+				unsigned v = bt->var();
+				bool in_mask = (v < current_sub_varset_.size()
+				                && current_sub_varset_[v]);
+				if (!in_mask
+				    && literal_values_[LiteralID(v, true)] == X_TRI) {
+					statistics_.num_learned_binary_filtered_++;
+					continue;
+				}
+			}
+			if (isResolved(*bt)) {
 				setConflictState(unLit, *bt);
 				return false;
 			}
 			setLiteralIfFree(*bt, Antecedent(unLit));
 		}
-		//END Propagate Bin Clauses
+		//END Propagate Redundant Binaries
 		for (auto itcl = literal(unLit).watch_list_.rbegin();
 				*itcl != SENTINEL_CL; itcl++) {
 			bool isLitA = (*beginOf(*itcl) == unLit);
@@ -3520,7 +3653,7 @@ void Solver::_prepareForKeyComputation(const std::string &file_name) {
 	createfromFile(file_name);
 	initStack(num_variables());
 	simplePreProcess();
-	comp_manager_.initialize(literals_, literal_pool_);
+	comp_manager_.initialize(literals_, literal_pool_, original_lit_pool_size_);
 	comp_manager_.setRemovedClauses(&removed_clauses_);
 }
 

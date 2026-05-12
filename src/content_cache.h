@@ -80,6 +80,9 @@ public:
       }
       count = it->second;
       stats_hits++;
+      stats_hit_vars_sum += key.num_vars;
+      if (key.num_vars > stats_max_hit_size) stats_max_hit_size = key.num_vars;
+      stats_hit_buckets[size_bucket(key.num_vars)]++;
       return true;
     }
     stats_misses++;
@@ -126,6 +129,9 @@ public:
     }
     cache_[key] = count;
     stats_stores++;
+    stats_store_vars_sum += key.num_vars;
+    if (key.num_vars > stats_max_store_size) stats_max_store_size = key.num_vars;
+    stats_store_buckets[size_bucket(key.num_vars)]++;
   }
 
   // Used by the solver's verify-mode store path to get the previously
@@ -190,6 +196,30 @@ public:
   unsigned long stats_l1_hits = 0;
   unsigned long stats_l1_misses = 0;
   unsigned long stats_l1_stores = 0;
+  // Accumulators: sum of num_vars at hit/store events on the L2
+  // (canonical-key) cache. avg = sum / count tells us how big the
+  // components going through the cache are. Large avg-at-hit means
+  // each cache hit saves work on a big sub-formula — a real
+  // amplification signal beyond hit rate.
+  unsigned long long stats_hit_vars_sum = 0;
+  unsigned long long stats_store_vars_sum = 0;
+  // Tracking exponential-cost-relevant distribution: max hit size +
+  // bucketed histogram of hit sizes. A handful of very large hits
+  // dominate runtime savings; the mean is misleading for exponential
+  // search trees.
+  unsigned stats_max_hit_size = 0;
+  unsigned stats_max_store_size = 0;
+  // buckets: [0-25, 25-50, 50-100, 100-200, 200-400, 400+]
+  unsigned long stats_hit_buckets[6]   = {0,0,0,0,0,0};
+  unsigned long stats_store_buckets[6] = {0,0,0,0,0,0};
+  static int size_bucket(unsigned n) {
+    if (n < 25)  return 0;
+    if (n < 50)  return 1;
+    if (n < 100) return 2;
+    if (n < 200) return 3;
+    if (n < 400) return 4;
+    return 5;
+  }
 
 private:
   std::unordered_map<CanonicalKey, mpz_class, CanonicalKeyHash> cache_;

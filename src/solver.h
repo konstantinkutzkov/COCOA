@@ -20,6 +20,7 @@
 #include "solver_config.h"
 
 #include <sys/time.h>
+#include <tuple>
 #include <unordered_set>
 
 enum retStateT {
@@ -100,6 +101,19 @@ public:
 	}
 
 	void solve(const string & file_name);
+
+	// Queue equivalences (in input-CNF variable space, 1-indexed) to be
+	// injected into the redundant-binary lane after simplePreProcess
+	// finishes (i.e., after compactVariables / HardWireAndCompact). Each
+	// tuple is (var_x, var_y, same_polarity). Translation from input
+	// space to the post-compactification variable space is done by solve()
+	// at injection time using compact_to_orig_; equivalences whose vars
+	// were eliminated by preprocessing are silently dropped (the
+	// elimination already encodes the equivalence's effect on the count).
+	void setPendingRedundantEquivalences(
+	    std::vector<std::tuple<unsigned, unsigned, bool>> equivs) {
+		pending_redundant_equivs_ = std::move(equivs);
+	}
 
 	// Test-support entry point: load the CNF, initialize the decision
 	// stack, apply the unit clauses, and run BCP. Returns true iff no
@@ -284,6 +298,10 @@ private:
 	// config_.decompose_in_separator is on.
 	unsigned long decisions_since_connectivity_check_ = 0;
 
+	// Equivalences queued by setPendingRedundantEquivalences; consumed
+	// by solve() after preprocessing and before search starts.
+	std::vector<std::tuple<unsigned, unsigned, bool>> pending_redundant_equivs_;
+
 	// Counters for the experimental -decomposeInSep / -cacheInSep paths,
 	// printed at solve end via printMidSepStats().
 public:
@@ -358,7 +376,7 @@ private:
 	// Policy: allowed_sep = min(0.3 * n_active, 20).
 	static bool separatorSizeAcceptable(unsigned sep_size, unsigned n_active) {
 		if (sep_size == 0 || n_active == 0) return true;
-		unsigned allowed = std::min((unsigned)(0.3 * (double)n_active), 20u);
+		unsigned allowed = std::min((unsigned)(0.3 * (double)n_active), 100u);  // DIAG: relax 20→100
 		return sep_size <= allowed;
 	}
 
@@ -663,6 +681,13 @@ private:
 	// Precomputed nested-dissection hierarchy (built once at solve start)
 	NDHierarchy nd_hierarchy_;
 
+	// Per-variable centrality score derived from the ND-hierarchy
+	// (computed once after hierarchy build). nd_centrality_score_[v] is
+	// (max_depth − depth_of(leaf_containing_v)) so vars near the root
+	// rank higher. Indexed by COMPACT var IDs (same as var_leaf).
+	std::vector<float> nd_centrality_score_;
+	void computeNdCentrality();
+
 	// Reactive-METIS measurement accumulators. Populated when
 	// config_.measure_reactive_metis is on; printed at end-of-solve.
 	unsigned long long reactive_metis_calls_   = 0;
@@ -702,6 +727,11 @@ private:
 		float score = comp_manager_.scoreOf(v);
 		score += 10.0 * literal(LiteralID(v, true)).activity_score_;
 		score += 10.0 * literal(LiteralID(v, false)).activity_score_;
+		if (config_.nd_centrality_weight > 0.0
+		    && (size_t)v < nd_centrality_score_.size()) {
+			score += (float)(config_.nd_centrality_weight)
+			       * nd_centrality_score_[v];
+		}
 //		score += (10*stack_.get_decision_level()) * literal(LiteralID(v, true)).activity_score_;
 //		score += (10*stack_.get_decision_level()) * literal(LiteralID(v, false)).activity_score_;
 
@@ -812,6 +842,9 @@ private:
 		}
 		var(lit).decision_level = stack_.get_decision_level();
 		var(lit).ante = ant;
+		// Track BCP propagations vs decisions. ant.isAnt() == true means
+		// this literal was forced by BCP (not chosen as a decision).
+		if (ant.isAnt()) statistics_.num_implications_++;
 		// Chain-depth caching for fast implicant-filter lookup. Only
 		// computed when implicant learning is enabled — costs ~O(k)
 		// per forcing (k = antecedent clause length) but saves the

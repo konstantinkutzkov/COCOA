@@ -25,6 +25,8 @@
 
 
 #include <iostream>
+#include <unordered_set>
+#include <cstdlib>   // for atexit, getenv
 // State values for variables found during component
 // analysis (CA)
 typedef unsigned char CA_SearchState;
@@ -185,6 +187,11 @@ public:
     };
     uint64_t l1_lo = 0, l1_hi = 0;
 
+    // DIAG: track var-only and clause-only sub-hashes alongside the full key,
+    // so we can decompose cache misses by which set diverged.
+    uint64_t var_only_hash = 0, clause_only_hash = 0;
+    unsigned n_vars_in_comp = 0, n_clauses_in_comp = 0;
+
     for (auto v_it = super_comp().varsBegin(); *v_it != varsSENTINEL;  v_it++)
       if (var_seen(*v_it)) { //we have to put a var into our component
         p_new_comp->addVar(*v_it);
@@ -193,6 +200,8 @@ public:
         uint64_t id = (uint64_t)*v_it;
         l1_lo ^= mix_lo(id);
         l1_hi ^= mix_hi(id);
+        var_only_hash ^= mix_lo(id);
+        n_vars_in_comp++;
       }
     p_new_comp->closeVariableData();
     current_comp_for_caching_.closeVariableData();
@@ -211,10 +220,37 @@ public:
         // identical clause IDs contribute differently there too.
         uint64_t cid_hi = (uint64_t)*it_cl ^ 0xbf58476d1ce4e5b9ULL;
         l1_hi ^= mix_hi(cid_hi);
+        clause_only_hash ^= mix_lo(cid);
+        n_clauses_in_comp++;
       }
     p_new_comp->closeClauseData();
     current_comp_for_caching_.closeClauseData();
     p_new_comp->setL1Hash(l1_lo, l1_hi);
+
+    // DIAG: collect distinct-value counts across all calls when env var
+    // CACHE_DECOMP_LOG is set. Print summary at exit.
+    static const bool diag_on = (std::getenv("CACHE_DECOMP_LOG") != nullptr);
+    if (diag_on) {
+      static std::unordered_set<uint64_t> distinct_full;
+      static std::unordered_set<uint64_t> distinct_vars;
+      static std::unordered_set<uint64_t> distinct_clauses;
+      static unsigned long long n_calls = 0;
+      n_calls++;
+      distinct_full.insert(l1_lo);
+      distinct_vars.insert(var_only_hash);
+      distinct_clauses.insert(clause_only_hash);
+      // Periodically dump progress so we get partial data even on timeout.
+      if (n_calls % 100000 == 0 || n_calls == 1) {
+        std::cerr << "CACHE_DECOMP n_calls=" << n_calls
+                  << " distinct_full=" << distinct_full.size()
+                  << " distinct_vars=" << distinct_vars.size()
+                  << " distinct_clauses=" << distinct_clauses.size()
+                  << " avg_vars/comp=" << (double)n_vars_in_comp
+                  << " avg_clauses/comp=" << (double)n_clauses_in_comp
+                  << std::endl;
+      }
+    }
+
     return p_new_comp;
   }
 //  Component *makeComponentFromState(unsigned stack_size) {

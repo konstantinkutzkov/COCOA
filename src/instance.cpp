@@ -370,13 +370,22 @@ bool Instance::createfromFile(const string &file_name) {
         }
       }
       if (!skip_clause) {
-        assert(!literals.empty());
-        clauses_added++;
-        statistics_.incorporateClauseData(literals);
-        ClauseOfs cl_ofs = addClause(literals);
-        if (literals.size() >= 3)
-          for (auto l : literals)
-            occurrence_lists_[l].push_back(cl_ofs);
+        if (literals.empty()) {
+          // Empty clause = trivially UNSAT formula. Don't add it to
+          // any clause structure (size==0 falls into the size>=3 path
+          // in addClause which has UB on empty input). Set the flag
+          // and continue parsing so the rest of the file's syntax
+          // is consumed normally; simplePreProcess will short-circuit.
+          parsed_trivially_unsat_ = true;
+          clauses_added++;  // count it so the nCls header check is consistent
+        } else {
+          clauses_added++;
+          statistics_.incorporateClauseData(literals);
+          ClauseOfs cl_ofs = addClause(literals);
+          if (literals.size() >= 3)
+            for (auto l : literals)
+              occurrence_lists_[l].push_back(cl_ofs);
+        }
       }
     }
     input_file.ignore(max_ignore, '\n');

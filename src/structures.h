@@ -85,6 +85,15 @@ static const LiteralID NOT_A_LIT(0, false);
 class Literal {
 public:
   vector<LiteralID> binary_links_ = vector<LiteralID>(1,SENTINEL_LIT);
+  // Global-redundant binary lane. Holds binaries that are sound
+  // consequences of the *original* CNF (e.g. SCC equivalences extracted
+  // by preprocessing). BCP enforces these for propagation, but the
+  // component analyzer and canonical-key builder DO NOT walk this lane —
+  // so injecting them never bridges previously-independent components
+  // and never changes the cache key of a sub-component. Sound because
+  // any such binary is implied by the originals, hence implied by any
+  // sub-formula whose vars include both of the binary's literals.
+  vector<LiteralID> redundant_binary_links_ = vector<LiteralID>(1,SENTINEL_LIT);
   vector<ClauseOfs> watch_list_ = vector<ClauseOfs>(1,SENTINEL_CL);
   float activity_score_ = 0.0f;
 
@@ -131,6 +140,13 @@ public:
   void addBinLinkTo(LiteralID lit) {
     binary_links_.back() = lit;
     binary_links_.push_back(SENTINEL_LIT);
+  }
+
+  // Append to the redundant lane. Same sentinel-terminated convention so
+  // BCP can use the same loop idiom (iterate until SENTINEL_LIT).
+  void addRedundantBinLinkTo(LiteralID lit) {
+    redundant_binary_links_.back() = lit;
+    redundant_binary_links_.push_back(SENTINEL_LIT);
   }
 
   void resetWatchList(){
