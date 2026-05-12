@@ -751,20 +751,22 @@ For a single-var fix `v = val`, our solver finishes in ≤ 6 s with high probabi
 
 Measured on t1_041, top-10 by `min_rate` (all flip-symmetric):
 
-| Var | min_rate | F + T total |
-|---|---|---|
-| v450 | 0.0858 | **4.50 s** |
-| v242 | 0.1124 | 4.53 s |
-| v405 | 0.0635 | 4.84 s |
-| v456 | 0.0691 | 5.57 s |
-| v526 | 0.0446 | 5.60 s |
-| v263 | 0.0552 | 6.61 s |
-| v631 | 0.1123 | 6.91 s |
-| v407 | 0.1506 | 8.78 s |
-| v459 | 0.0619 | ~64 s (F is timeout) |
-| v5 | 0.0419 | ~64 s (F is timeout) |
+| Var | min_rate | F polarity | T polarity |
+|---|---|---|---|
+| v450 | 0.0858 | SOLVE 2.25 s | SOLVE 2.25 s |
+| v242 | 0.1124 | SOLVE 2.17 s | SOLVE 2.36 s |
+| v405 | 0.0635 | SOLVE 2.41 s | SOLVE 2.43 s |
+| v456 | 0.0691 | SOLVE 2.74 s | SOLVE 2.83 s |
+| v526 | 0.0446 | SOLVE 2.81 s | SOLVE 2.79 s |
+| v263 | 0.0552 | SOLVE 1.08 s | SOLVE 5.53 s |
+| v631 | 0.1123 | SOLVE 3.91 s | SOLVE 3.00 s |
+| v407 | 0.1506 | SOLVE 5.79 s | SOLVE 2.99 s |
+| v459 | 0.0619 | **TIMEOUT** (60 s) | SOLVE 4.10 s |
+| v5 | 0.0419 | **TIMEOUT** (60 s) | SOLVE 3.56 s |
 
-Six of ten land in 4.5-5.6 s — within 1.2× of the optimum. The bottom of the top-10 (v5, v459 at `min_rate < 0.05`) misses on one polarity. Negative validation: every measured var with `min_rate < 0.05` had at least one polarity ≥ 60 s. The metric is well-calibrated in both directions.
+Eight of ten solve both polarities (`F+T ≤ ~9 s`). Two (v5, v459) have `min_rate < 0.07` and TIMEOUT on one polarity — even at "top 10" min-rate they still fail on a polarity. Negative validation: every var probed with `min_rate < 0.02` had at least one polarity timing out at 60 s. The metric is well-calibrated.
+
+**Counts verified** against ganak on the original t1_041 (ganak total: `...43259892051805732864`, 17 s). For each of the 5 fast anchors, append `±v 0` as a unit to the original CNF, run our solver: F-count + T-count == ganak total (MATCH). All 5 anchors also produce **the same count tail** (...025902866432) for both polarities — they're in the same orbit, interchangeable as anchors.
 
 #### Earlier single-polarity probe was misleading
 

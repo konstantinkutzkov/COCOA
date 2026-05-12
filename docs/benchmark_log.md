@@ -801,23 +801,23 @@ Previous probe ranking (`/tmp/probe_picker.py`) ranked variables by `(L2 cache h
 
 **Min-aggregation** (`score(v) = min(rate_F, rate_T)`) corrects this. A variable is only as good as its worse polarity.
 
-| Var | Old single-pol rank | Old single-pol time | New min-rank (of 120) | F time | T time | Total |
-|---|---|---|---|---|---|---|
-| **v450** | not probed | — | **1** | 2.25 s | 2.25 s | **4.50 s** |
-| **v242** | 10 | 2.2 s | 2 | 2.17 s | 2.36 s | 4.53 s |
-| v405 | not probed | — | 6 (effective) | 2.41 s | 2.43 s | 4.84 s |
-| v456 | not probed | — | 5 | 2.74 s | 2.83 s | 5.57 s |
-| v526 | not probed | — | 9 | 2.81 s | 2.79 s | 5.60 s |
-| v263 | not probed | — | 8 | 1.08 s | 5.53 s | 6.61 s |
-| v631 | not probed | — | 3 | 3.91 s | 3.00 s | 6.91 s |
-| v407 | not probed | — | 1 | 5.79 s | 2.99 s | 8.78 s |
-| v5 | not probed | — | 10 | 60.51 s | 3.56 s | ~64 s |
-| v459 | not probed | — | 7 | 60.75 s | 4.10 s | ~64 s |
-| v70 (false positive) | 2 | TIMEOUT | 31 | 60.86 s | 45.13 s | ~106 s |
-| v176 (false positive) | 3 | 4.0 s | 76 | 60.20 s | 4.06 s | ~64 s |
-| v24 | 4 | 4.2 s | 47 | 4.2 s | (T not measured this run) | — |
-| v33 (false positive) | 7 | 4.6 s | 111 | 60.21 s | 4.57 s | ~65 s |
-| v1 (false positive) | 9 | 7.3 s | 85 | 60.74 s | 7.24 s | ~68 s |
+| Var | Old single-pol rank | Old single-pol time | New min-rank (of 120) | F | T |
+|---|---|---|---|---|---|
+| **v450** | not probed | — | **4** | SOLVE 2.25 s | SOLVE 2.25 s |
+| **v242** | 10 | 2.2 s | 2 | SOLVE 2.17 s | SOLVE 2.36 s |
+| v405 | not probed | — | 6 | SOLVE 2.41 s | SOLVE 2.43 s |
+| v456 | not probed | — | 5 | SOLVE 2.74 s | SOLVE 2.83 s |
+| v526 | not probed | — | 9 | SOLVE 2.81 s | SOLVE 2.79 s |
+| v263 | not probed | — | 8 | SOLVE 1.08 s | SOLVE 5.53 s |
+| v631 | not probed | — | 3 | SOLVE 3.91 s | SOLVE 3.00 s |
+| v407 | not probed | — | 1 | SOLVE 5.79 s | SOLVE 2.99 s |
+| v5 | not probed | — | 10 | **TIMEOUT** (60.51 s) | SOLVE 3.56 s |
+| v459 | not probed | — | 7 | **TIMEOUT** (60.75 s) | SOLVE 4.10 s |
+| v70 (false positive) | 2 | TIMEOUT | 31 | **TIMEOUT** (60.86 s) | SOLVE 45.13 s |
+| v176 (false positive) | 3 | 4.0 s | 76 | **TIMEOUT** (60.20 s) | SOLVE 4.06 s |
+| v24 | 4 | 4.2 s | 47 | SOLVE 4.2 s | (T not measured this run) |
+| v33 (false positive) | 7 | 4.6 s | 111 | **TIMEOUT** (60.21 s) | SOLVE 4.57 s |
+| v1 (false positive) | 9 | 7.3 s | 85 | **TIMEOUT** (60.74 s) | SOLVE 7.24 s |
 
 ### Probe sweep: 120 vars (60 top-degree + 60 lowest-degree-flip-symmetric)
 
@@ -837,6 +837,56 @@ Both polarities probed, `-t 1` budget each, ~474 s wall total. Top 10 by `min(ra
 | 10 | v5 | YES | 32 | 0.0419 | 0.0868 |
 
 **All top-10 are flip-symmetric** (literal-graph WL: `+v` and `-v` end up in the same WL color class). That's not sufficient (1187 of 1920 vars are flip-symmetric) but it **is** necessary — every non-flip-symmetric var measured had asymmetric F vs T times (v153 F=18.7s T=60.9s).
+
+### TIMEOUT vs SOLVE clarification
+
+The full-solve runs below used `-t 60` (60 s budget). When the budget is hit, the solver still emits a `time: 60.XXs` line — initial labeling parsed this as a SOLVE. Correct interpretation: any run with `time ≥ 60 s` AND a `TIMEOUT !` marker is a TIMEOUT, NOT a solve. Re-classified results:
+
+**Top-10 (corrected)**
+
+| Var | F status | T status |
+|---|---|---|
+| v407 | SOLVE 5.79 s | SOLVE 2.99 s |
+| **v242** | SOLVE 2.17 s | SOLVE 2.36 s |
+| v631 | SOLVE 3.91 s | SOLVE 3.00 s |
+| **v450** | SOLVE 2.25 s | SOLVE 2.25 s |
+| v456 | SOLVE 2.74 s | SOLVE 2.83 s |
+| v405 | SOLVE 2.41 s | SOLVE 2.43 s |
+| **v459** | **TIMEOUT** (60.75 s) | SOLVE 4.10 s |
+| v263 | SOLVE 1.08 s | SOLVE 5.53 s |
+| v526 | SOLVE 2.81 s | SOLVE 2.79 s |
+| **v5** | **TIMEOUT** (60.51 s) | SOLVE 3.56 s |
+
+So **8 of 10** top-min-rate candidates solve both polarities; 2 (v459, v5) have one TIMEOUT polarity.
+
+**Negative validation (corrected)** — every var with `min_rate < 0.02` had a TIMEOUT on at least one polarity:
+
+| Var | F | T |
+|---|---|---|
+| v33  | TIMEOUT (60.21 s) | SOLVE 4.57 s  |
+| v176 | TIMEOUT (60.20 s) | SOLVE 4.06 s  |
+| v1   | TIMEOUT (60.74 s) | SOLVE 7.24 s  |
+| v153 | SOLVE 18.68 s | TIMEOUT (60.86 s) |
+| v70  | TIMEOUT (60.86 s) | SOLVE 45.13 s |
+
+### Count verification (cleaner methodology)
+
+Original methodology (renumbered probe-CNFs) gave per-polarity counts that don't sum to ganak's t1_041 total because renumbering drops isolated vars from the active set. Re-ran using the **original t1_041 + a single appended unit clause `±v 0`** — preserves variable numbers, no resolution, no renumbering.
+
+Ganak total on `mc2025_track1_041.cnf`: `...43259892051805732864` (16.9 s).
+
+| Var | F time | T time | F-count tail | T-count tail | F + T == ganak total? |
+|---|---|---|---|---|---|
+| v242 | 2.23 s | 2.40 s | ...025902866432 | ...025902866432 | **MATCH** |
+| v450 | 2.30 s | 2.26 s | ...025902866432 | ...025902866432 | **MATCH** |
+| v405 | 2.49 s | 2.43 s | ...025902866432 | ...025902866432 | **MATCH** |
+| v456 | 2.80 s | 2.95 s | ...025902866432 | ...025902866432 | **MATCH** |
+| v526 | 2.93 s | 2.86 s | ...025902866432 | ...025902866432 | **MATCH** |
+
+All 5 anchors:
+- Both polarities give identical counts (flip-symmetry confirmed at the count level).
+- F + T equals ganak's total → counts are correct.
+- All 5 give the **same count tail** (...025902866432) → they're equivalent under the formula's symmetry group; same orbit / interchangeable as anchors.
 
 ### Negative validation: bottom of min-rate
 
