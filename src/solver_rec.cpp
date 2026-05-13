@@ -1985,49 +1985,20 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 	// progress (see pickBranchVariableAdaptive). Otherwise fall back to the
 	// legacy activity-score picker.
 	VariableIndex v = 0;
-	bool forced_polarity_pos = false;
-	bool used_forced = false;
 
-	// Scripted decision override. Use the next forced literal IFF the
-	// literal's variable is active AND is a member of the current comp.
-	if (!config_.forced_decisions.empty()) {
-		static size_t forced_idx = 0;
-		while (forced_idx < config_.forced_decisions.size()) {
-			int fl = config_.forced_decisions[forced_idx];
-			VariableIndex fv = (VariableIndex)std::abs(fl);
-			if (!isActive(LiteralID(fv, true))) { forced_idx++; continue; }
-			bool in_comp = false;
-			for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++)
-				if (*it == fv) { in_comp = true; break; }
-			if (!in_comp) break;  // forced var not in this comp — fall through
-			v = fv;
-			forced_polarity_pos = (fl > 0);
-			used_forced = true;
-			forced_idx++;
-			break;
-		}
-	}
-
-	if (!used_forced) {
-		if (config_.perform_adaptive_branching) {
-			bool comp_unsat = false;
-			v = pickBranchVariableAdaptive(comp, comp_unsat);
-			if (comp_unsat) return 0;
-		} else {
-			v = pickBranchVariable(comp);
-		}
+	if (config_.perform_adaptive_branching) {
+		bool comp_unsat = false;
+		v = pickBranchVariableAdaptive(comp, comp_unsat);
+		if (comp_unsat) return 0;
+	} else {
+		v = pickBranchVariable(comp);
 	}
 	if (v == 0) {
 		return 1;
 	}
 	LiteralID lit_t(v, true), lit_f(v, false);
-	bool t_first;
-	if (used_forced) {
-		t_first = forced_polarity_pos;
-	} else {
-		t_first = literal(lit_t).activity_score_ >
-		          literal(lit_f).activity_score_;
-	}
+	bool t_first = literal(lit_t).activity_score_ >
+	               literal(lit_f).activity_score_;
 	// Non-separator variable branching: learning IS allowed here.
 	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth, -1,
 	                              /*from_separator=*/false,

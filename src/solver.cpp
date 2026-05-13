@@ -457,6 +457,20 @@ void Solver::solve(const string &file_name) {
 	createfromFile(file_name);
 	initStack(num_variables());
 
+	// Root-level forced literals: enqueue as input units so
+	// simplePreProcess's existing BCP loop propagates them identically to
+	// the original CNF's unit clauses. setLiteralIfFree + BCP is the same
+	// primitive branching uses; we're just triggering it at root, before
+	// any separator-consumption or var-branching code runs. Replaces the
+	// old in-search forced-decision behavior, which on -sep / -cb
+	// instances fired well after separator consumption and did not match
+	// the documented "first decision" anchor methodology.
+	for (int fl : config_.forced_decisions) {
+		if (fl == 0) continue;
+		unit_clauses_.push_back(
+		    LiteralID((VariableIndex)std::abs(fl), fl > 0));
+	}
+
 	if (!config_.quiet) {
 		cout << "Solving " << file_name << endl;
 		statistics_.printShortFormulaInfo();
