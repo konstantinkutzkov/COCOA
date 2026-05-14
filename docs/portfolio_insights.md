@@ -90,6 +90,35 @@ the decomposition. Needs more data.
   Historically handled well by sharpSAT-td via caching alone;
   may not need any branching sophistication.
 
+### 1e. Density-1 structured
+
+**Examples**: t1_021 family, t1_023, t1_025, t1_027, t1_041.
+
+**Signature**:
+- `density ∈ [0.95, 1.10]` (n_clauses ≈ n_vars).
+- `binary_fraction ≤ 0.1` (mostly clauses of length 3+; often pure 3-SAT).
+- Equivalently: each variable appears in roughly `mean_clause_length`
+  clauses on average — the incidence matrix is "near-square."
+
+**What characterises this class for our solver**:
+- The precomputed ND hierarchy's separators are frequently rejected
+  by the Phase-2 acceptance gate on sub-components.
+- BCP cascades are short, so each branching decision propagates little.
+- Without reactive METIS the search drops to plain variable branching
+  outside the ND hierarchy and TIMEOUTs (t1_041, t1_021_k4).
+- With **`-reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4`** the
+  hierarchy stays applicable via runtime-computed separators; t1_041
+  goes from TIMEOUT > 60 s to SOLVE in 88 s (verified 2026-05-14, see
+  §4 entry of that date).
+
+**Naming note (2026-05-14)**: earlier dated entries call this class
+"ganak-class" because ganak handles it well while our solver historically
+did not. That's a misnomer — it conflates the structural property of the
+formula with which solver happens to handle it. The class's defining
+property is structural (density ≈ 1.0 + low binary fraction); we now use
+the name "density-1 structured." Older dated entries below retain their
+original wording.
+
 ---
 
 ## 2. Per-flag empirical notes
@@ -219,16 +248,37 @@ hardcoded 2.0 was tuned on t1_071 and presumably is right there.
 **What**: when the precomputed hierarchy's separator is rejected,
 runs METIS afresh on the current sub-component.
 
-**When it helps**: hypothetically, on mixed-density instances where
-the precomputed hierarchy is wrong but the sub-component is still
-partitionable. **Not yet measured to help on any real instance.**
+**When it helps**: **measured to rescue density-1 structured instances
+(§1e) where pinning a non-ideal anchor variable collapses the precomputed
+hierarchy** (see §4 2026-05-14 entry). On t1_041 with v70 pinned,
+without reactive METIS the search drops out of the ND hierarchy 70%
+of the time and TIMEOUTs at 60 s; with `-reactiveMetis
+-reactiveMetisMin 10 -reactiveMetisSkip 4`, SOLVE in 88 s with 0.87%
+overhead.
 
-**When it hurts**: sparse/well-structured instances. Measured −7% on
-t1_071.
+The mechanism: when the Phase-2 separator-acceptance gate rejects
+the precomputed cut for a sub-component, the solver falls through to
+plain variable branching outside the ND hierarchy. On density-1
+structured instances this fallback is catastrophic. Reactive METIS
+computes a runtime separator instead, keeping the search inside
+structural decomposition territory.
+
+**When it hurts**: sparse/well-structured instances where the
+precomputed hierarchy is already good. Measured −7% on t1_071 with
+the OLD per-fallback invocation. Whether the aggressive throttle
+(min=10, skip=4) regresses these instances is not yet measured —
+quick validation pending.
 
 **Detection**: correlates with "hierarchy separator often rejected."
 Could instrument this: if Phase-2 gate rejects > X% of separator
-queries, reactive is plausibly useful.
+queries during a stochastic walks probe (§3.4 of `portfolio_plan.md`),
+reactive METIS is likely a net win.
+
+**Pre-2026-05-14 history**: the "naive per-fallback invocation
+regressed 22-93× on shrunken t1_049" finding (memory note
+`project_reactive_metis_open.md`) was under a different regime,
+without the Scheme F σ-quality gate and without skip-after-failure
+throttle. Both gates are present now; cost is bounded.
 
 ### `-learnLevel N`
 
@@ -802,6 +852,92 @@ Doesn't change current routing. Ganak-class is still ganak-first. The picker ins
 - **What's the cheap structural test that ranks anchors without a probe**? Flip-symmetry is necessary but too coarse (1187 candidates on t1_041). Need a sharper feature — perhaps WL class size, or a structural property of the v's neighborhood beyond iter-2 WL.
 - **Min-rate non-monotonicity**: v5 and v459 rank in the top-10 by `min_rate` but have ~60 s on one polarity. A second feature `max_rate / min_rate` (lopsidedness ratio) might filter these out cheaply.
 
+### 2026-05-14 — Anchor problem ≈ parameter problem: reactive METIS rescues t1_041 v70
+
+Diagnostic on t1_041 comparing v242=F (fast anchor, 2.17 s SOLVE) vs
+v70=F (false-positive anchor, 60 s TIMEOUT) via per-`branchOnLiteral`
+tracing. Decision-trajectory analysis showed:
+
+- Both pins are root-separator variables (`in_root_sep=1` at decision 1).
+- After Stage-2 root-separator consumption, v242 descends into ND
+  hierarchy node 1 and stays inside the hierarchy for 70% of decisions;
+  v70 descends into ND hierarchy node 2 and 70% of decisions land
+  outside any ND node (`nd_node=-1`).
+- v70's search visits only 32 root-sep vars in 86k decisions (0.04%)
+  vs v242's 3,538 (~10%). The search has collapsed out of the
+  precomputed hierarchy.
+- The proximate mechanism: the Phase-2 separator-acceptance gate
+  (`separator_max_ratio = 0.20`, `separator_min_balance = 0.30`)
+  rejects precomputed cuts for v70's sub-components, and the
+  fallback (plain variable branching outside ND) is catastrophically
+  worse on density-1 structured instances (§1e).
+
+**Testing the rescue**: re-run v70=F with **`-reactiveMetis
+-reactiveMetisMin 10 -reactiveMetisSkip 4`** (aggressive throttle vs
+the defaults of min=15, skip_k=5):
+
+| Configuration | Wall | Decisions | L2 hits | L2 hits [400+) | avg_bcp/dec | Conflicts | React calls (acc%) |
+|---|---|---|---|---|---|---|---|
+| v242=F (no react) | **2.24 s SOLVE** | 35,974 | 11,688 | 2,230 | 2.55 | 37 | — |
+| v70=F (no react) | TIMEOUT > 60 s | 147k+ | ~21k | not separable | n/a | 1 | — |
+| v70=F + react default | TIMEOUT @ 10 s | 111,792 | 41,547 | 19,947 | 0.89 | 13 | 5,017 (65%) |
+| v70=F + react aggressive | **88.21 s SOLVE** | 1,288,466 | 420,287 | **327,129** | 0.68 | 16 | 16,747 (59%) |
+
+Count verified: v70=F + aggressive reactive METIS produces
+`...025902866432`, matching ganak's verified total for t1_041 and v242's
+verified count.
+
+**Mechanism confirmed**: with reactive METIS firing, v70's search stays
+inside structural decomposition; L2 hit rate climbs to 44% (vs v242's
+36%, vs v70-no-react's 19%); cache amplification dominates the
+`[400+)` bucket (327k hits).
+
+**Residual gap** (v70 + react 88 s vs v242 2 s): v70's BCP cascade per
+decision is ~0.68 vs v242's 2.55. Each of v70's decisions propagates
+~4× less. Reactive METIS can't fix this — it's a property of which
+sub-region of the formula the pin lands in, independent of how well
+that sub-region decomposes.
+
+**Reactive METIS overhead** is **0.87% of total solve time** at the
+aggressive throttle on this instance. The historical regression
+measurements (22-93× on shrunken t1_049) were under a different regime
+without Scheme F σ-quality gating and without the skip-after-failure
+throttle; with both gates, reactive METIS is cheap.
+
+**Implications for the portfolio**:
+
+1. The "anchor selection" problem on density-1 structured instances reduces
+   largely to a *parameter selection* problem (whether to enable
+   reactive METIS and with what throttle). Once reactive METIS is
+   enabled with aggressive throttle, bad-anchor instances become
+   tractable.
+2. `portfolio_insights.md` §2 previously classified reactive METIS as
+   "not yet measured to help on any real instance." That claim is now
+   empirically false — t1_041 + bad anchor + aggressive throttle is the
+   first measured net win for reactive METIS.
+3. The routing-precedence "route to ganak directly" recommendation
+   (2026-05-11) is superseded by "use reactive METIS aggressive."
+   See §8 update.
+
+**Open questions**:
+
+- Does this generalize to other density-1 structured instances (t1_021_k4,
+  t1_023, t1_025, t1_027)?
+- Does aggressive reactive METIS regress measurable non-ganak
+  instances? Quick validation needed on t1_065, t1_071, t1_011, t1_049
+  before committing aggressive throttle as a routing-rule choice.
+- The 88 s vs 2 s residual gap suggests there's a second-stage
+  property to predict (BCP-cascade-density under random partial
+  assignments). Possibly the right additional signal for the
+  stochastic walks probe — not for anchor selection but for refining
+  configuration choice.
+
+Diagnostic infrastructure: `-anchorTrace path` was added in this
+session (logs one CSV line per `branchOnLiteral` with depth, var,
+cascade, conflicts, l2 stats, from_sep, nd_node, in_root_sep, degree,
+comp_size). Diagnostic only; behind `-anchorTrace` flag. Useful for
+future trajectory comparisons.
+
 ---
 
 ## 5. Open design questions
@@ -992,24 +1128,41 @@ guidance for instance routing):**
   instances it loses to plain. Treat as research scaffolding, not a
   portfolio choice. See Q11 for the falsification programme.
 
-**Portfolio routing precedence (2026-05-11; layered with the above):**
+**Portfolio routing precedence (2026-05-14; supersedes 2026-05-11):**
 
-The picker recommendations above only apply *after* the analyzer has decided
-to run our solver. Before that decision, check the ganak-class detector first.
-The full routing precedence (highest priority first):
+The 2026-05-11 precedence routed "ganak-class" instances directly to ganak.
+The 2026-05-14 reactive-METIS rescue (see §4 entry of that date) makes that
+unnecessary: aggressive reactive METIS rescues the bad-anchor cases on what we
+now call **density-1 structured** instances (see §1e for the renamed class
+and rationale). Routing to ganak is now intentionally avoided as a production
+target.
 
-1. **Ganak-class detected** (`density ∈ [0.95, 1.10]` AND `binary_fraction ≤ 0.1`):
-   - If `n_vars ≥ 200`: **route to ganak directly**. Our solver consistently
-     fails to finish (t1_041, t1_021_k4, t1_021 full).
-   - If `n_vars < 200`: run our solver with **`-sepVarBias`** but reserve a
-     small budget (~30 s) to fall through to ganak. Our solver finishes but
-     1.5–4× slower (t1_021/t1_025/t1_027 family).
+Updated precedence (highest priority first):
+
+1. **Density-1 structured detected** (`density ∈ [0.95, 1.10]` AND `binary_fraction ≤ 0.1`):
+   - Configuration: **`-rec -sep 5 -cb 3 -sepMode metis -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4`**.
+   - If `n_vars < 200`, additionally add **`-sepVarBias`** (the small-formula
+     rule still applies for the picker beyond reactive METIS's structural rescue).
+   - Validated on t1_041 (was TIMEOUT > 60 s in all prior configs;
+     SOLVE in 88 s with this routing, count verified). Awaiting validation
+     on the small members of the family (t1_021_k4, t1_023, t1_025, t1_027).
 2. **Otherwise apply the 2-feature picker rule**:
-   - `density > 1.5 ∨ n_vars > 200` → plain.
-   - else (small AND low-density but not ganak-class) → legacy `-sepVarBias`.
+   - `density > 1.5 ∨ n_vars > 200` → plain `-sep 5 -cb 3`.
+   - else (small AND low-density AND not density-1 structured) → `-sep 5 -cb 3 -sepVarBias`.
+3. **Last resort, when no rule fits confidently** (e.g. XOR encodings,
+   circuit encodings, density in a boundary regime we haven't characterised):
+   **`-unifiedPicker`** in default additive mode. Loses to plain on
+   every measured instance with a matching rule, but provides a generic
+   path when nothing else does. NOT a fallback to ganak — see §6 / `portfolio_plan.md` §5(E).
 
-Detection is cheap: density and binary fraction are O(m) features available
-from a single pass over the formula post-preprocessing.
+Detection is cheap: density, binary_fraction, mean_active_clause_length,
+n_active_vars are all O(m) features available from a single pass over the
+formula post-preprocessing.
+
+The full routing tree (with `-adaptive` / `-adaptiveAlpha` overlays
+for dense 3-SAT, etc.) lives in `portfolio_plan.md` §5. This section
+records only the precedence framework and the empirical evidence
+behind it.
 
 ---
 
