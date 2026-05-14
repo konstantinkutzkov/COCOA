@@ -14,6 +14,7 @@
 #include "component_management.h"
 #include "nd_hierarchy.h"
 #include "canonical_key.h"
+#include "anchor_probe.h"
 
 
 
@@ -101,6 +102,32 @@ public:
 	}
 
 	void solve(const string & file_name);
+
+	// Anchor-probe dispatcher. Called from Solver::solve when
+	// config_.probe_anchor_mode is true, AFTER preprocessing + ND
+	// hierarchy build + static-WL labels are ready. Loops over
+	// candidates in config_.probe_anchor_vars at both polarities,
+	// collects per-(var, polarity) probe results, aggregates into per-var
+	// summaries, and writes the JSON output. Returns false on any
+	// internal error (caller should propagate as exit code 1).
+	//
+	// State management: each per-candidate probe rolls back the trail
+	// to the pre-probe state. Across candidates, no cache, learning, or
+	// activity state should leak (the probe runs with learning disabled
+	// and bypasses the L1/L2 component cache entirely; see
+	// docs/anchor_probe_design.md §7).
+	bool runAnchorProbeMode();
+
+	// Per-candidate probe. Pins (compact_var, polarity), runs BCP,
+	// optionally enumerates the residual sub-components to bounded
+	// depth K with path budget B, collects canonical keys into an
+	// ephemeral multiset, computes the amplification score, restores
+	// the trail to pre-probe state. NOTE this slice ships the pin +
+	// BCP + restore; the depth-K enumeration body is the immediate
+	// follow-up (see docs/anchor_probe_design.md §3).
+	anchor_probe::PerPolarityResult probeOneAnchor(
+	    unsigned compact_var, bool polarity,
+	    int max_depth, int max_paths);
 
 	// Queue equivalences (in input-CNF variable space, 1-indexed) to be
 	// injected into the redundant-binary lane after simplePreProcess

@@ -1,6 +1,7 @@
 add_subdirectory (component_types)
 
 SET(SOURCES alt_component_analyzer.cpp
+	anchor_probe.cpp
 	canonical_key.cpp
 	component_management.cpp
 	instance.cpp

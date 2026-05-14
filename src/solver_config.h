@@ -9,6 +9,7 @@
 #define SOLVER_CONFIG_H_
 
 #include <string>
+#include <vector>
 
 struct SolverConfiguration {
 
@@ -380,6 +381,27 @@ struct SolverConfiguration {
   //                    canonicalization fault when a miscount is seen.
   //                    Intended to be removed once compact is proven.
   bool canonical_compact = true;
+
+  // Anchor probe mode. When `probe_anchor_mode` is true, the solver
+  // runs preprocessing + ND-build + static-WL-labels as normal, then
+  // dispatches into the depth-bounded anchor probe (per
+  // docs/anchor_probe_design.md) and exits without running the main
+  // count. Probe candidates are listed in `probe_anchor_vars` as
+  // ORIGINAL (pre-preprocess) DIMACS variable IDs; each is probed at
+  // both polarities. Output is a JSON document written to
+  // `probe_anchor_out` (default stdout).
+  //
+  // Score formula: sum_k mult(k) * |comp(k)|^beta where mult(k) is
+  // the multiplicity of canonical key k in the per-candidate ephemeral
+  // multiset and |comp(k)| is the active-var count of the
+  // corresponding sub-component. Higher beta emphasises large-component
+  // reuse.
+  bool     probe_anchor_mode   = false;
+  int      probe_anchor_depth  = 8;
+  int      probe_anchor_budget = 256;
+  double   probe_anchor_beta   = 1.0;
+  std::vector<int> probe_anchor_vars;
+  std::string probe_anchor_out;   // empty = stdout
 
   // Local-search probe-based preprocessing (opt-in).
   // When enabled, runs after the existing preprocessor (subsumption /

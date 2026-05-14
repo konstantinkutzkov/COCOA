@@ -5,6 +5,7 @@
  *      Author: marc
  */
 #include "solver.h"
+#include "anchor_probe.h"
 #include "preprocessor.h"
 #include "probe_preprocessor.h"
 #include "canonical_key.h"
@@ -678,6 +679,18 @@ void Solver::solve(const string &file_name) {
 		if (config_.verify_cache)
 			cout << "c verify_cache mode ON (compare cached vs. recomputed on every hit; aborts on mismatch)" << endl;
 
+		// Anchor-probe dispatch. When -probeAnchorMode is set, we
+		// run the depth-bounded anchor probe AFTER preprocessing + ND
+		// build + static-WL labels + comp_manager initialise (i.e. the
+		// solver state is exactly what countSATRec would see) and exit.
+		// The main count is skipped.
+		if (config_.probe_anchor_mode) {
+			runAnchorProbeMode();
+			statistics_.exit_state_ = SUCCESS;
+			statistics_.set_final_solution_count(0.0);
+			return;
+		}
+
 		statistics_.exit_state_ = countSATRec();
 		// countSATRec sets final_solution_count internally
 		statistics_.num_long_conflict_clauses_ = num_conflict_clauses();
@@ -882,6 +895,126 @@ void Solver::solve(const string &file_name) {
 	}
 }
 
+
+// =====================================================================
+// Anchor-probe driver. See docs/anchor_probe_design.md.
+//
+// Slice 1 (this commit): wiring + pin + BCP + rollback. The depth-K
+// enumeration body is the immediate follow-up.
+// =====================================================================
+
+bool Solver::runAnchorProbeMode() {
+	// Build the original-DIMACS-var → post-preprocess-compact-var map.
+	// compact_to_orig_[c] = orig holds the inverse; we invert it here
+	// once. If compact_to_orig_ is empty, no compactification happened
+	// and the identity mapping is correct.
+	std::unordered_map<int, unsigned> orig_to_compact;
+	if (compact_to_orig_.empty()) {
+		for (unsigned v = 1; v <= num_variables(); v++)
+			orig_to_compact[(int)v] = v;
+	} else {
+		for (unsigned c = 1; c < compact_to_orig_.size(); c++)
+			orig_to_compact[(int)compact_to_orig_[c]] = c;
+	}
+
+	std::vector<anchor_probe::PerPolarityResult> per_pol;
+	std::vector<anchor_probe::PerVarSummary> per_var;
+
+	for (int orig_var : config_.probe_anchor_vars) {
+		anchor_probe::PerPolarityResult rF, rT;
+		auto it = orig_to_compact.find(orig_var);
+		if (it == orig_to_compact.end()) {
+			// Variable was eliminated by preprocessing — record both
+			// polarities as BCP_CLOSED.
+			rF.var = rT.var = orig_var;
+			rF.polarity = false;
+			rT.polarity = true;
+			rF.status = rT.status = anchor_probe::ProbeStatus::BCP_CLOSED;
+		} else {
+			unsigned compact_v = it->second;
+			rF = probeOneAnchor(compact_v, false,
+			                    config_.probe_anchor_depth,
+			                    config_.probe_anchor_budget);
+			rT = probeOneAnchor(compact_v, true,
+			                    config_.probe_anchor_depth,
+			                    config_.probe_anchor_budget);
+			// Re-stamp the original DIMACS var ID for the JSON output
+			// (probeOneAnchor only sees the compact ID).
+			rF.var = rT.var = orig_var;
+		}
+		per_pol.push_back(rF);
+		per_pol.push_back(rT);
+
+		anchor_probe::PerVarSummary s;
+		s.var = orig_var;
+		s.score_min = std::min(rF.amplification_score,
+		                       rT.amplification_score);
+		s.score_max = std::max(rF.amplification_score,
+		                       rT.amplification_score);
+		// Lopsided = max ≥ 4× min, when min > 0. Threshold is provisional;
+		// see docs/portfolio_insights.md §4 2026-05-12 for the original
+		// notion (max_rate / min_rate as a discriminator for v5/v459-style
+		// outliers).
+		s.lopsided = (s.score_min > 0.0) && (s.score_max >= 4.0 * s.score_min);
+		per_var.push_back(s);
+	}
+
+	if (config_.probe_anchor_out.empty()) {
+		anchor_probe::writeJson(per_pol, per_var, std::cout);
+	} else {
+		std::ofstream ofs(config_.probe_anchor_out);
+		if (!ofs) {
+			std::cerr << "anchor_probe: cannot open output file: "
+			          << config_.probe_anchor_out << "\n";
+			return false;
+		}
+		anchor_probe::writeJson(per_pol, per_var, ofs);
+	}
+	return true;
+}
+
+anchor_probe::PerPolarityResult Solver::probeOneAnchor(
+    unsigned compact_var, bool polarity,
+    int /*max_depth*/, int /*max_paths*/) {
+	auto t0 = std::chrono::steady_clock::now();
+
+	anchor_probe::PerPolarityResult r;
+	r.var = (compact_to_orig_.empty() || compact_var >= compact_to_orig_.size())
+	          ? (int)compact_var : (int)compact_to_orig_[compact_var];
+	r.polarity = polarity;
+
+	const unsigned sz = literal_stack_.size();
+
+	LiteralID lit(compact_var, polarity);
+	if (!isActive(lit)) {
+		// Variable already assigned (e.g. by root preprocessing).
+		// Treat as BCP_CLOSED for now — there is no probe work to do.
+		r.status = anchor_probe::ProbeStatus::BCP_CLOSED;
+	} else {
+		setLiteralIfFree(lit);
+		bool bcp_ok = BCP(sz);
+
+		if (!bcp_ok) {
+			r.status = anchor_probe::ProbeStatus::UNSAT_AT_PIN;
+		} else {
+			// TODO(slice 2): depth-bounded enumeration. For now record
+			// status only — keys / scores are zero. The wall_time still
+			// reflects the cost of pin+BCP+rollback so we can baseline
+			// per-probe overhead.
+			r.status = anchor_probe::ProbeStatus::OK;
+		}
+
+		// Restore trail to pre-probe state.
+		while (literal_stack_.size() > sz) {
+			unSet(literal_stack_.back());
+			literal_stack_.pop_back();
+		}
+	}
+
+	auto t1 = std::chrono::steady_clock::now();
+	r.wall_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return r;
+}
 
 bool Solver::bcp() {
 // the asserted literal has been set, so we start

@@ -1,21 +1,54 @@
 # Stochastic-Skip Probe — Implementation Plan
 
 **Status:** design only, no code.
-**Date:** 2026-05-13
+**Date:** 2026-05-13, scope refined 2026-05-14.
 **Author of this turn:** the agent picking up `probing_portfolio_handoff.md`;
 plan refined in dialogue with the user.
 
 Companion to:
 - `docs/probing_portfolio_handoff.md` — the conceptual handoff for the
   portfolio probing programme.
+- `docs/anchor_probe_design.md` — the **separate** depth-bounded
+  anchor probe targeting Mechanism 3. See §0 below for how the two
+  probes divide work.
 - `docs/portfolio_driver_plan.md` — the architectural sketch for the
   driver that will eventually consume probe signals.
 - `docs/portfolio_insights.md` — empirical knowledge base (§4 dated
   measurements, §8 current routing rules).
 - `scripts/probe_anchor.py` — slice 1 of the probing programme
-  (variable-pinning anchor probe), shipped 2026-05-13.
+  (variable-pinning anchor probe via subprocess + min-rate metric),
+  shipped 2026-05-13.
 - `/tmp/probe_runtime.py` — pure-Python prototype of the mechanism
   this plan implements in the solver.
+
+---
+
+## 0. Scope refinement (2026-05-14)
+
+Originally this plan treated "stochastic-skip" as a single probe that
+characterised all four solver mechanisms in one mode. Discussion on
+2026-05-14 separated the work into **two independent probes**:
+
+| Probe | Mechanisms | Branching shape | What it measures | Doc |
+|---|---|---|---|---|
+| **Stochastic walks** *(this doc)* | 1 (separator) + 2 (BCP) | None or rare — random walks to leaf, restart on conflict | Walk-time dynamics: decisions/sec, BCP per decision, leaf depths, separator-consumption pattern | this doc |
+| **Depth-bounded enumeration** | 3 (cache amplification) | Both polarities at every level, to depth K (e.g. 8) | Repeated canonical keys per anchor candidate, weighted by sub-component size | `anchor_probe_design.md` |
+
+The two probes share preprocessing + the ND hierarchy + the canonical-
+key infrastructure but otherwise have completely separate data paths.
+Cache semantics differ: the walks probe doesn't measure cache reuse at
+all (so cache-on / cache-off is a non-question), while the anchor probe
+maintains its own ephemeral key-multiset per candidate (so the L1/L2
+component cache is bypassed entirely, eliminating both order-dependence
+and the persistent-vs-fresh argument).
+
+**Priority order:** the anchor probe lands first (most concrete
+near-term win — it solves the t1_041 ganak-class quadrant directly,
+and its validation set is ready in `benchmark_log.md` 2026-05-12). The
+stochastic-walks probe lands second.
+
+The remainder of this document describes the **stochastic-walks** probe
+only. The anchor probe is fully specified in `anchor_probe_design.md`.
 
 ---
 
