@@ -30,8 +30,40 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <unordered_map>
+
+#include "canonical_key.h"
 
 namespace anchor_probe {
+
+// Per-key entry in the ephemeral multiset.
+//   multiplicity: number of times this canonical key was visited.
+//   max_size:     largest active-var count seen for this key (under
+//                 canonicalisation, identical keys correspond to the
+//                 same canonical sub-formula, so size is a property of
+//                 the key — but during enumeration we record max
+//                 defensively in case of any drift).
+struct KeyEntry {
+  uint64_t multiplicity = 0;
+  unsigned max_size = 0;
+};
+
+using KeyMap = std::unordered_map<CanonicalKey, KeyEntry, CanonicalKeyHash>;
+
+// State threaded through the recursive enumerator.
+//   keymap:           the ephemeral multiset built up across all
+//                     sub-components visited during this candidate's
+//                     probe (per-candidate; never shared).
+//   budget_remaining: shared path budget across the whole candidate's
+//                     enumeration. Each branch decision consumes one.
+//   max_depth_used:   max recursion depth at which a key was added
+//                     (for the "depth_used" output field).
+
+struct EnumState {
+  KeyMap keymap;
+  int    budget_remaining = 0;
+  int    max_depth_used   = 0;
+};
 
 // Bucketing of repeated-key sub-component sizes mirrors the existing
 // L2_HIT_HIST buckets in solver.cpp end-of-run logging.

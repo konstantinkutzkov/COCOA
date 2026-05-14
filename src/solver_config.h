@@ -403,6 +403,15 @@ struct SolverConfiguration {
   std::vector<int> probe_anchor_vars;
   std::string probe_anchor_out;   // empty = stdout
 
+  // Anchor trace: when non-empty, every branchOnLiteral call appends a
+  // line to this CSV file with (call_id, depth, var, polarity, cascade,
+  // active_post, bcp_ok, conflicts, l2_stores, l2_hits). Diagnostic for
+  // comparing two solver trajectories side-by-side under different first
+  // decisions (e.g. v242 vs v70 on t1_041). Cost when empty: zero (single
+  // string-empty check at the trace site). Cost when on: ~1 fprintf per
+  // branch decision.
+  std::string anchor_trace_path;
+
   // Local-search probe-based preprocessing (opt-in).
   // When enabled, runs after the existing preprocessor (subsumption /
   // pure-dup / SSR) and applies the diff-and-lift schema described in

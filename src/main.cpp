@@ -472,6 +472,10 @@ int main(int argc, char *argv[]) {
       if (argc <= i + 1) { cout << "-probeAnchorOut needs a path\n"; return -1; }
       theSolver.config().probe_anchor_out = argv[i + 1];
       i++;
+    } else if (strcmp(argv[i], "-anchorTrace") == 0) {
+      if (argc <= i + 1) { cout << "-anchorTrace needs a path\n"; return -1; }
+      theSolver.config().anchor_trace_path = argv[i + 1];
+      i++;
     } else
       input_file = argv[i];
   }

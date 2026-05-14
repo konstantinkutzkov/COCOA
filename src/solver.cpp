@@ -975,7 +975,7 @@ bool Solver::runAnchorProbeMode() {
 
 anchor_probe::PerPolarityResult Solver::probeOneAnchor(
     unsigned compact_var, bool polarity,
-    int /*max_depth*/, int /*max_paths*/) {
+    int max_depth, int max_paths) {
 	auto t0 = std::chrono::steady_clock::now();
 
 	anchor_probe::PerPolarityResult r;
@@ -988,7 +988,6 @@ anchor_probe::PerPolarityResult Solver::probeOneAnchor(
 	LiteralID lit(compact_var, polarity);
 	if (!isActive(lit)) {
 		// Variable already assigned (e.g. by root preprocessing).
-		// Treat as BCP_CLOSED for now — there is no probe work to do.
 		r.status = anchor_probe::ProbeStatus::BCP_CLOSED;
 	} else {
 		setLiteralIfFree(lit);
@@ -997,11 +996,54 @@ anchor_probe::PerPolarityResult Solver::probeOneAnchor(
 		if (!bcp_ok) {
 			r.status = anchor_probe::ProbeStatus::UNSAT_AT_PIN;
 		} else {
-			// TODO(slice 2): depth-bounded enumeration. For now record
-			// status only — keys / scores are zero. The wall_time still
-			// reflects the cost of pin+BCP+rollback so we can baseline
-			// per-probe overhead.
-			r.status = anchor_probe::ProbeStatus::OK;
+			// Decompose the root super-component under the current
+			// (post-pin, post-BCP) assignment, and enumerate each
+			// sub-component to bounded depth.
+			Component &root = comp_manager_.superComponentOf(stack_.top());
+
+			anchor_probe::EnumState st;
+			st.budget_remaining = max_paths;
+
+			mpz_class trivial_factor = 1;
+			std::vector<Component*> sub_comps =
+			    discoverComponentsOf(root, trivial_factor);
+
+			if (sub_comps.empty()) {
+				// BCP closed everything — no enumeration to do.
+				r.status = anchor_probe::ProbeStatus::BCP_CLOSED;
+			} else {
+				r.status = anchor_probe::ProbeStatus::OK;
+				for (Component *sub : sub_comps) {
+					if (st.budget_remaining <= 0) break;
+					probeEnumerate(*sub, max_depth, st);
+				}
+			}
+			for (Component *sub : sub_comps) delete sub;
+
+			// Aggregate the keymap into the per-polarity record.
+			r.depth_used = st.max_depth_used;
+			r.paths_explored = (uint64_t)(max_paths - st.budget_remaining);
+			r.unique_keys = (uint64_t)st.keymap.size();
+			r.total_keys = 0;
+			r.repeated_keys = 0;
+			r.repeat_count = 0;
+			r.amplification_score = 0.0;
+			for (auto &kv : st.keymap) {
+				uint64_t mult = kv.second.multiplicity;
+				unsigned sz2 = kv.second.max_size;
+				r.total_keys += mult;
+				if (mult > 1) {
+					r.repeated_keys++;
+					r.repeat_count += (mult - 1);
+					if      (sz2 < 25)  r.repeated_keys_by_size.small++;
+					else if (sz2 < 100) r.repeated_keys_by_size.medium++;
+					else if (sz2 < 400) r.repeated_keys_by_size.large++;
+					else                r.repeated_keys_by_size.xlarge++;
+					r.amplification_score +=
+					    anchor_probe::computeAmplificationScore(
+					        mult, sz2, config_.probe_anchor_beta);
+				}
+			}
 		}
 
 		// Restore trail to pre-probe state.
@@ -1014,6 +1056,64 @@ anchor_probe::PerPolarityResult Solver::probeOneAnchor(
 	auto t1 = std::chrono::steady_clock::now();
 	r.wall_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 	return r;
+}
+
+void Solver::probeEnumerate(Component &comp, int depth_remaining,
+                             anchor_probe::EnumState &st) {
+	// Record this component's canonical key in the per-candidate
+	// multiset. The L1/L2 cache is intentionally not consulted:
+	// st.keymap is the probe's own data structure.
+	const std::vector<uint64_t> *static_lbls =
+	    static_wl_labels_.empty() ? nullptr : &static_wl_labels_;
+	CanonicalKey key = buildCanonicalKey(
+	    comp, literal_pool_, literals_, literal_values_,
+	    comp_manager_.getAnalyzer().clauseIdToOfs(),
+	    removed_clauses_, original_lit_pool_size_,
+	    config_.canonical_compact, config_.no_anonymization,
+	    config_.wl_iterations, static_lbls);
+
+	unsigned active = 0;
+	for (auto vt = comp.varsBegin(); *vt != varsSENTINEL; vt++)
+		if (isActive(LiteralID(*vt, true))) active++;
+
+	auto &entry = st.keymap[key];
+	entry.multiplicity++;
+	if (active > entry.max_size) entry.max_size = active;
+	int level_used = config_.probe_anchor_depth - depth_remaining;
+	if (level_used > st.max_depth_used) st.max_depth_used = level_used;
+
+	if (depth_remaining <= 0 || st.budget_remaining <= 0) return;
+
+	VariableIndex v = pickBranchVariable(comp);
+	if (v == 0) return;  // no branching var (no active vars to pick)
+
+	for (int polarity_iter = 0; polarity_iter < 2; polarity_iter++) {
+		if (st.budget_remaining <= 0) return;
+		st.budget_remaining--;
+
+		bool pol = (polarity_iter == 0) ? false : true;
+		const unsigned sz = literal_stack_.size();
+		LiteralID branch_lit(v, pol);
+		if (!isActive(branch_lit)) continue;  // got assigned by sibling's BCP
+		setLiteralIfFree(branch_lit);
+		bool bcp_ok = BCP(sz);
+
+		if (bcp_ok) {
+			mpz_class trivial_factor = 1;
+			std::vector<Component*> sub_comps =
+			    discoverComponentsOf(comp, trivial_factor);
+			for (Component *sub : sub_comps) {
+				if (st.budget_remaining <= 0) break;
+				probeEnumerate(*sub, depth_remaining - 1, st);
+			}
+			for (Component *sub : sub_comps) delete sub;
+		}
+
+		while (literal_stack_.size() > sz) {
+			unSet(literal_stack_.back());
+			literal_stack_.pop_back();
+		}
+	}
 }
 
 bool Solver::bcp() {

@@ -119,15 +119,31 @@ public:
 	bool runAnchorProbeMode();
 
 	// Per-candidate probe. Pins (compact_var, polarity), runs BCP,
-	// optionally enumerates the residual sub-components to bounded
-	// depth K with path budget B, collects canonical keys into an
-	// ephemeral multiset, computes the amplification score, restores
-	// the trail to pre-probe state. NOTE this slice ships the pin +
-	// BCP + restore; the depth-K enumeration body is the immediate
-	// follow-up (see docs/anchor_probe_design.md §3).
+	// enumerates the residual sub-components to bounded depth K with
+	// path budget B, collects canonical keys into an ephemeral
+	// multiset, computes the amplification score, restores the trail
+	// to pre-probe state.
 	anchor_probe::PerPolarityResult probeOneAnchor(
 	    unsigned compact_var, bool polarity,
 	    int max_depth, int max_paths);
+
+	// Recursive depth-bounded enumerator. For each visited
+	// sub-component:
+	//   - build canonical key via buildCanonicalKey (the existing WL
+	//     cascade); record into st.keymap with its active-var count;
+	//   - if depth_remaining > 0 AND st.budget_remaining > 0, pick a
+	//     branching var (legacy activity-score picker), branch both
+	//     polarities (each with its own setLiteralIfFree + BCP +
+	//     trail-restore), decompose the post-BCP state via
+	//     discoverComponentsOf, recurse on each sub-component with
+	//     depth_remaining - 1.
+	//
+	// State discipline: every recursive call leaves the trail and the
+	// component-manager state EXACTLY as it found them. The L1/L2
+	// component cache is bypassed entirely — st.keymap is the only
+	// place keys are recorded.
+	void probeEnumerate(Component &comp, int depth_remaining,
+	                    anchor_probe::EnumState &st);
 
 	// Queue equivalences (in input-CNF variable space, 1-indexed) to be
 	// injected into the redundant-binary lane after simplePreProcess
