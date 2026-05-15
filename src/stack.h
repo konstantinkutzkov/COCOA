@@ -85,6 +85,10 @@ public:
     assert(remaining_components_ofs_ <= unprocessed_components_end_ - 1);
     return unprocessed_components_end_ - 1;
   }
+  // Accessor for OPEN_WORK snapshot (open-component enumeration on timeout).
+  unsigned unprocessed_components_end() const {
+    return unprocessed_components_end_;
+  }
   bool isSecondBranch() {
     return active_branch_;
   }

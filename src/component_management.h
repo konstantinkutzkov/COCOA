@@ -62,6 +62,13 @@ public:
     return component_stack_.size();
   }
 
+  // Accessor for OPEN_WORK snapshot — the caller iterates open
+  // components on the stack at timeout to compute the worst-case
+  // remaining-work bound.
+  Component *componentAt(unsigned i) const {
+    return (i < component_stack_.size()) ? component_stack_[i] : nullptr;
+  }
+
   void gatherStatistics(){
     statistics_.num_cached_components_ = content_cache_.size();
     statistics_.num_cache_hits_ = content_cache_.stats_hits;

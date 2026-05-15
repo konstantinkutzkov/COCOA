@@ -316,6 +316,26 @@ private:
 
 	StopWatch stopwatch_;
 
+	// OPEN_WORK snapshot — captured once on first time-bound break.
+	// Tracks the nested chain of in-progress sub-components: pushed at
+	// every solveComponentImpl entry, popped on exit (RAII guard inside
+	// solveComponentImpl). At timeout we walk this chain, count active
+	// vars in each sub-component, and emit the size list. See
+	// docs/portfolio_plan.md §6 for the rationale (per-variant ranking
+	// metric for probe_flags).
+	//
+	// The chain is nested (inner ⊂ outer in terms of vars), so the
+	// outermost element bounds the inner work; the innermost element is
+	// the deepest in-progress sub-component (= how far the search has
+	// descended). The script's ranker uses both.
+	bool                       open_work_captured_   = false;
+	double                     open_work_log2_bound_ = 0.0;  // = max of chain
+	unsigned                   open_work_n_root_     = 0;
+	unsigned                   open_work_n_open_     = 0;
+	std::vector<unsigned>      open_work_sizes_;             // outer → inner
+	std::vector<Component *>   current_comp_chain_;          // live during search
+	void captureOpenWorkSnapshot();
+
 	ComponentManager comp_manager_ = ComponentManager(config_,
 			statistics_, literal_values_);
 

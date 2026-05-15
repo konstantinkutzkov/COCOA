@@ -665,8 +665,14 @@ mpz_class Solver::solveComponent(Component &comp,
                                   int depth,
                                   int nd_node,
                                   int reactive_metis_skip_until_depth) {
-	if (stopwatch_.timeBoundBroken())
+	if (stopwatch_.timeBoundBroken()) {
+		// Capture chain (outer levels) if not already captured.
+		if (!open_work_captured_) {
+			captureOpenWorkSnapshot();
+			open_work_captured_ = true;
+		}
 		return 0;
+	}
 	// Diagnostics: accumulate component sizes seen at solveComponent entry.
 	// Lets us compute avg comp size processed vs avg comp size that hits
 	// the cache, telling apart "we cache big amortized chunks" from
@@ -742,8 +748,26 @@ mpz_class Solver::solveComponentImpl(Component &comp,
                                   int depth,
                                   int nd_node,
                                   int reactive_metis_skip_until_depth) {
-	if (stopwatch_.timeBoundBroken())
+	// Push this comp onto the chain of in-progress sub-components for
+	// the OPEN_WORK snapshot. RAII guard ensures we pop on every exit
+	// path (normal return, timeout return, etc.).
+	struct ChainGuard {
+		std::vector<Component *> &chain;
+		ChainGuard(std::vector<Component *> &c, Component *p) : chain(c) {
+			chain.push_back(p);
+		}
+		~ChainGuard() { chain.pop_back(); }
+	} _chain_guard(current_comp_chain_, &comp);
+
+	if (stopwatch_.timeBoundBroken()) {
+		// First detection wins — captures the deepest stack snapshot
+		// available, before unwinding starts dropping frames.
+		if (!open_work_captured_) {
+			captureOpenWorkSnapshot();
+			open_work_captured_ = true;
+		}
 		return 0;
+	}
 	if (config_.log_branches && depth == 0) {
 		static int g_root_calls = 0;
 		g_root_calls++;

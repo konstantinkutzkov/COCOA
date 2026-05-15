@@ -691,6 +691,16 @@ void Solver::solve(const string &file_name) {
 			return;
 		}
 
+		// Snapshot the root active-var count for the OPEN_WORK metric
+		// (denominator of the progress measure: progress_bits =
+		// n_root - log2(remaining_worst)).
+		{
+			Component &root = comp_manager_.superComponentOf(stack_.top());
+			open_work_n_root_ = 0;
+			for (auto vt = root.varsBegin(); *vt != varsSENTINEL; vt++)
+				if (isActive(LiteralID(*vt, true))) open_work_n_root_++;
+		}
+
 		statistics_.exit_state_ = countSATRec();
 		// countSATRec sets final_solution_count internally
 		statistics_.num_long_conflict_clauses_ = num_conflict_clauses();
@@ -727,6 +737,27 @@ void Solver::solve(const string &file_name) {
 	statistics_.writeToFile("data.out");
 	if (!config_.quiet)
 		statistics_.printShort();
+
+	// OPEN_WORK: per-variant progress metric for probe_flags / portfolio
+	// routing. On finish, n_open_comps=0 and progress_bits=n_root.
+	// On timeout, n_open_comps>0 and progress_bits = n_root - log2(Σ 2^n_i)
+	// over the open components captured at first time-bound break.
+	{
+		double progress_bits = open_work_captured_
+		    ? (static_cast<double>(open_work_n_root_) - open_work_log2_bound_)
+		    : static_cast<double>(open_work_n_root_);
+		std::cerr << "OPEN_WORK"
+		          << " n_root=" << open_work_n_root_
+		          << " n_open_comps=" << (open_work_captured_ ? open_work_n_open_ : 0u)
+		          << " bound_log2=" << (open_work_captured_ ? open_work_log2_bound_ : 0.0)
+		          << " progress_bits=" << progress_bits
+		          << " sizes=";
+		for (size_t i = 0; i < open_work_sizes_.size(); i++) {
+			if (i) std::cerr << ",";
+			std::cerr << open_work_sizes_[i];
+		}
+		std::cerr << std::endl;
+	}
 
 	std::cerr << "MIDSEP_STATS"
 	          << " decomp_attempts=" << mid_sep_decomp_attempts_
@@ -895,6 +926,44 @@ void Solver::solve(const string &file_name) {
 	}
 }
 
+
+// =====================================================================
+// OPEN_WORK snapshot — captured on first time-bound break.
+//
+// Walks the open components at the moment of timeout. "Open" =
+// sub-components on the component stack that are not yet processed;
+// this corresponds to the [remaining_components_ofs, unprocessed_end)
+// range at each StackLevel. To avoid double-counting, we skip the
+// `currentRemainingComponent` of each non-deepest frame, since that
+// comp is being processed by the deeper frame (whose own open work
+// captures it).
+//
+// For each open Component, count current-active vars; sum 2^n via
+// log-sum-exp to stay in float range. Output is `log2(Σ 2^n_i)`,
+// the worst-case bound on remaining enumeration cost.
+// =====================================================================
+
+void Solver::captureOpenWorkSnapshot() {
+	open_work_sizes_.clear();
+	unsigned max_n = 0;
+	for (Component *comp : current_comp_chain_) {
+		if (!comp) continue;
+		unsigned n = 0;
+		for (auto vt = comp->varsBegin(); *vt != varsSENTINEL; vt++) {
+			if (isActive(LiteralID(*vt, true))) n++;
+		}
+		open_work_sizes_.push_back(n);
+		if (n > max_n) max_n = n;
+	}
+	// The chain is nested: inner's vars ⊆ outer's vars. The outermost
+	// (= max in the chain) is the worst-case bound on remaining work
+	// for this entire branch of the search; the innermost is the
+	// deepest in-progress comp. We report max as bound_log2 (the
+	// conservative single-number bound) and the full chain so the
+	// script can rank by innermost (= depth-of-progress) too.
+	open_work_log2_bound_ = static_cast<double>(max_n);
+	open_work_n_open_ = static_cast<unsigned>(open_work_sizes_.size());
+}
 
 // =====================================================================
 // Anchor-probe driver. See docs/anchor_probe_design.md.
