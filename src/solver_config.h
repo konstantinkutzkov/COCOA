@@ -412,6 +412,16 @@ struct SolverConfiguration {
   // branch decision.
   std::string anchor_trace_path;
 
+  // Reactive-METIS input dump: when non-empty, every call to
+  // computeRuntimeMetisSeparator writes its input graph (active_vars,
+  // long_clauses, binary_pairs) to this file in a simple text format.
+  // The companion replay tool (tools/metis_replay) reads the file and
+  // calls METIS standalone on each record to characterise failure modes
+  // (n<4, METIS error, degenerate output, accepted-trivial, accepted-good)
+  // and per-input properties (connected components, edges, etc.).
+  // Diagnostic only.
+  std::string dump_reactive_metis_path;
+
   // Local-search probe-based preprocessing (opt-in).
   // When enabled, runs after the existing preprocessor (subsumption /
   // pure-dup / SSR) and applies the diff-and-lift schema described in

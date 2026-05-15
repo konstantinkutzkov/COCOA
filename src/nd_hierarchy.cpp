@@ -16,6 +16,8 @@
 #include <queue>
 #include <functional>
 #include <utility>
+#include <iostream>
+#include <string>
 
 using namespace std;
 
@@ -477,11 +479,49 @@ int NDHierarchy::mapToChild(
 // Runtime METIS separator (one-shot) on a sub-component snapshot.
 // See declaration in nd_hierarchy.h for semantics.
 // ---------------------------------------------------------------
+// File-scope state for the diagnostic dump (set via setReactiveMetisDumpPath).
+static FILE     *g_react_metis_dump_fp = nullptr;
+static long long g_react_metis_dump_id = 0;
+
+void setReactiveMetisDumpPath(const std::string &path) {
+  if (g_react_metis_dump_fp) {
+    std::fclose(g_react_metis_dump_fp);
+    g_react_metis_dump_fp = nullptr;
+  }
+  g_react_metis_dump_id = 0;
+  if (!path.empty()) {
+    g_react_metis_dump_fp = std::fopen(path.c_str(), "w");
+    if (!g_react_metis_dump_fp) {
+      std::cerr << "setReactiveMetisDumpPath: cannot open " << path << "\n";
+    }
+  }
+}
+
 RuntimeSeparatorResult computeRuntimeMetisSeparator(
     const vector<unsigned> &active_vars,
     const vector<pair<unsigned, vector<unsigned>>> &long_clauses,
     const vector<pair<unsigned, unsigned>> &binary_pairs)
 {
+  // Dump input record before doing anything else (so even early-return
+  // cases are captured for replay).
+  if (g_react_metis_dump_fp) {
+    g_react_metis_dump_id++;
+    std::fprintf(g_react_metis_dump_fp, "=R %lld %zu %zu %zu\n",
+                 g_react_metis_dump_id, active_vars.size(),
+                 long_clauses.size(), binary_pairs.size());
+    std::fprintf(g_react_metis_dump_fp, "=V");
+    for (auto v : active_vars) std::fprintf(g_react_metis_dump_fp, " %u", v);
+    std::fprintf(g_react_metis_dump_fp, "\n");
+    for (const auto &cl : long_clauses) {
+      std::fprintf(g_react_metis_dump_fp, "=L %u", cl.first);
+      for (auto v : cl.second) std::fprintf(g_react_metis_dump_fp, " %u", v);
+      std::fprintf(g_react_metis_dump_fp, "\n");
+    }
+    for (const auto &p : binary_pairs)
+      std::fprintf(g_react_metis_dump_fp, "=B %u %u\n", p.first, p.second);
+    std::fprintf(g_react_metis_dump_fp, "=E\n");
+  }
+
   RuntimeSeparatorResult out;
   const size_t n_vars = active_vars.size();
   const size_t n_cls  = long_clauses.size();

@@ -476,6 +476,10 @@ int main(int argc, char *argv[]) {
       if (argc <= i + 1) { cout << "-anchorTrace needs a path\n"; return -1; }
       theSolver.config().anchor_trace_path = argv[i + 1];
       i++;
+    } else if (strcmp(argv[i], "-dumpReactiveMetisInputs") == 0) {
+      if (argc <= i + 1) { cout << "-dumpReactiveMetisInputs needs a path\n"; return -1; }
+      theSolver.config().dump_reactive_metis_path = argv[i + 1];
+      i++;
     } else
       input_file = argv[i];
   }

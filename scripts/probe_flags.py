@@ -35,14 +35,20 @@ DEFAULT_SOLVER = os.path.join(REPO, "build", "sharpSAT")
 DEFAULT_CNF    = os.path.normpath(os.path.join(
     REPO, "..", "temp_cnf", "mc2025_track1_041.cnf"))
 
-# Default variant set spans the four mechanisms we want to discriminate
-# (precomputed separators, BCP cascades, reactive METIS, caching/labeling).
+# Default variant set, aligned with portfolio_insights.md / benchmark_log.md
+# terminology. "plain" matches the docs' definition (no -sepVarBias, no
+# -reactiveMetis, no -adaptive, default -wlIter 1). The 6 variants span:
+#   - separator-bias choice (plain vs legacy)
+#   - reactive METIS regime (off vs default vs aggressive)
+#   - BCP-driven picker (off vs adaptive with auto-α)
+#   - WL-labeling sharpness (default 1 vs explicit 2)
 DEFAULT_VARIANTS = [
-    "default:-rec -sep 5 -cb 3 -sepMode metis -wlIter 2",
-    "react-default:-rec -sep 5 -cb 3 -sepMode metis -wlIter 2 -reactiveMetis",
-    "react-agg:-rec -sep 5 -cb 3 -sepMode metis -wlIter 2 -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4",
-    "adaptive:-rec -sep 5 -cb 3 -sepMode metis -wlIter 2 -adaptive",
-    "wlIter1:-rec -sep 5 -cb 3 -sepMode metis -wlIter 1",
+    "plain:-rec -sep 5 -cb 3 -sepMode metis",
+    "legacy:-rec -sep 5 -cb 3 -sepMode metis -sepVarBias",
+    "react-default:-rec -sep 5 -cb 3 -sepMode metis -reactiveMetis",
+    "react-agg:-rec -sep 5 -cb 3 -sepMode metis -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4",
+    "adaptive:-rec -sep 5 -cb 3 -sepMode metis -adaptive",
+    "plain-wl2:-rec -sep 5 -cb 3 -sepMode metis -wlIter 2",
 ]
 
 
@@ -198,17 +204,22 @@ def make_rank_key(rank_spec: str):
 
 
 def print_table(results: List[VariantResult]) -> None:
-    print(f"\n{'name':<14} {'wall':>7} {'fin':>3} {'dec':>9} "
-          f"{'l2_hit/dec':>10} {'big_hit/dec':>11} "
+    if results:
+        print(f"\n  n_root (active vars at root, post-preprocess): {results[0].n_root}")
+    print(f"\n{'name':<14} {'wall':>7} {'fin':>3} {'progress':>9} "
+          f"{'dec':>9} {'l2_hit/dec':>10} {'big_hit/dec':>11} "
           f"{'bcp/dec':>8} {'conf':>5} "
           f"{'chain_d':>7} {'chain_max':>9} {'chain_min':>9} "
           f"{'react':>5}")
-    print("-" * 116)
+    print("-" * 132)
     for vr in results:
         wall = f"{vr.wall_s:6.2f}" if vr.wall_s is not None else "   ?  "
         fin  = "Y" if vr.finished else ("T" if vr.timeout else "?")
         react = f"{vr.react_calls}" if vr.react_calls else "-"
-        print(f"{vr.name:<14} {wall:>7} {fin:>3} {vr.decisions:>9} "
+        # progress_bits comes directly from the solver's OPEN_WORK line
+        # (= n_root - bound_log2). For finishers, equals n_root.
+        prog = f"{vr.progress_bits:7.1f}"
+        print(f"{vr.name:<14} {wall:>7} {fin:>3} {prog:>9} {vr.decisions:>9} "
               f"{vr.l2_hit_rate:>10.4f} {vr.large_hit_rate:>11.4f} "
               f"{vr.bcp_per_dec:>8.3f} {vr.conflicts:>5} "
               f"{vr.chain_depth:>7} {vr.chain_max_size:>9} {vr.chain_min_size:>9} "
@@ -216,9 +227,10 @@ def print_table(results: List[VariantResult]) -> None:
     print()
     print("Legend:")
     print("  fin: Y=solved within budget, T=TIMEOUT marker, ?=unknown")
+    print("  progress    = n_root - log2(bound_remaining); equals n_root if finished")
     print("  l2_hit/dec  = L2 cache hit rate per decision")
     print("  big_hit/dec = hits on components ≥200 vars / decisions")
-    print("  chain_*     = OPEN_WORK chain (only meaningful on TIMEOUT)")
+    print("  chain_*     = OPEN_WORK chain depth + max/min comp size in chain")
     print("  react       = reactive-METIS calls (only when -reactiveMetis on)")
 
 
@@ -263,8 +275,20 @@ def main() -> int:
         results.append(vr)
         fin_marker = "SOLVE" if vr.finished else ("TIMEOUT" if vr.timeout else "?")
         wall = f"{vr.wall_s:.2f}s" if vr.wall_s is not None else "?"
-        print(f"  [{i}/{len(parsed)}] {name:<14} {fin_marker:>8} {wall:>8}  "
-              f"({time.time()-t0:.0f}s elapsed)")
+        elapsed = time.time() - t0
+        # Per-variant detail block emitted as soon as the variant completes,
+        # so the user sees real-time progress on long runs.
+        print(f"\n[{i}/{len(parsed)}] {name} — {fin_marker} {wall} "
+              f"(total elapsed {elapsed:.0f}s)")
+        print(f"   decisions={vr.decisions:,}  bcp/dec={vr.bcp_per_dec:.3f}  "
+              f"conflicts={vr.conflicts}")
+        print(f"   l2_hit_rate={vr.l2_hit_rate:.4f}  "
+              f"big_hit_rate={vr.large_hit_rate:.4f}  "
+              f"progress_bits={vr.progress_bits:.1f}/{vr.n_root}")
+        print(f"   chain_depth={vr.chain_depth}  chain_max={vr.chain_max_size}  "
+              f"chain_min={vr.chain_min_size}  "
+              f"react_calls={vr.react_calls if vr.react_calls else '-'}")
+        sys.stdout.flush()
 
     rank_key = make_rank_key(args.rank)
     results.sort(key=rank_key)

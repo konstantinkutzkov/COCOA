@@ -458,6 +458,12 @@ void Solver::solve(const string &file_name) {
 	createfromFile(file_name);
 	initStack(num_variables());
 
+	// Reactive-METIS input dump (diagnostic; off unless flag set).
+	// Must be set BEFORE search begins so all reactive METIS calls are
+	// captured.
+	if (!config_.dump_reactive_metis_path.empty())
+		setReactiveMetisDumpPath(config_.dump_reactive_metis_path);
+
 	// Root-level forced literals: enqueue as input units so
 	// simplePreProcess's existing BCP loop propagates them identically to
 	// the original CNF's unit clauses. setLiteralIfFree + BCP is the same
@@ -2049,14 +2055,22 @@ void Solver::buildMetisInputFromComponent(
 		}
 		if (vars.size() >= 3) {
 			long_clauses.push_back({(unsigned)ofs, std::move(vars)});
+		} else if (vars.size() == 2) {
+			// Pseudo-binary: a length-3+ clause that BCP has trimmed
+			// to two active literals. The constraint is live and BCP
+			// will propagate through it, AND the component analyzer
+			// (alt_component_analyzer::searchClause) treats the
+			// remaining two vars as connected via this clause. We
+			// must include it as a METIS edge for the same reason —
+			// otherwise METIS's view of connectivity diverges from
+			// the analyzer's, and METIS receives spuriously-
+			// disconnected inputs (diagnosed 2026-05-15: 100% of
+			// reactive-METIS calls on t1_041/v176 had cc>1 by METIS
+			// view but cc=1 by analyzer view, because pseudo-binaries
+			// were skipped here).
+			binary_pairs.push_back({vars[0], vars[1]});
 		}
-		// Size-2 entries (after BCP trimmed a length-3+ clause to 2)
-		// are pseudo-binaries; we could add them as binary_pairs, but
-		// the inclusion below via binary_links_ won't catch them
-		// because they are not stored there. Skipping them is
-		// conservative — they will still be part of BCP, just not part
-		// of the METIS connectivity. Acceptable for the one-shot
-		// runtime separator.
+		// Size-1 (BCP-derived unit) is BCP's responsibility; not an edge.
 	}
 
 	// Active binary clauses where both endpoints are in the component.

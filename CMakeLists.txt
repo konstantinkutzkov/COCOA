@@ -110,3 +110,11 @@ target_include_directories (test_probe_preprocessor_filter PRIVATE src)
 target_link_libraries (test_probe_preprocessor_filter libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
     ${GKLIB_DIR}/build/libGKlib.a)
+
+# Standalone METIS replay tool — reads a dump produced by sharpSAT's
+# -dumpReactiveMetisInputs flag and replays each input through METIS to
+# characterise failure modes. See tools/metis_replay.cpp.
+add_executable (metis_replay tools/metis_replay.cpp)
+target_link_libraries (metis_replay
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a)

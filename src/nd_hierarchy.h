@@ -173,4 +173,11 @@ RuntimeSeparatorResult computeRuntimeMetisSeparator(
     const std::vector<std::pair<unsigned, std::vector<unsigned>>> &long_clauses,
     const std::vector<std::pair<unsigned, unsigned>> &binary_pairs);
 
+// Diagnostic: when called with a non-empty path, every subsequent
+// computeRuntimeMetisSeparator call dumps its input graph to that file
+// (text format, one record per call). When called with an empty string,
+// closes any open file. See tools/metis_replay.cpp for the parser /
+// replay tool.
+void setReactiveMetisDumpPath(const std::string &path);
+
 #endif /* ND_HIERARCHY_H_ */
