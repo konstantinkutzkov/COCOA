@@ -10,6 +10,7 @@ SET(SOURCES alt_component_analyzer.cpp
 	preprocessor_light.cpp
 	probe_preprocessor.cpp
 	solver.cpp
+	solver_diagnostics.cpp
 	solver_rec.cpp
 	statistics.cpp)
 
