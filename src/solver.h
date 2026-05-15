@@ -739,8 +739,6 @@ private:
 	// subsumption opportunities the stored formula doesn't show?
 	void analyzeDynamicSubsumption(unsigned bcp_start_ofs);
 
-	bool bcp();
-
 	// Precomputed nested-dissection hierarchy (built once at solve start)
 	NDHierarchy nd_hierarchy_;
 

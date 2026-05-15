@@ -1191,26 +1191,6 @@ void Solver::probeEnumerate(Component &comp, int depth_remaining,
 	}
 }
 
-bool Solver::bcp() {
-// the asserted literal has been set, so we start
-// bcp on all literals pushed at this decision level
-	unsigned start_ofs = stack_.top().literal_stack_ofs();
-
-//BEGIN process unit clauses
-	for (auto lit : unit_clauses_)
-		setLiteralIfFree(lit);
-//END process unit clauses
-
-	bool bSucceeded = BCP(start_ofs);
-
-	if (config_.perform_failed_lit_test && bSucceeded && removed_clauses_.empty()
-	    && !config_.perform_separator_branching) {
-		bSucceeded = implicitBCP();
-	}
-	return bSucceeded;
-}
-
-
 bool Solver::BCP(unsigned start_at_stack_ofs) {
 	for (unsigned int i = start_at_stack_ofs; i < literal_stack_.size(); i++) {
 		LiteralID unLit = literal_stack_[i].neg();
