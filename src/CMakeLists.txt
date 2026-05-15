@@ -22,4 +22,7 @@ set_source_files_properties(preprocessor_light.cpp PROPERTIES
 	COMPILE_FLAGS "-std=c++17 -U_LIBCPP_DISABLE_DEPRECATION_WARNINGS")
 
 ADD_LIBRARY(libsharpSAT ${SOURCES} component_types)
-target_link_libraries (libsharpSAT component_types) 
+target_link_libraries (libsharpSAT component_types)
+# CMS5 headers are only consumed by preprocessor_light.cpp.
+# PRIVATE keeps the include path off the test-executable compiles.
+target_include_directories(libsharpSAT PRIVATE ${CMS5_DIR}) 

@@ -58,8 +58,12 @@ set(CADIBACK_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cadiback-build/libcad
     CACHE FILEPATH "Path to Cadiback static library")
 set(SBVA_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/sbva-build/lib/libsbva.a"
     CACHE FILEPATH "Path to SBVA static library")
-include_directories(${CMS5_DIR})
 set(CMS5_DEPS ${CMS5_LIB} ${CADIBACK_LIB} ${CADICAL_LIB} ${SBVA_LIB})
+
+# CMS5_DIR is scoped to libsharpSAT only (where preprocessor_light.cpp
+# consumes <cryptominisat.h>). Don't put it in the project-wide include
+# path — CMS5 ships its own solver.h that would otherwise shadow ours
+# whenever a test executable does #include "solver.h" with quoted form.
 
 add_subdirectory(src)
 
