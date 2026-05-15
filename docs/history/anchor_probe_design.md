@@ -307,7 +307,7 @@ hit instead of variable branching. Defer to a follow-up.
    rate_T)`. They should correlate strongly (Spearman ≥ 0.7).
 4. **Depth sweep**: K ∈ {4, 6, 8, 10, 12}. Find the smallest K where
    the score ranking stabilizes.
-5. **Generalization**: probe on t1_021_k10_s1 (small ganak-class).
+5. **Generalization**: probe on t1_021_k10_s1 (small density-1 structured).
    Expectation: no good anchors (the doc says `-sepVarBias` handles
    it via Mechanism 1, not Mechanism 3). All candidate scores should
    be low.

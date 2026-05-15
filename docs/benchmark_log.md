@@ -753,7 +753,7 @@ Same build, same load (~2.6). 60 s timeout per run. Goal: probe the **(small, lo
 | t1_023 | 102 | 1.00 | TIMEOUT > 60 s | TIMEOUT > 60 s | TIMEOUT > 60 s | legacy | inconclusive at 60 s |
 | t1_025 | 63 | 1.05 | 7.31 s (2.29 M dec) | 7.50 s (2.18 M dec) | 2 s | legacy | tie (legacy slightly fewer decisions, wall similar) |
 | **t1_027** | 66 | 1.00 | 5.78 s (2.01 M dec) | **4.80 s (1.39 M dec)** | 3 s | legacy | **legacy clearly wins** (17 % faster wall, 30 % fewer decisions) |
-| **t1_041** | **1920** | **0.99** | **TIMEOUT > 60 s** | **TIMEOUT > 60 s** | **16 s** | **plain** | **both ours fail; ganak class** |
+| **t1_041** | **1920** | **0.99** | **TIMEOUT > 60 s** | **TIMEOUT > 60 s** | **16 s** | **plain** | **both ours fail; density-1 structured class** |
 | t1_047 | 80 | 3.00 | TIMEOUT > 60 s | TIMEOUT > 60 s | TIMEOUT > 60 s | plain | inconclusive at 60 s |
 
 All non-timeout sharpSAT runs produce the count that ganak's `c s exact arb int` line confirms:
@@ -769,18 +769,18 @@ All non-timeout sharpSAT runs produce the count that ganak's `c s exact arb int`
 | large + low-density (previously untested) | plain | **both fail; ganak finishes** | Rule moot; new class identified |
 | small + high-density | plain | inconclusive (all timeout on t1_047 at 60 s) | Need longer budget or different test instance |
 
-### New finding: a third "ganak-class" quadrant
+### New finding: a third "density-1 structured" quadrant
 
 `t1_041` is the first measured instance in the **(large, low-density, mostly long-clauses)** quadrant. Both our configs time out at 60 s; ganak finishes in 16 s. Combined with the t1_021 family observations from 2026-04-27 §4 of `portfolio_insights.md`, the pattern across **t1_021/t1_023/t1_025/t1_027/t1_041** — all pure-or-near-pure 3-SAT with density ~1.0 — points to a structural class where our hierarchy-based search loses to ganak's tree-decomposition-driven DP, regardless of `-sepVarBias` / plain choice. The 2-feature `(density, n_vars)` rule **does not address this class** because it only predicts which of our two configs wins, not whether our solver is the right tool at all.
 
 Detection signature for this class is cheap: `density ∈ [0.95, 1.10]` AND `binary_fraction ≤ 0.1`. On the available instances:
-- t1_021 (full, 90 v / 90 c, density 1.00, pure 3-SAT) — ganak class
-- t1_023 (102 v / 102 c, density 1.00, pure 3-SAT) — ganak class
+- t1_021 (full, 90 v / 90 c, density 1.00, pure 3-SAT) — density-1 structured class
+- t1_023 (102 v / 102 c, density 1.00, pure 3-SAT) — density-1 structured class
 - t1_025 (63 v / 66 c, density 1.05, pure 3-SAT) — borderline; sharpSAT solves at 7 s, ganak at 2 s
 - t1_027 (66 v / 66 c, density 1.00, pure 3-SAT) — borderline; sharpSAT solves at 5 s, ganak at 3 s
-- t1_041 (1920 v / 1910 c, density 0.99, mixed but mostly long) — ganak class (we time out)
+- t1_041 (1920 v / 1910 c, density 0.99, mixed but mostly long) — density-1 structured class (we time out)
 
-Implication for the portfolio: extend the analyzer with a "ganak-class" detection (density ~1.0 + low binary fraction). When detected, the portfolio driver should attempt ganak first or fall through quickly. See updated portfolio_insights §4 / §5 / §8.
+Implication for the portfolio: extend the analyzer with a "density-1 structured" detection (density ~1.0 + low binary fraction). When detected, the portfolio driver should attempt ganak first or fall through quickly. See updated portfolio_insights §4 / §5 / §8.
 
 ### Open questions
 
@@ -791,7 +791,7 @@ Implication for the portfolio: extend the analyzer with a "ganak-class" detectio
 
 ## 2026-05-12 — t1_041 first-branch anchor study + min-rate probe metric
 
-Investigation of why our solver TIMEOUTs on t1_041 (1920 v / 1910 c, ganak-class per 2026-05-11) but solves it in ~2 s when a specific variable is fixed as a first branching decision. Builds on the 2026-04-29 picker session work.
+Investigation of why our solver TIMEOUTs on t1_041 (1920 v / 1910 c, density-1 structured per 2026-05-11) but solves it in ~2 s when a specific variable is fixed as a first branching decision. Builds on the 2026-04-29 picker session work.
 
 **Setup**: input = `temp_cnf/mc2025_track1_041.cnf`; binary = current `build/sharpSAT` (Release, M-series, on battery so timings ~5-10 % slower than AC); flags `-rec -sep 5 -cb 3 -sepMode metis -wlIter 2`; 60 s per-run budget via `-t 60`.
 
@@ -909,7 +909,7 @@ The BCP residuals R(v242=F) and R(v70=F) differ by only 36+36 = 72 clauses out o
 
 ### Practical takeaway for the picker
 
-For ganak-class instances where our solver normally TIMEOUTs, a **probe-based picker with min-aggregation** identifies multiple good first-branch anchors, not just one "magic" variable. The picker would:
+For density-1 structured instances where our solver normally TIMEOUTs, a **probe-based picker with min-aggregation** identifies multiple good first-branch anchors, not just one "magic" variable. The picker would:
 
 1. Compute literal-graph WL once (one O(n+m) pass × k iterations).
 2. For each flip-symmetric variable (~half of all vars on this instance), run a 1 s solver probe at both polarities.
@@ -919,7 +919,7 @@ Cost on t1_041: 401 flip-sym vars × 2 polarities × 1 s ≈ 800 s — too expen
 - Restricting to top-N by degree + low-degree-flip-sym (the 120-var sweep used here) covers it in ~8 minutes
 - Or: probe just a few dozen flip-sym vars, since results suggest the top of the distribution is large — many vars have min_rate ≥ 0.04 in the top-10 / top-20
 
-This is a **research finding, not a portfolio config yet**. No prediction on whether this picker structure transfers to other ganak-class instances; needs validation on t1_021 family, t1_023, t1_027.
+This is a **research finding, not a portfolio config yet**. No prediction on whether this picker structure transfers to other density-1 structured instances; needs validation on t1_021 family, t1_023, t1_027.
 
 ### Open questions specific to this study
 

@@ -43,7 +43,7 @@ component cache is bypassed entirely, eliminating both order-dependence
 and the persistent-vs-fresh argument).
 
 **Priority order:** the anchor probe lands first (most concrete
-near-term win — it solves the t1_041 ganak-class quadrant directly,
+near-term win — it solves the t1_041 density-1 structured quadrant directly,
 and its validation set is ready in `benchmark_log.md` 2026-05-12). The
 stochastic-walks probe lands second.
 
@@ -301,7 +301,7 @@ documented test instances:
 - t1_071 (sparse pure 3-SAT)
 - t1_049_k10_s1 (dense 3-SAT)
 - t1_021_k10_s1 (small + low-density + decomposable)
-- t1_041 (ganak-class, large)
+- t1_041 (density-1 structured, large)
 
 For each: record `(bcp_per_dec, cache_hit_rate, large_comp_hit_rate,
 mean_leaf_depth, walks_completed)`. This is the signal vector.

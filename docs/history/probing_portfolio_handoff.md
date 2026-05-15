@@ -126,7 +126,7 @@ other paths.
 
 *Implements via*: `-learnLevel N`.
 
-*Empirical status*: lower priority for our solver. On the ganak-class
+*Empirical status*: lower priority for our solver. On the density-1 structured
 instances we've measured, the solver records **zero conflicts** during
 60s runs — these formulas aren't conflict-rich. Don't optimize for this
 mechanism unless probe data shows the formula is generating conflicts.
@@ -349,7 +349,7 @@ To save the next instance from the same mistakes:
 - **WL orbit grouping does NOT compress probe candidates.** Falsified
   empirically. Use it only for the "skip the giant orbit" filter on
   t1_041-like cases.
-- **Don't talk about "ganak-class" or other descriptive labels as if
+- **Don't talk about "density-1 structured" or other descriptive labels as if
   they were solver actions.** The solver chooses flags; "class" is
   human documentation, not an analyzer output.
 - **Single-polarity probes mislead.** Always probe both polarities and

@@ -111,13 +111,14 @@ the decomposition. Needs more data.
   goes from TIMEOUT > 60 s to SOLVE in 88 s (verified 2026-05-14, see
   §4 entry of that date).
 
-**Naming note (2026-05-14)**: earlier dated entries call this class
-"ganak-class" because ganak handles it well while our solver historically
-did not. That's a misnomer — it conflates the structural property of the
-formula with which solver happens to handle it. The class's defining
-property is structural (density ≈ 1.0 + low binary fraction); we now use
-the name "density-1 structured." Older dated entries below retain their
-original wording.
+**Naming note (2026-05-14, sweep completed 2026-05-15)**: this class was
+originally called "ganak-class" in dated entries below — because ganak
+handles it well while our solver historically did not. The name was a
+misnomer (it conflated the structural property of the formula with which
+solver happens to handle it). On 2026-05-15 all references across the
+docs were renamed to **density-1 structured**, including in older dated
+entries. The empirical content of those entries is preserved; only the
+class label changed.
 
 ---
 
@@ -445,7 +446,7 @@ Append-only log of observations that should feed the mapping.
     proxy candidate: `N ≈ min(50, n_active_vars / 4)`. Needs validation
     on more instances before committing to the formula.
 
-- **t1_021 family (sparse 1:1 var:clause) — ganak's home turf, not ours.**
+- **t1_021 family (sparse 1:1 var:clause) — density-1 structured class, not ours.**
   Continued the sweep on the same instance shrunken at multiple k values.
   Growth rate per added variable:
   | k | shrunken size | ganak | ours `-sep 5` |
@@ -466,7 +467,7 @@ Append-only log of observations that should feed the mapping.
     the gap measurably at k=7 (~1.6× best vs ganak), and at k=4 we
     don't finish at all.
   - **Portfolio implication**: classify "1:1 var:clause sparse" as
-    ganak's-home-turf class. Detection is cheap (`n_clauses ≈ n_vars`
+    density-1-structured class. Detection is cheap (`n_clauses ≈ n_vars`
     after preprocessing). Driver should attempt ganak-first or
     fall through to ganak quickly if our solver doesn't make
     progress in a small probe budget.
@@ -691,7 +692,7 @@ the test set. Proposed candidates to characterise: `mc2025_track1_023.cnf`,
 `mc2025_track1_047.cnf` — extract `(n, m, density, mean_len, ND-stats)` and
 run plain + legacy + mult c=0 with a 30 s budget. See open question Q10 below.
 
-### 2026-05-11 — Falsification hunt results: rule holds, new "ganak-class" quadrant identified
+### 2026-05-11 — Falsification hunt results: rule holds, new "density-1 structured" quadrant identified
 
 Followed up on the proposed candidates from §4 2026-05-09. Decompressed
 `mc2025_track1_073.cnf` from `MC2025_Public/` for additional coverage. All
@@ -723,12 +724,12 @@ measurements in `benchmark_log.md` 2026-05-11 entries; insights captured here.
   legacy time out at 60 s. Ganak finishes in 16 s. The 2-feature rule predicted
   "plain" but plain itself fails — rule prediction is moot.
 
-#### Refined classification: the "ganak-class" quadrant
+#### Refined classification: the "density-1 structured" quadrant
 
 Combining 2026-04-27's t1_021-family observations with today's t1_023, t1_025,
 t1_027, t1_041 results, a clear pattern emerges:
 
-**Signature of "ganak's home turf"**: `density ∈ [0.95, 1.10]` AND
+**Signature of "density-1 structured class"**: `density ∈ [0.95, 1.10]` AND
 `binary_fraction ≤ 0.1` (mostly ternaries or longer clauses, ~1 clause per
 var). Examples:
 
@@ -755,7 +756,7 @@ that don't translate to cache reuse.
 **Refines §1 taxonomy.** The proposed §1e ("small + low-density + decomposable")
 should be **renamed** and **extended**:
 
-- **§1e (ganak-class): density ~1.0 + low binary fraction + pure-or-mostly-3-SAT.**
+- **§1e (density-1 structured): density ~1.0 + low binary fraction + pure-or-mostly-3-SAT.**
   Includes the t1_021/t1_023/t1_025/t1_027 family (small) AND t1_041 (large).
   Size doesn't matter for the structural placement; density and clause-length
   composition do.
@@ -765,7 +766,7 @@ should be **renamed** and **extended**:
     between our options).
   - Large (n ≥ ~200): we time out. Ganak finishes. **The 2-feature rule's
     prediction is irrelevant here.**
-- **Portfolio implication**: detect the ganak-class via the
+- **Portfolio implication**: detect the density-1 structured class via the
   `density ≈ 1.0 + binary_fraction ≤ 0.1` signature. If detected AND `n_vars ≥ 200`,
   **route directly to ganak**. If detected AND `n_vars < 200`, run our solver
   with `-sepVarBias` (rule-based override), but reserve a small budget to
@@ -773,24 +774,24 @@ should be **renamed** and **extended**:
 
 **Updates the 2-feature rule's scope.** The rule
 `density > 1.5 ∨ n_vars > 200 → plain; else legacy` is valid only **conditional
-on our solver being the right tool** for the instance. The ganak-class detection
-should run *first*; if ganak-class is detected, the 2-feature rule doesn't apply.
+on our solver being the right tool** for the instance. The density-1 structured class detection
+should run *first*; if a density-1 structured instance is detected, the 2-feature rule doesn't apply.
 
 #### Open data gaps
 
 - **t1_023 and t1_047 at longer budget** (300 s+). Both are small and timed out
-  at 60 s. Their behaviour distinguishes "ganak-class" (where sharpSAT loses)
+  at 60 s. Their behaviour distinguishes "density-1 structured" (where sharpSAT loses)
   from "just hard, but solvable with patience" (where sharpSAT eventually wins).
 - **t1_073 across more configs** — we tested plain/legacy/mult/ganak but didn't
   do an `-sep N` sweep (per 2026-04-27 §4); on a 1140-var pure 3-SAT a higher
   `-sep` threshold might help further.
 - **t1_041 with longer budget** — does our solver eventually finish, or is this
-  fundamentally unreachable? Confirms whether ganak-class is genuinely
+  fundamentally unreachable? Confirms whether the density-1 structured class is genuinely
   "wrong tool" or "needs more time".
 
 ### 2026-05-12 — Anchor-variable structure on t1_041; probe-min-rate metric
 
-t1_041 (1920 v / 1910 c, ganak-class per 2026-05-11) TIMEOUTs in our default config. Fixing a single specific variable as a first branching decision drops it to **~2 s**. This session characterised which variables earn that anchor role and a cheap structural test that finds them.
+t1_041 (1920 v / 1910 c, density-1 structured per 2026-05-11) TIMEOUTs in our default config. Fixing a single specific variable as a first branching decision drops it to **~2 s**. This session characterised which variables earn that anchor role and a cheap structural test that finds them.
 
 #### The "fast anchor" property: flip-symmetry + min-rate
 
@@ -832,7 +833,7 @@ Implication: features computable from F's syntactic structure (degree, WL labels
 
 #### Implications for the unified picker (§2, Q11)
 
-Q11 asked: "is there an instance class where the unified picker earns its keep?" The 2026-05-12 results don't directly answer this — the question above is about a probe-based picker (a different mechanism that runs a solver process) and not the unified-picker scoring contest. But it does identify a **structural niche** the unified picker has not been tested on: ganak-class instances (density ≈ 1.0, low binary fraction) where:
+Q11 asked: "is there an instance class where the unified picker earns its keep?" The 2026-05-12 results don't directly answer this — the question above is about a probe-based picker (a different mechanism that runs a solver process) and not the unified-picker scoring contest. But it does identify a **structural niche** the unified picker has not been tested on: density-1 structured instances (density ≈ 1.0, low binary fraction) where:
 
 - The precomputed METIS hierarchy is poor (per 2026-04-27 / 2026-05-11 diagnosis).
 - A cascade-aware or τ-aware picker that prefers flip-symmetric vars could in principle steer toward the anchor family.
@@ -841,14 +842,14 @@ Hypothesis (untested): on t1_041, a unified picker that boosts flip-symmetric ca
 
 #### Implications for portfolio routing (§8)
 
-Doesn't change current routing. Ganak-class is still ganak-first. The picker insight here is research-stage:
+Doesn't change current routing. Density-1 structured is still ganak-first. The picker insight here is research-stage:
 
-- It identifies a candidate **fix** for the ganak-class quadrant within our solver (probe-based anchor selection), not yet a portfolio config.
+- It identifies a candidate **fix** for the density-1 structured quadrant within our solver (probe-based anchor selection), not yet a portfolio config.
 - The probe cost on t1_041 was ~8 min for 120 vars × 2 polarities. Too expensive as a fixed preamble; needs either restriction to a tighter candidate set or a per-instance budget gate.
 
 #### Open questions specific to this study
 
-- **Does the anchor family transfer**? Probe-based picker on `t1_021_k4_s1` (the unfinished ganak-class instance from 2026-04-27): does it also have an anchor variable that drops it from TIMEOUT to seconds? If yes, this is a general mechanism for the class. If no, it's t1_041-specific.
+- **Does the anchor family transfer**? Probe-based picker on `t1_021_k4_s1` (the unfinished density-1 structured instance from 2026-04-27): does it also have an anchor variable that drops it from TIMEOUT to seconds? If yes, this is a general mechanism for the class. If no, it's t1_041-specific.
 - **What's the cheap structural test that ranks anchors without a probe**? Flip-symmetry is necessary but too coarse (1187 candidates on t1_041). Need a sharper feature — perhaps WL class size, or a structural property of the v's neighborhood beyond iter-2 WL.
 - **Min-rate non-monotonicity**: v5 and v459 rank in the top-10 by `min_rate` but have ~60 s on one polarity. A second feature `max_rate / min_rate` (lopsidedness ratio) might filter these out cheaply.
 
@@ -1130,7 +1131,7 @@ guidance for instance routing):**
 
 **Portfolio routing precedence (2026-05-14; supersedes 2026-05-11):**
 
-The 2026-05-11 precedence routed "ganak-class" instances directly to ganak.
+The 2026-05-11 precedence routed "density-1 structured" instances directly to ganak.
 The 2026-05-14 reactive-METIS rescue (see §4 entry of that date) makes that
 unnecessary: aggressive reactive METIS rescues the bad-anchor cases on what we
 now call **density-1 structured** instances (see §1e for the renamed class
