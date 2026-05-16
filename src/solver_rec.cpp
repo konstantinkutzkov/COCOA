@@ -1776,60 +1776,6 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 
 	bool bcp_ok = BCP(lit_save);
 
-	// Anchor trace (diagnostic): one line per branchOnLiteral entry.
-	// Compares two solver trajectories under different first decisions.
-	// File is opened in "w" mode on first call; file pointer is a
-	// function-local static (one trace per process). Cost when off: a
-	// single string-empty check.
-	if (!config_.anchor_trace_path.empty()) {
-		static FILE *atrace_fp = nullptr;
-		static bool  atrace_failed = false;
-		static std::unordered_set<unsigned> *root_sep_vars = nullptr;
-		if (atrace_fp == nullptr && !atrace_failed) {
-			atrace_fp = std::fopen(config_.anchor_trace_path.c_str(), "w");
-			if (atrace_fp == nullptr) {
-				std::cerr << "anchorTrace: cannot open "
-				          << config_.anchor_trace_path << "\n";
-				atrace_failed = true;
-			} else {
-				std::fprintf(atrace_fp,
-				    "call,depth,var,pol,cascade,active_post,bcp_ok,"
-				    "conflicts,l2_stores,l2_hits,"
-				    "from_sep,nd_node,in_root_sep,degree,comp_size\n");
-				// Materialise root-separator var set once.
-				root_sep_vars = new std::unordered_set<unsigned>();
-				if (nd_hierarchy_.valid && !nd_hierarchy_.separator.empty()) {
-					for (const CutNode &cn : nd_hierarchy_.separator[
-					        nd_hierarchy_.root()]) {
-						if (cn.kind == CutNode::VAR)
-							root_sep_vars->insert(cn.id);
-					}
-				}
-			}
-		}
-		if (atrace_fp != nullptr) {
-			auto &cc = comp_manager_.contentCache();
-			unsigned trail_post = (unsigned)literal_stack_.size();
-			unsigned cascade = trail_post - lit_save;
-			unsigned active_post = (num_variables() >= trail_post)
-			                       ? (num_variables() - trail_post) : 0;
-			unsigned in_root = (root_sep_vars && root_sep_vars->count(lit.var())) ? 1 : 0;
-			unsigned degree = comp_manager_.scoreOf(lit.var());
-			unsigned comp_size = 0;
-			for (auto vt = comp.varsBegin(); *vt != varsSENTINEL; vt++)
-				if (isActive(LiteralID(*vt, true))) comp_size++;
-			std::fprintf(atrace_fp,
-			    "%lld,%d,%u,%c,%u,%u,%d,%lu,%lu,%lu,%d,%d,%u,%u,%u\n",
-			    my_id, depth, lit.var(), lit.sign() ? 'T' : 'F',
-			    cascade, active_post, bcp_ok ? 1 : 0,
-			    (unsigned long)statistics_.num_conflicts_,
-			    (unsigned long)cc.stats_stores,
-			    (unsigned long)cc.stats_hits,
-			    from_separator ? 1 : 0, nd_node,
-			    in_root, degree, comp_size);
-		}
-	}
-
 	mpz_class result;
 	if (!bcp_ok) {
 		statistics_.num_conflicts_++;

@@ -294,15 +294,6 @@ struct SolverConfiguration {
   std::vector<int> probe_anchor_vars;
   std::string probe_anchor_out;   // empty = stdout
 
-  // Anchor trace: when non-empty, every branchOnLiteral call appends a
-  // line to this CSV file with (call_id, depth, var, polarity, cascade,
-  // active_post, bcp_ok, conflicts, l2_stores, l2_hits). Diagnostic for
-  // comparing two solver trajectories side-by-side under different first
-  // decisions (e.g. v242 vs v70 on t1_041). Cost when empty: zero (single
-  // string-empty check at the trace site). Cost when on: ~1 fprintf per
-  // branch decision.
-  std::string anchor_trace_path;
-
   // Reactive-METIS input dump: when non-empty, every call to
   // computeRuntimeMetisSeparator writes its input graph (active_vars,
   // long_clauses, binary_pairs) to this file in a simple text format.
@@ -318,9 +309,6 @@ struct SolverConfiguration {
   // pure-dup / SSR) and applies the diff-and-lift schema described in
   // docs/probe_preprocessing_plan.md. Default OFF.
   bool perform_local_search_preprocess = false;
-  unsigned lsp_max_probes = 1000;
-  unsigned lsp_max_size   = 4;
-  unsigned lsp_max_total  = 5000;
   bool     lsp_no_r4      = false;
 
   // ===============================================================

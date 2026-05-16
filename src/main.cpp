@@ -18,7 +18,6 @@ int main(int argc, char *argv[]) {
   string input_file;
   Solver theSolver;
   bool arjun_light = false;
-  string arjun_light_dump_and_exit;
 
 
   if (argc <= 1) {
@@ -50,9 +49,6 @@ int main(int argc, char *argv[]) {
     cout << "\t -implicantMaxSize n\t max decision literals in a learned implicant (default 4)" << endl;
     cout << "\t -implicantMaxTotal n\t cap on total implicants learned per solve (default 100000)" << endl;
     cout << "\t -localSearchPreprocess\t enable probe-based #SAT-sound preprocessing (diff-and-lift; opt-in). See docs/probe_preprocessing_plan.md" << endl;
-    cout << "\t -lspMaxProbes n\t max probes per local-search pass (default 1000)" << endl;
-    cout << "\t -lspMaxSize n\t  max σ length for probes (default 4)" << endl;
-    cout << "\t -lspMaxTotal n\t max clauses learned per local-search invocation (default 5000)" << endl;
     cout << "\t -lspNoR4\t disable definitional elimination (R4) inside the local-search pass" << endl;
     cout << "\t -checkLearnInvariants\t assert antecedent-in-scope at conflict-analysis and force-set time. Debug aid for t1_011-style order-dependent bugs. Aborts on violation." << endl;
     cout << "\t -bruteForceCacheCheck N\t at every cache store/hit, if sub-component has <=N active vars, brute-force verify. Aborts on mismatch. Try N=18." << endl;
@@ -261,15 +257,6 @@ int main(int argc, char *argv[]) {
       i++;
     } else if (strcmp(argv[i], "-localSearchPreprocess") == 0) {
       theSolver.config().perform_local_search_preprocess = true;
-    } else if (strcmp(argv[i], "-lspMaxProbes") == 0) {
-      if (i + 1 >= argc) { cout << "-lspMaxProbes needs a number\n"; return -1; }
-      theSolver.config().lsp_max_probes = (unsigned)atoi(argv[i + 1]); i++;
-    } else if (strcmp(argv[i], "-lspMaxSize") == 0) {
-      if (i + 1 >= argc) { cout << "-lspMaxSize needs a number\n"; return -1; }
-      theSolver.config().lsp_max_size = (unsigned)atoi(argv[i + 1]); i++;
-    } else if (strcmp(argv[i], "-lspMaxTotal") == 0) {
-      if (i + 1 >= argc) { cout << "-lspMaxTotal needs a number\n"; return -1; }
-      theSolver.config().lsp_max_total = (unsigned)atoi(argv[i + 1]); i++;
     } else if (strcmp(argv[i], "-lspNoR4") == 0) {
       theSolver.config().lsp_no_r4 = true;
     } else if (strcmp(argv[i], "-checkLearnInvariants") == 0) {
@@ -291,10 +278,6 @@ int main(int argc, char *argv[]) {
       theSolver.statistics().maximum_cache_size_bytes_ = atol(argv[i + 1]) * (uint64_t) 1000000;
     } else if (strcmp(argv[i], "-arjunLight") == 0) {
       arjun_light = true;
-    } else if (strcmp(argv[i], "-arjunLightDumpAndExit") == 0) {
-      if (argc <= i + 1) { cout << "-arjunLightDumpAndExit needs a path\n"; return -1; }
-      arjun_light_dump_and_exit = argv[i + 1];
-      i++;
     } else if (strcmp(argv[i], "-probeAnchorMode") == 0) {
       theSolver.config().probe_anchor_mode = true;
     } else if (strcmp(argv[i], "-probeAnchorDepth") == 0) {
@@ -325,32 +308,12 @@ int main(int argc, char *argv[]) {
       if (argc <= i + 1) { cout << "-probeAnchorOut needs a path\n"; return -1; }
       theSolver.config().probe_anchor_out = argv[i + 1];
       i++;
-    } else if (strcmp(argv[i], "-anchorTrace") == 0) {
-      if (argc <= i + 1) { cout << "-anchorTrace needs a path\n"; return -1; }
-      theSolver.config().anchor_trace_path = argv[i + 1];
-      i++;
     } else if (strcmp(argv[i], "-dumpReactiveMetisInputs") == 0) {
       if (argc <= i + 1) { cout << "-dumpReactiveMetisInputs needs a path\n"; return -1; }
       theSolver.config().dump_reactive_metis_path = argv[i + 1];
       i++;
     } else
       input_file = argv[i];
-  }
-
-  // Dump-and-exit mode: just produce the simplified CNF + equivalence
-  // sidecar at the requested path and skip the solver entirely.
-  if (!arjun_light_dump_and_exit.empty() && !input_file.empty()) {
-    string dump_sidecar = arjun_light_dump_and_exit + ".eqv";
-    if (!PreprocessorLight::simplify(input_file, arjun_light_dump_and_exit,
-                                     1, dump_sidecar)) {
-      cerr << "[arjun-light] simplification failed\n";
-      return -1;
-    }
-    cout << "c o [arjun-light] dumped simplified CNF to "
-         << arjun_light_dump_and_exit << "\n"
-         << "c o [arjun-light] dumped equivalence sidecar to "
-         << dump_sidecar << "\n";
-    return 0;
   }
 
   // Arjun-light: count-preserving CMS5 simplification on the input CNF.

@@ -133,9 +133,9 @@ bool Solver::simplePreProcess() {
 	if (succeeded && config_.perform_local_search_preprocess) {
 		auto extracted = extractFormulaAsDimacs();
 		LocalSearchPreprocessConfig lcfg;
-		lcfg.max_probes = config_.lsp_max_probes;
-		lcfg.max_size   = config_.lsp_max_size;
-		lcfg.max_total  = config_.lsp_max_total;
+		lcfg.max_probes = 1000;
+		lcfg.max_size   = 4;
+		lcfg.max_total  = 5000;
 		lcfg.enable_r4  = !config_.lsp_no_r4;
 		lcfg.budget_ms  = config_.preprocess_time_budget_ms;
 		lcfg.verbose    = config_.preprocess_verbose;
