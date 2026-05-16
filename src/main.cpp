@@ -117,10 +117,6 @@ int main(int argc, char *argv[]) {
       theSolver.config().separator_vars_as_bias = true;
     } else if (strcmp(argv[i], "-unifiedPicker") == 0) {
       theSolver.config().unified_picker = true;
-    } else if (strcmp(argv[i], "-clauseScoreW") == 0) {
-      if (i + 1 >= argc) { cout << "-clauseScoreW needs a number\n"; return -1; }
-      theSolver.config().clause_score_weight = atof(argv[i + 1]);
-      i++;
     } else if (strcmp(argv[i], "-clauseLenMid") == 0) {
       if (i + 1 >= argc) { cout << "-clauseLenMid needs a number\n"; return -1; }
       theSolver.config().clause_length_midpoint = atof(argv[i + 1]);
@@ -128,14 +124,6 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(argv[i], "-clauseLenBeta") == 0) {
       if (i + 1 >= argc) { cout << "-clauseLenBeta needs a number\n"; return -1; }
       theSolver.config().clause_length_steepness = atof(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-sepImpA") == 0) {
-      if (i + 1 >= argc) { cout << "-sepImpA needs a number\n"; return -1; }
-      theSolver.config().separator_importance_base = atof(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-sepSizeNormP") == 0) {
-      if (i + 1 >= argc) { cout << "-sepSizeNormP needs a number in [0,1]\n"; return -1; }
-      theSolver.config().separator_size_norm_p = atof(argv[i + 1]);
       i++;
     } else if (strcmp(argv[i], "-cheapScoreW") == 0) {
       if (i + 1 >= argc) { cout << "-cheapScoreW needs a number\n"; return -1; }
@@ -148,18 +136,6 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(argv[i], "-cascadeDepth") == 0) {
       if (i + 1 >= argc) { cout << "-cascadeDepth needs an integer\n"; return -1; }
       theSolver.config().cascade_score_depth = atoi(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-pickerMode") == 0) {
-      if (i + 1 >= argc) { cout << "-pickerMode needs additive|multiplicative\n"; return -1; }
-      if (strcmp(argv[i+1], "additive") == 0) {
-        theSolver.config().unified_picker_mode =
-          SolverConfiguration::UnifiedPickerMode::ADDITIVE;
-      } else if (strcmp(argv[i+1], "multiplicative") == 0) {
-        theSolver.config().unified_picker_mode =
-          SolverConfiguration::UnifiedPickerMode::MULTIPLICATIVE;
-      } else {
-        cout << "-pickerMode must be 'additive' or 'multiplicative'\n"; return -1;
-      }
       i++;
     } else if (strcmp(argv[i], "-pickerAlphaVar") == 0) {
       if (i + 1 >= argc) { cout << "-pickerAlphaVar needs a number\n"; return -1; }
@@ -177,10 +153,6 @@ int main(int argc, char *argv[]) {
       if (i + 1 >= argc) { cout << "-pickerLambdaClause needs a number\n"; return -1; }
       theSolver.config().picker_lambda_clause = atof(argv[i + 1]);
       i++;
-    } else if (strcmp(argv[i], "-pickerGamma") == 0) {
-      if (i + 1 >= argc) { cout << "-pickerGamma needs a number\n"; return -1; }
-      theSolver.config().picker_gamma = atof(argv[i + 1]);
-      i++;
     } else if (strcmp(argv[i], "-pickerVarW") == 0) {
       if (i + 1 >= argc) { cout << "-pickerVarW needs a number\n"; return -1; }
       theSolver.config().picker_var_weight = atof(argv[i + 1]);
@@ -191,18 +163,6 @@ int main(int argc, char *argv[]) {
       i++;
     } else if (strcmp(argv[i], "-pickerNonSepKillsNd") == 0) {
       theSolver.config().picker_non_sep_kills_nd = true;
-    } else if (strcmp(argv[i], "-pickerRateFramework") == 0) {
-      theSolver.config().picker_rate_framework = true;
-    } else if (strcmp(argv[i], "-pickerRhoExp") == 0) {
-      if (i + 1 >= argc) { cout << "-pickerRhoExp needs a number\n"; return -1; }
-      theSolver.config().picker_rho_exp = atof(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-pickerFrontBonus") == 0) {
-      if (i + 1 >= argc) { cout << "-pickerFrontBonus needs a number\n"; return -1; }
-      theSolver.config().picker_front_bonus = atof(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-pickerNoCascadeGain") == 0) {
-      theSolver.config().picker_no_cascade_gain = true;
     } else if (strcmp(argv[i], "-pickerRootSepOnly") == 0) {
       theSolver.config().picker_root_sep_only = true;
     } else if (strcmp(argv[i], "-rec") == 0) {

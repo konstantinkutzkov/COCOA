@@ -166,48 +166,22 @@ struct SolverConfiguration {
   // VAR-element-per-recursion. Clause-branching is unchanged.
   bool   separator_vars_as_bias = false;
 
-  // Stage C: unified picker that scores active VARs and CLAUSEs at
-  // every decision and picks the highest-scoring target. Replaces the
-  // separator-consumption loop and the standalone variable picker.
-  // VAR score = scoreOf(v) (existing, with sep-bias bonus when
-  // separator_vars_as_bias is on). CLAUSE score = length-decay
-  // 2^(-α·|C|) * clause_score_weight (+ sep-bias bonus if the clause
-  // is in the current frame's separator hint). Branching on a CLAUSE
-  // uses branchOnClause (internal learning-suppression). Branching
-  // on a VAR uses branchOnLiteral (learning enabled — we no longer
-  // descend the ND-hierarchy strictly, so the L/R structural
-  // invariant doesn't constrain learning).
+  // The unified branch-target picker (-unifiedPicker). Scores every
+  // active VAR + active long CLAUSE in the current sub-component and
+  // branches on argmax. Multiplicative scoring: base(x) · boost(x),
+  // where boost = 1 + α · exp(−λ · rel_k) on separator elements (rel_k
+  // = active sep size / active vars in comp). Acts as the "soft
+  // preference" picker, used as a graceful last-resort fallback when
+  // no specific strategy is known to win. See pickBranchTarget() in
+  // solver_rec.cpp for the full formula.
   bool   unified_picker         = false;
-  // Magnitude scaler on the CLAUSE length term. Without it, the
-  // bare sigmoid lives in [0, 1] and every VAR (whose score is
-  // freq+activity, typically tens to hundreds) beats every CLAUSE
-  // on raw scale. Lifting clause scores to a comparable range is
-  // what makes the unified picker a real choice. CLI: -clauseScoreW.
-  double clause_score_weight    = 100.0;
-  // Sigmoid midpoint c in clauseScoreW · 1/(1+exp(-β·(|C|-c))).
+  // Sigmoid midpoint c used by clause scoring inside the picker.
   // Default 3 centers the sigmoid at the smallest length we'll
   // clause-branch on. CLI: -clauseLenMid.
   double clause_length_midpoint = 3.0;
   // Sigmoid steepness β. Larger β = sharper discrimination near
   // the midpoint. CLI: -clauseLenBeta.
   double clause_length_steepness = 1.0;
-  // Dynamic separator-importance base `a`: separator-bias bonus is
-  // multiplied by a^(-k) where k = currently-active separator
-  // elements (VARs in bias bitmap + CLAUSEs in sep hint, both
-  // intersected with this comp's active state). Singletons score
-  // ~1× sepW; longer separators decay quickly. Default 1.5 sits
-  // between linear and exponential. a=1.0 disables the dynamic
-  // multiplier (recovers the flat-bonus behavior). CLI: -sepImpA.
-  double separator_importance_base = 1.5;
-
-  // Cross-instance normalization for the dynamic decay. The picker scores
-  // separator elements with bonus = sepBiasW * a^(-k / (N+M)^p), where
-  // (N+M) is the active incidence-graph size of the current sub-comp
-  // (active vars + active original clauses) and p in [0, 1] controls how
-  // aggressively k is shrunk relative to comp size. p=0 disables (recovers
-  // raw a^(-k) behaviour). p=0.5 treats k as a fraction of sqrt(N+M).
-  // CLI: -sepSizeNormP.
-  double separator_size_norm_p = 0.0;
 
   // Picker hybrid weight on the adaptive Stage-0 cheap_score
   // (Σ 2^(-α·active_len(C))) over freq+activity. Var score becomes
@@ -231,51 +205,23 @@ struct SolverConfiguration {
   double cascade_score_weight = 0.0;
   int    cascade_score_depth  = 3;
 
-  // Unified picker mode selector and its multiplicative-form parameters.
-  // ADDITIVE (default): legacy additive score combination
-  //   S(x) = base(x) + sep_bonus_m·1[x∈sep] + cascade_addend
-  // MULTIPLICATIVE: type-pure base AND type-pure boost — each kind
-  // (variable / clause) has its own scoring AND boost shape:
-  //   base(v) = picker_var_weight · max(picker_base_floor,
-  //                                     freq + activity + cheapW·cheap)
-  //   base(C) = picker_clause_weight · sigmoid(β · (L − mid))
-  //   boost_var(v)    = 1 + picker_alpha_var · exp(−picker_lambda_var · rel_k)
-  //                       · 1[v ∈ sep_var_set]
-  //                     + picker_gamma · max(0, depth(v)/depth_med − 1)
-  //                                                   (Regime B only)
-  //   boost_clause(C) = 1 + picker_alpha_clause · exp(−picker_lambda_clause · rel_k)
-  //                       · 1[C ∈ sep_clause_set]
-  //   S(x) = base(x) · boost(x)
-  // where rel_k = (active sep elements) / N_active_vars. Type-pure boost
-  // lets sep clauses compete for the top score against sep vars even
-  // when the sigmoid base is small. Concretely, with the defaults
-  // below at root rel_k≈0.18 on k10:
-  //   sep var multiplier:    1+15·exp(-0.875)≈ 7.25
-  //   sep clause multiplier: 1+110·exp(-0.875)≈ 46.9
-  //   sep var score:    5·7.25  ≈ 36
-  //   sep clause base:  1.5·0.5 = 0.75; score 0.75·46.9 ≈ 35
-  // → roughly tied; tune as needed. Non-sep length-3 clauses score
-  // 1.5·0.5 = 0.75 < typical var ≈ 5, so they're suppressed.
-  // Regime A (default): picker_gamma = 0 → cascade boost off, no
-  // per-call cascade-cost overhead. Regime B requires sampled-median
-  // + lazy candidate evaluation; not enabled in this iteration.
-  // CLI: -pickerMode {additive|multiplicative}, -pickerAlphaVar,
-  //      -pickerAlphaClause, -pickerLambdaVar, -pickerLambdaClause,
-  //      -pickerGamma, -pickerVarW, -pickerClauseW.
-  enum class UnifiedPickerMode { ADDITIVE, MULTIPLICATIVE };
-  UnifiedPickerMode unified_picker_mode = UnifiedPickerMode::ADDITIVE;
-  // Per-type α gain factors (separate for vars and clauses).
+  // Unified-picker scoring knobs (multiplicative form).
+  //   base(v)  = picker_var_weight · max(picker_base_floor,
+  //                                      freq + activity + cheapW·cheap + cascadeW·cascade)
+  //   base(C)  = picker_clause_weight · sigmoid(β · (L − mid))
+  //   boost(v) = 1 + picker_alpha_var · exp(−picker_lambda_var · rel_k) · 1[v ∈ sep]
+  //   boost(C) = 1 + picker_alpha_clause · exp(−picker_lambda_clause · rel_k) · 1[C ∈ sep]
+  // rel_k = (active sep elements) / (active vars in comp).
+  // Type-pure boost lets sep clauses compete with sep vars: the much
+  // larger picker_alpha_clause default compensates for the small sigmoid
+  // base on clauses. CLI: -pickerAlphaVar/-pickerAlphaClause,
+  //                  -pickerLambdaVar/-pickerLambdaClause,
+  //                  -pickerVarW/-pickerClauseW.
   double picker_alpha_var      = 15.0;
   double picker_alpha_clause   = 110.0;
-  // Per-type λ decay rates (separate for vars and clauses).
   double picker_lambda_var     = 5.0;
   double picker_lambda_clause  = 5.0;
-  double picker_gamma          = 0.0;
   double picker_var_weight     = 1.0;
-  // Lowered to 1.5 so non-separator clauses don't compete with vars
-  // (length-3 clause base = 1.5·0.5 = 0.75 < typical var ≈ 5).
-  // Sep clauses still win because picker_alpha_clause is much larger
-  // than picker_alpha_var, compensating for the small sigmoid base.
   double picker_clause_weight  = 1.5;
   double picker_base_floor     = 0.01;
 
@@ -283,17 +229,9 @@ struct SolverConfiguration {
   // clause not in the carried separator) drops the ND node (passes
   // nd_node = -1 to branchOnLiteral / branchOnClause), but keeps the
   // `separator` vector carried — so descendants lose ND-hierarchy
-  // descent below this point (matching legacy Stage-3 behaviour for
-  // var picks; symmetric extension for non-sep clauses). Sep-clause
-  // picks (the consumption spine) still carry nd_node forward. CLI:
-  // -pickerNonSepKillsNd.
+  // descent below this point. Sep-clause picks (the consumption spine)
+  // still carry nd_node forward. CLI: -pickerNonSepKillsNd.
   bool picker_non_sep_kills_nd = false;
-
-  // Exponent on the ρ factor in the rate-framework score:
-  //   score(v) = ρ(v)^picker_rho_exp · τ_var(v)
-  // ρ for sep elements ∈ [1, √2]; for non-sep ρ = 2. Larger w_ρ amplifies
-  // the discount on sep elements. CLI: -pickerRhoExp, default 1.0.
-  double picker_rho_exp = 1.0;
 
   // When true, sub-components reached via decomposition (post-consumption
   // and mid-consumption decompose paths) get nd_node = -1 forwarded
@@ -301,33 +239,6 @@ struct SolverConfiguration {
   // the root. Tests whether deep seps add value or are pure overhead.
   // CLI: -pickerRootSepOnly.
   bool picker_root_sep_only = false;
-
-  // When true, the rate-framework picker skips the BCP cascade gain
-  // contribution to (a, b) — uses only `1 + ε·activity` for τ inputs.
-  // Diagnostic to test whether cascade gain biases picks badly on
-  // binary-rich instances. CLI: -pickerNoCascadeGain.
-  bool picker_no_cascade_gain = false;
-
-  // Front-of-separator bonus: the FIRST currently-active element in the
-  // carried separator vector (METIS-order) gets its rate divided by this
-  // factor in the rate framework. > 1 means the front element is
-  // preferred (effective rate smaller); = 1 disables the bonus. Tunes
-  // how strictly the picker respects the planned consumption order:
-  // larger values make the picker stick to METIS order; smaller values
-  // allow more cascade-driven deviations. CLI: -pickerFrontBonus.
-  double picker_front_bonus = 2.0;
-
-  // Rate-based unified picker (per-var-growth-rate framework):
-  //   var rate     = τ(pos_gain + ε·act_pos, neg_gain + ε·act_neg)
-  //                  via Newton's method on τ^(-a) + τ^(-b) = 1
-  //   clause rate  = τ(σ(L − m), L)
-  //   separator rate = 2^(α + β),  α=sep size/n_active, β=larger child fraction
-  //   sep elements get rate divided by (1 + α_sep · exp(−λ_sep · rel_k))
-  //   pick = argmin over candidates (smallest exponential growth rate)
-  // When SEPARATOR wins, picker returns BranchTarget::SEPARATOR; the
-  // caller falls through to legacy Stage-2 sep-consumption. CLI:
-  // -pickerRateFramework. Multiplicative-mode only.
-  bool picker_rate_framework = false;
 
   // Phase 3 / Tier 2: adaptive branching via probe-scored τ minimization.
   // When enabled, replaces `pickBranchVariable` on the no-separator path

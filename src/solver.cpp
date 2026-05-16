@@ -1734,66 +1734,6 @@ float Solver::computeBcpGainScore(VariableIndex v) {
 	return pos + neg;   // SUM, not min — both branches contribute.
 }
 
-// Polarity-split gain: same walker as computeBcpGainScore, returns
-// (pos_gain, neg_gain) so the caller can compute τ(pos+ε·act_pos, neg+ε·act_neg).
-std::pair<float, float> Solver::computeBcpGainPolarities(VariableIndex v) {
-	if (!isActive(LiteralID(v, true))) return {0.0f, 0.0f};
-	const int max_depth = config_.cascade_score_depth;
-	std::unordered_set<unsigned> visited;
-	visited.reserve(64);
-
-	std::function<float(LiteralID, int)> gain =
-	    [&](LiteralID hypothetical_lit, int d) -> float {
-		if (d == 0) return 0.0f;
-		if (!visited.insert(hypothetical_lit.raw()).second) return 0.0f;
-		LiteralID complement = hypothetical_lit.neg();
-		float g = 0.0f;
-		std::vector<LiteralID> forced_lits;
-
-		const auto &blinks = literal(complement).binary_links_;
-		for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
-			if (literal_values_[*bt] != X_TRI) continue;
-			forced_lits.push_back(*bt);
-		}
-		g += (float)forced_lits.size();
-
-		const auto &occ = occurrence_lists_[complement];
-		for (ClauseOfs ofs : occ) {
-			if (isClauseRemoved(ofs)) continue;
-			if (isSatisfied(ofs)) continue;
-			LiteralID u0 = SENTINEL_LIT, u1 = SENTINEL_LIT, u2 = SENTINEL_LIT;
-			int n_unassigned = 0;
-			for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt) {
-				if (literal_values_[*lt] == X_TRI) {
-					if (n_unassigned == 0) u0 = *lt;
-					else if (n_unassigned == 1) u1 = *lt;
-					else if (n_unassigned == 2) u2 = *lt;
-					n_unassigned++;
-					if (n_unassigned > 3) break;
-				}
-			}
-			if (n_unassigned == 2) {
-				LiteralID other = (u0 == complement) ? u1 : u0;
-				if (literal_values_[other] == X_TRI)
-					forced_lits.push_back(other);
-				g += 1.0f;
-			} else if (n_unassigned == 3) {
-				g += 0.33f;
-			}
-		}
-
-		if (d > 1) {
-			for (LiteralID fl : forced_lits)
-				g += gain(fl, d - 1);
-		}
-		return g;
-	};
-
-	float pos = gain(LiteralID(v, true), max_depth);
-	visited.clear();
-	float neg = gain(LiteralID(v, false), max_depth);
-	return {pos, neg};
-}
 
 VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsat) {
 	out_unsat = false;
