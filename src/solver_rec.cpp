@@ -309,12 +309,10 @@ void Solver::maybeLearnImplicants(unsigned bcp_start_ofs)
     // measure walk+filter overhead in isolation.
     if (!config_.implicant_dry_run) {
       const int L = config_.learn_level;
-      Antecedent a = addScopedUIPConflictClause(
+      addScopedUIPConflictClause(
           clause,
           /*pad_binary=*/  L >= 4,
           /*record_scope=*/L >= 3);
-      if (a.isAnt() && a.isAClause())
-        logLearnTrace(a.asCl(), clause);
     }
     statistics_.num_implicants_learned_++;
     if (statistics_.num_implicants_learned_
@@ -782,32 +780,6 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		          << " comp_total_vars=" << total
 		          << " comp_active=" << act
 		          << " trail=" << literal_stack_.size() << "\n";
-	}
-
-	// Top-branch CNF dump: at every solveComponent entry where
-	// depth <= dump_recursion_max_depth, snapshot the SUPER-comp
-	// formula state and write to disk. Manifest at log.txt records
-	// (id, depth, nvars, path). Diagnostic tool: re-run ganak/our-solver
-	// on each dump to find the smallest sub-formula where counts
-	// diverge.
-	if (!config_.dump_recursion_dir.empty()
-	    && (unsigned)depth <= config_.dump_recursion_max_depth) {
-		static long long rec_dump_id = 0;
-		long long my_id = rec_dump_id++;
-		std::string path = config_.dump_recursion_dir
-		                 + "/super_d" + std::to_string(depth)
-		                 + "_id" + std::to_string(my_id) + ".cnf";
-		unsigned dump_n = 0;
-		if (dumpSubComponentCnf(comp, path, &dump_n)) {
-			std::ofstream log(config_.dump_recursion_dir + "/log.txt",
-			                  std::ios::app);
-			log << "id=" << my_id
-			    << " depth=" << depth
-			    << " nvars=" << dump_n
-			    << " removed_clauses_size=" << removed_clauses_.size()
-			    << " trail_size=" << literal_stack_.size()
-			    << " path=" << path << "\n";
-		}
 	}
 
 	static int rec_depth = 0;
@@ -1362,43 +1334,6 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				    literal_values_, comp_manager_.getAnalyzer().clauseIdToOfs(),
 				    rm, original_lit_pool_size_);
 			}
-			// Snapshot H's decision-only path when sub-component matches the
-			// user-specified target var set (path_trace_comp_vars).
-			if (config_.path_trace_ofs != 0 &&
-			    !config_.path_trace_comp_vars.empty() &&
-			    !config_.learn_trace_path.empty()) {
-				extern bool g_path_recording;
-				if (g_path_recording) {
-					std::vector<unsigned> avars;
-					for (auto it2 = sub->varsBegin(); *it2 != varsSENTINEL; it2++)
-						if (isActive(LiteralID(*it2, true))) avars.push_back(*it2);
-					std::vector<unsigned> target;
-					const std::string &s = config_.path_trace_comp_vars;
-					size_t start = 0;
-					while (start < s.size()) {
-						size_t c = s.find(',', start);
-						if (c == std::string::npos) c = s.size();
-						target.push_back((unsigned)atoi(s.substr(start, c - start).c_str()));
-						start = c + 1;
-					}
-					std::sort(avars.begin(), avars.end());
-					std::sort(target.begin(), target.end());
-					if (avars == target) {
-						std::ofstream tr(config_.learn_trace_path, std::ios::app);
-						tr << "H_SNAPSHOT: depth=" << (depth + 1)
-						   << " nvars=" << avars.size() << "\n";
-						tr << "  decisions (DL ordered):\n";
-						for (auto l : literal_stack_) {
-							if (!var(l).ante.isAnt())
-								tr << "    DL=" << var(l).decision_level
-								   << " " << l.toInt() << "\n";
-						}
-						tr << "  full stack length=" << literal_stack_.size() << "\n";
-						tr << "=== PATH RECORDING END ===\n";
-						g_path_recording = false;
-					}
-				}
-			}
 			// Per-component BCP filter mask. Only fires when decomposition
 			// actually split the formula (`decomposed` set above). A learned
 			// clause whose vars escape *sub's varsBegin would propagate
@@ -1468,34 +1403,6 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			sub_count = solveComponent(*sub, {}, true, depth + 1, sub_nd,
 			                           reactive_metis_skip_until_depth);
 
-			// Diagnostic: if -dumpCompDir is set, dump this sub-component's
-			// sub-problem as a DIMACS CNF and log our computed count. A
-			// post-process script can then run ganak on each dumped file
-			// to find the smallest sub-problem where our count is wrong —
-			// a minimal in-tree reproducer of any correctness bug.
-			if (!config_.dump_comp_dir.empty()) {
-				static long long comp_dump_id = 0;
-				unsigned comp_active_nvars = 0;
-				// Pre-count to avoid dumping if outside window.
-				for (auto it = sub->varsBegin(); *it != varsSENTINEL; it++)
-					if (isActive(LiteralID(*it, true))) comp_active_nvars++;
-				if (comp_active_nvars >= config_.dump_comp_min_vars
-				    && comp_active_nvars <= config_.dump_comp_max_vars) {
-					long long my_id = comp_dump_id++;
-					std::string path = config_.dump_comp_dir + "/comp_"
-					                 + std::to_string(my_id) + ".cnf";
-					unsigned real_nv = 0;
-					if (dumpSubComponentCnf(*sub, path, &real_nv)) {
-						std::ofstream log(config_.dump_comp_dir + "/log.txt",
-						                  std::ios::app);
-						log << "id=" << my_id
-						    << " depth=" << (depth + 1)
-						    << " nvars=" << real_nv
-						    << " count=" << sub_count
-						    << " path=" << path << "\n";
-					}
-				}
-			}
 
 			// Brute-force cache check at STORE time. If sub-component is
 			// small enough (<= N), enumerate and verify the count. On
@@ -2172,16 +2079,6 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		}
 	}
 
-	// Stop-and-dump point: after BCP at the requested branch id, write
-	// the current formula state as CNF and exit. The two-file pair of
-	// such dumps at the same id from two runs forms a smaller reproducer.
-	if (config_.stop_at_branch == my_id && !config_.stop_at_branch_path.empty()) {
-		std::cerr << "STOP_AT_BRANCH id=" << my_id
-		          << " bcp_ok=" << bcp_ok << "\n";
-		dumpPreprocessedCnf(config_.stop_at_branch_path);
-		std::exit(0);
-	}
-
 	mpz_class result;
 	if (!bcp_ok) {
 		statistics_.num_conflicts_++;
@@ -2231,12 +2128,10 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 			// and implicant learning). FP = skip learning = sound.
 			bool go = (L <= 1) || maybeDedupClause(uip_clauses_.back());
 			if (go) {
-				Antecedent a = addScopedUIPConflictClause(
+				addScopedUIPConflictClause(
 				    uip_clauses_.back(),
 				    /*pad_binary=*/  L >= 4,
 				    /*record_scope=*/L >= 3);
-				if (a.isAnt() && a.isAClause())
-					logLearnTrace(a.asCl(), uip_clauses_.back());
 			} else {
 				statistics_.num_learned_dedup_dropped_++;
 			}

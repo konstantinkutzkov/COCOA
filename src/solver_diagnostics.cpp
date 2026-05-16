@@ -570,6 +570,22 @@ bool Solver::dumpPreprocessedCnf(const std::string &path) {
 	return true;
 }
 
+
+void Solver::dumpBinariesAfterPreprocess(const std::string &path) {
+	std::ofstream out(path);
+	if (!out) return;
+	unsigned count = 0;
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		const auto &bl = literal(l).binary_links_;
+		for (auto bt = bl.begin(); *bt != SENTINEL_LIT; bt++) {
+			if (!(l.raw() < bt->raw())) continue;  // dedup
+			out << l.toInt() << " " << bt->toInt() << "\n";
+			count++;
+		}
+	}
+	std::cerr << "dumped " << count << " binaries to " << path << "\n";
+}
+
 // Helper: walk literal_pool_ once and emit learned clauses whose
 // literals all fall within the given active-variable set (so the
 // dump is a self-contained CNF on that variable set). Skip clauses
@@ -617,78 +633,10 @@ static void emitLearnedClausesInSubComp(
 	}
 }
 
-// Global G-to-H recording flag. Turns ON at LEARN ofs == path_trace_ofs.
-// Turns OFF at COMP_ENTER with vars matching path_trace_comp_vars.
-// External-linkage so solver_rec.cpp can reference it.
-bool g_path_recording = false;
-
-void Solver::logLearnTrace(ClauseOfs cl_ofs, const std::vector<LiteralID> &clause) {
-	if (config_.learn_trace_path.empty() || cl_ofs == 0) return;
-
-	// Path-trace mode: emit ONE G_SNAPSHOT at the target learn and arm the
-	// g_path_recording flag so the matching H_SNAPSHOT (in solver_rec) will
-	// also fire. No per-event spam in between.
-	if (config_.path_trace_ofs != 0) {
-		if (cl_ofs != (ClauseOfs)config_.path_trace_ofs) return;
-		g_path_recording = true;
-		std::ofstream out(config_.learn_trace_path, std::ios::app);
-		out << "G_SNAPSHOT: LEARN ofs=" << cl_ofs
-		    << " size=" << clause.size()
-		    << " DL=" << stack_.get_decision_level() << "\n";
-		out << "  clause:";
-		for (auto l : clause) out << " " << l.toInt();
-		out << "\n";
-		out << "  decisions (DL ordered):\n";
-		for (auto l : literal_stack_) {
-			if (!var(l).ante.isAnt())
-				out << "    DL=" << var(l).decision_level
-				    << " " << l.toInt() << "\n";
-		}
-		out << "  full stack length=" << literal_stack_.size() << "\n";
-		return;
-	}
-
-	// Legacy full-trace mode (for every learn — large output). Only reached
-	// when path_trace_ofs is 0.
-	std::ofstream out(config_.learn_trace_path, std::ios::app);
-	if (!out) return;
-	int DL = stack_.get_decision_level();
-	out << "LEARN ofs=" << cl_ofs
-	    << " size=" << clause.size()
-	    << " DL=" << DL
-	    << " scope_size=" << removed_clauses_.size() << "\n";
-	out << "  clause:";
-	for (auto l : clause) out << " " << l.toInt();
-	out << "\n";
-	out << "  stack (" << literal_stack_.size() << " lits):\n";
-	for (auto l : literal_stack_) {
-		int dl = var(l).decision_level;
-		const char *atype = "dec";
-		if (var(l).ante.isAnt()) {
-			atype = var(l).ante.isAClause() ? "cl" : "bin";
-		}
-		out << "    DL=" << dl << " " << l.toInt() << " (" << atype << ")\n";
-	}
-	out << "  scope (clauses removed):";
-	for (const auto &p : removed_clauses_) out << " " << p.first;
-	out << "\n";
-}
-
-void Solver::dumpBinariesAfterPreprocess(const std::string &path) {
-	std::ofstream out(path);
-	if (!out) return;
-	unsigned count = 0;
-	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
-		const auto &bl = literal(l).binary_links_;
-		for (auto bt = bl.begin(); *bt != SENTINEL_LIT; bt++) {
-			if (!(l.raw() < bt->raw())) continue;  // dedup
-			out << l.toInt() << " " << bt->toInt() << "\n";
-			count++;
-		}
-	}
-	std::cerr << "dumped " << count << " binaries to " << path << "\n";
-}
-
+// Emit a single sub-component as a standalone DIMACS CNF under the
+// current partial assignment. Used by -bruteForceCacheDumpDir to
+// capture offending sub-components when a brute-force cache check
+// fires a mismatch.
 bool Solver::dumpSubComponentCnf(Component &comp, const std::string &path,
                                   unsigned *out_nvars) {
 	// Collect active vars in component
@@ -751,14 +699,9 @@ bool Solver::dumpSubComponentCnf(Component &comp, const std::string &path,
 	}
 
 	// Include learned clauses whose literals are all within this
-	// sub-component. These are the "carried-in" state from the parent
-	// search that DIMACS would otherwise miss. If a learned clause is
-	// unsound (not truly entailed by F), including it in the dump may
-	// reproduce the wrong count on a fresh re-run.
+	// sub-component.
 	size_t n_original_clauses = out_clauses.size();
 	std::vector<std::string> raw_learned_lines;
-	// Collect raw learned clauses (original var IDs, including F_TRI
-	// lits) for diagnostic comments.
 	{
 		auto it2 = literal_pool_.begin();
 		while (it2 != literal_pool_.end()) {
@@ -772,7 +715,6 @@ bool Solver::dumpSubComponentCnf(Component &comp, const std::string &path,
 				it2 = e;
 				continue;
 			}
-			// learned
 			if (!removed_clauses_.count(ofs)) {
 				bool all_in = true;
 				bool sat = false;
@@ -827,6 +769,7 @@ bool Solver::dumpSubComponentCnf(Component &comp, const std::string &path,
 	}
 	return true;
 }
+
 
 // Brute-force #SAT count over the sub-component's currently-active
 // variables. Active = X_TRI under the current trail. Active clauses

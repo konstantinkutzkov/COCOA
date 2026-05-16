@@ -479,16 +479,6 @@ struct SolverConfiguration {
   // fires. Empty = don't dump (just abort with diagnostic to stderr).
   std::string brute_force_cache_dump_dir = "";
 
-  // At every entry to solveComponent where depth <= dump_recursion_max_depth,
-  // dump the super-component's formula state as a self-contained DIMACS
-  // CNF to dump_recursion_dir/super_<id>.cnf. Plus a manifest at
-  // dump_recursion_dir/log.txt with (id, depth, nvars, path) per dump.
-  // Diagnostic for top-branch debugging: re-run ganak/our-solver on each
-  // dump to find the smallest sub-formula where counts diverge.
-  // dump_recursion_dir empty = disabled.
-  std::string dump_recursion_dir = "";
-  unsigned dump_recursion_max_depth = 0;
-
   // Diagnostic: disable the canonical-key anonymization pass
   // (signature ranking, polarity flip, singleton collapse). Use
   // raw per-component active-var indices instead. Two structurally
@@ -589,31 +579,12 @@ struct SolverConfiguration {
   // The regression test now lives in test_canonical_key_invariance, which
   // uses the underscored helper Solver::_permuteClauseLiteralsForTest.)
 
-  // Dump each sub-component visited during search to <dump_comp_dir>/comp_<id>.cnf
-  // and log (id, depth, num_vars, num_clauses, our_count) to
-  // <dump_comp_dir>/log.txt at solveComponent return. A post-process script
-  // can run ganak on each CNF and find the smallest sub-component whose
-  // count our solver gets wrong. Empty string disables.
-  //
-  // Only dumps sub-components with num_vars in [min, max] to keep volume
-  // bounded. Defaults catch small-to-medium components.
-  // When non-empty, append a line per learned clause to this path at
-  // learn time. Each line contains:
-  //   LEARN ofs=<ofs> size=<n> DL=<dl> scope_size=<k>
-  //         clause: <lit lit lit ...>
-  //         stack (DL: lit ante):
-  //           <for each lit on literal_stack_>
-  //         scope: <ofs1 ofs2 ...>
-  // Used to trace the provenance of a specific learned clause when the
-  // solver's in-memory solve produces an undercount.
-  std::string learn_trace_path;
-
-  // G-to-H path capture. Recording turns ON when the clause at this ofs
-  // is learned (G), and turns OFF when solveComponent is entered with
-  // active vars equal to this set (H). Only events between G and H are
-  // written. This is the unique tree-path between the two nodes.
-  unsigned    path_trace_ofs = 0;   // 0 = disabled
-  std::string path_trace_comp_vars; // CSV ints, e.g. "61,183,184,..."
+  // (-learnTrace / learn_trace_path, -pathTrace* / path_trace_*,
+  // -stopAtBranch / stop_at_branch*, -dumpCompDir / dump_comp_dir
+  // family, and -dumpRecursionDir / dump_recursion_dir family were
+  // removed in cleanup pass 2 — they were the t1_011-investigation
+  // specific tracing infrastructure. -forceDecisions, -logBranches,
+  // -logConflicts kept since they're general-purpose.)
 
   // Forced decision sequence. Each entry is a DIMACS literal (signed int).
   // When non-empty, the solver's variable branching path uses these
@@ -632,16 +603,6 @@ struct SolverConfiguration {
   // those decisions as units to F and run a SAT solver. If SAT, that
   // conflict is SPURIOUS — the solver wrongly declared UNSAT.
   bool         log_conflicts       = false;
-  // When > 0: at the Nth branchOnLiteral entry (after BCP), dump the
-  // current in-memory formula state as a DIMACS CNF and exit 0. This
-  // extracts a smaller reproducer at the divergence point found by
-  // comparing logs.
-  long long    stop_at_branch      = 0;
-  std::string  stop_at_branch_path;
-
-  std::string dump_comp_dir;
-  unsigned    dump_comp_min_vars = 5;
-  unsigned    dump_comp_max_vars = 80;
 
   // Reactive METIS: when the precomputed hierarchy separator is
   // unavailable or rejected by the Phase-2 gate, compute a fresh

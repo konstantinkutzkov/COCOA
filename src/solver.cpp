@@ -1472,8 +1472,6 @@ bool Solver::commitFailedLiteral() {
 		    uip,
 		    /*pad_binary=*/  L >= 4,
 		    /*record_scope=*/L >= 3);
-		if (ante.isAnt() && ante.isAClause())
-			logLearnTrace(ante.asCl(), uip);
 	}
 	setLiteralIfFree(uip.front(), ante);
 	return BCP(sz);

@@ -614,25 +614,13 @@ private:
 	void verifyPostPreprocessCleanSlate(const char *label);
 
 	// Emit the current post-preprocess in-memory formula as a DIMACS
-	// CNF to `path`. Called from solve() after preprocessing and after
-	// any order-probe perturbations, so a -permBinaryLinks / -permClauseLits
-	// run produces a self-contained CNF reproducer of the perturbed
-	// state. Idempotent; no side effects on the solver state. Returns
-	// true on success, false on file-open error.
+	// CNF to `path`. Idempotent; no side effects on the solver state.
+	// Returns true on success, false on file-open error.
 	bool dumpPreprocessedCnf(const std::string &path);
 
 	// Emit a single sub-component as a standalone DIMACS CNF under the
-	// current partial assignment. Variables are remapped to the 1..N range
-	// in index-sorted order so the file is self-contained. Falsified
-	// literals are dropped; satisfied clauses are omitted. Learned and
-	// removed clauses are omitted. Binaries among active component
-	// variables are emitted once.
-	//
-	// Purpose: during search, the solver can dump each solveComponent's
-	// sub-problem to a file and log the returned count. A post-process
-	// script can then run ganak on each CNF and find the SMALLEST
-	// sub-component where our count and ganak disagree — a minimal
-	// in-tree bug reproducer.
+	// current partial assignment. Used by -bruteForceCacheDumpDir to
+	// capture offending sub-components on brute-force cache mismatch.
 	bool dumpSubComponentCnf(class Component &comp, const std::string &path,
 	                         unsigned *out_nvars = nullptr);
 
@@ -657,13 +645,6 @@ private:
 	                                             unsigned n_max,
 	                                             unsigned *out_active_n = nullptr,
 	                                             unsigned *out_n_learned_checked = nullptr);
-
-	// Append one LEARN record to config_.learn_trace_path. Called at the
-	// learn site after addScopedUIPConflictClause / addUIPConflictClause
-	// has produced a non-zero ClauseOfs. Records the new clause's ofs,
-	// size, content, the current decision stack (each lit with its DL
-	// and antecedent type), and the current clause-branching scope.
-	void logLearnTrace(ClauseOfs cl_ofs, const std::vector<LiteralID> &clause);
 
 	// Explicit, one-shot reset of every search-scoped field. Idempotent.
 	// Called from HardWireAndCompact; anything it clears is cheap

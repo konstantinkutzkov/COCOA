@@ -61,8 +61,6 @@ int main(int argc, char *argv[]) {
     cout << "\t -checkLearnInvariants\t assert antecedent-in-scope at conflict-analysis and force-set time. Debug aid for t1_011-style order-dependent bugs. Aborts on violation." << endl;
     cout << "\t -bruteForceCacheCheck N\t at every cache store/hit, if sub-component has <=N active vars, brute-force verify. Aborts on mismatch. Try N=18." << endl;
     cout << "\t -bruteForceCacheDumpDir DIR\t dump offending sub-components here when -bruteForceCacheCheck mismatches." << endl;
-    cout << "\t -dumpRecursionDir DIR\t dump SUPER-comp formula at each solveComponent entry where depth<=K. Manifest at DIR/log.txt." << endl;
-    cout << "\t -dumpRecursionMaxDepth K\t cap on dumping (default 0 = root only)." << endl;
     cout << "\t" << endl;
 
     return -1;
@@ -287,18 +285,6 @@ int main(int argc, char *argv[]) {
       if (argc <= i + 1) { cout << " -dumpNDAndExit needs a path\n"; return -1; }
       theSolver.config().dump_nd_and_exit_path = argv[i + 1];
       i++;
-    } else if (strcmp(argv[i], "-learnTrace") == 0) {
-      if (argc <= i + 1) { cout << " -learnTrace needs a path\n"; return -1; }
-      theSolver.config().learn_trace_path = argv[i + 1];
-      i++;
-    } else if (strcmp(argv[i], "-pathTraceOfs") == 0) {
-      if (argc <= i + 1) { cout << " -pathTraceOfs needs a clause ofs\n"; return -1; }
-      theSolver.config().path_trace_ofs = (unsigned)atoi(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-pathTraceCompVars") == 0) {
-      if (argc <= i + 1) { cout << " -pathTraceCompVars needs a csv var list\n"; return -1; }
-      theSolver.config().path_trace_comp_vars = argv[i + 1];
-      i++;
     } else if (strcmp(argv[i], "-logBranches") == 0) {
       theSolver.config().log_branches = true;
     } else if (strcmp(argv[i], "-logConflicts") == 0) {
@@ -314,23 +300,6 @@ int main(int argc, char *argv[]) {
         if (!tok.empty()) theSolver.config().forced_decisions.push_back(atoi(tok.c_str()));
         start = c + 1;
       }
-      i++;
-    } else if (strcmp(argv[i], "-stopAtBranch") == 0) {
-      if (argc <= i + 2) { cout << " -stopAtBranch needs N and path\n"; return -1; }
-      theSolver.config().stop_at_branch = atoll(argv[i + 1]);
-      theSolver.config().stop_at_branch_path = argv[i + 2];
-      i += 2;
-    } else if (strcmp(argv[i], "-dumpCompDir") == 0) {
-      if (argc <= i + 1) { cout << " -dumpCompDir needs a path\n"; return -1; }
-      theSolver.config().dump_comp_dir = argv[i + 1];
-      i++;
-    } else if (strcmp(argv[i], "-dumpCompMinVars") == 0) {
-      if (argc <= i + 1) { cout << " -dumpCompMinVars needs a number\n"; return -1; }
-      theSolver.config().dump_comp_min_vars = (unsigned)atoi(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-dumpCompMaxVars") == 0) {
-      if (argc <= i + 1) { cout << " -dumpCompMaxVars needs a number\n"; return -1; }
-      theSolver.config().dump_comp_max_vars = (unsigned)atoi(argv[i + 1]);
       i++;
     } else if (strcmp(argv[i], "-analyzeDynamic") == 0) {
       theSolver.config().analyze_dynamic_subsumption = true;
@@ -380,12 +349,6 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(argv[i], "-bruteForceCacheDumpDir") == 0) {
       if (argc <= i + 1) { cout << "-bruteForceCacheDumpDir needs a path\n"; return -1; }
       theSolver.config().brute_force_cache_dump_dir = argv[i + 1]; i++;
-    } else if (strcmp(argv[i], "-dumpRecursionDir") == 0) {
-      if (argc <= i + 1) { cout << "-dumpRecursionDir needs a path\n"; return -1; }
-      theSolver.config().dump_recursion_dir = argv[i + 1]; i++;
-    } else if (strcmp(argv[i], "-dumpRecursionMaxDepth") == 0) {
-      if (argc <= i + 1) { cout << "-dumpRecursionMaxDepth needs K\n"; return -1; }
-      theSolver.config().dump_recursion_max_depth = (unsigned)atoi(argv[i + 1]); i++;
     } else if (strcmp(argv[i], "-noAnonymization") == 0) {
       theSolver.config().no_anonymization = true;
     } else if (strcmp(argv[i], "-canonStats") == 0) {
