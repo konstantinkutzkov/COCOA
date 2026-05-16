@@ -151,20 +151,16 @@ struct SolverConfiguration {
   // 5 branching decisions. CLI: -decomposeAfterK.
   unsigned decompose_after_k    = 6;
 
-  // Bonus added to scoreOf(v) for separator-membership when
-  // -sepVarBias is on. CLI: -sepBiasW <float>. Default chosen
-  // empirically to dominate the freq term but stay below typical
-  // VSIDS activity scaling.
-  double separator_bias_weight = 1000.0;
-
-  // Checkpoint 1 toward score-driven branching: at separator-acceptance,
-  // strip VAR elements from the consumed separator and mark them in
-  // `sep_bias_active_`. CLAUSE elements stay in the separator and go
-  // through the existing clause-branching consumption path. VARs are
-  // chosen by `pickBranchVariable` via the bias bonus, not by forced
-  // enumeration. Reduces decision-count by removing 2-decisions-per-
-  // VAR-element-per-recursion. Clause-branching is unchanged.
-  bool   separator_vars_as_bias = false;
+  // Reorder the carried separator at acceptance time so all CLAUSE
+  // elements come first, then all VAR elements (within-kind order
+  // preserved). The standard separator-consumption loop then branches
+  // clauses first, then vars. Helps on small density-1 instances where
+  // exhausting clauses before vars gives BCP a better residual.
+  // Empirically a modest win on t1_021_k10_s1 (4.4s vs 5.0s baseline);
+  // measured to lose on dense + reactive-METIS instances like t1_041
+  // where the METIS-derived interleaved order is better, so apply per
+  // instance class rather than as a global default. CLI: -sepClausesFirst.
+  bool   separator_clauses_first = false;
 
   // The unified branch-target picker (-unifiedPicker). Scores every
   // active VAR + active long CLAUSE in the current sub-component and

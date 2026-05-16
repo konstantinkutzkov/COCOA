@@ -43,26 +43,6 @@ struct CutNode {
   }
 };
 
-// Per-frame separator metadata for one solveComponent call. Replaces
-// the scattered `separator` / `separator_reset` / `nd_node` arguments
-// previously threaded through every recursion. Lives on the call
-// stack; constructed lazily when the cache wrapper has determined the
-// residual is not cached and needs branching guidance. Stage B owns
-// the construction logic via Solver::buildSeparatorMeta. Stage C will
-// extend the picker to consume `clauses` (and the global VAR-bias
-// bitmap) as candidates rather than as a forced consumption sequence.
-struct ComponentSep {
-  // CLAUSE-typed elements of the accepted separator that are still
-  // candidates for clause-branching. VAR-typed elements are not
-  // stored here; they are marked in Solver::sep_bias_active_ at
-  // construction time and consulted by scoreOf via the picker.
-  std::vector<CutNode> clauses;
-
-  // ND-hierarchy node this separator was sourced from (>=0 for
-  // precomputed, -1 if from reactive METIS or no separator).
-  int nd_node = -1;
-};
-
 struct NDHierarchy {
   int npes = 0;          // number of leaf partitions (power of 2)
   int n_nodes = 0;       // 2*npes - 1

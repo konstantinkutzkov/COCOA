@@ -975,7 +975,7 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 	//       disconnection in the sub-call — wasteful given we already know.
 	bool at_passthrough = (nd_node >= 0 && nd_hierarchy_.valid
 	                       && nd_hierarchy_.isPassthrough(nd_node));
-	// "Separator exhausted" gate. Under baseline (and `-sepVarBias`)
+	// "Separator exhausted" gate. Under the default consumption path,
 	// the consumption loop pops elements until the carried `separator`
 	// is empty, so `separator.empty()` is the right signal. Under
 	// `-unifiedPicker` we don't pop; instead an element is "consumed"
@@ -1020,12 +1020,11 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		// Fast path: no real decomposition (1 sub identical to comp,
 		// no peeled free vars). Recursing here would lose the parent's
 		// hierarchy lineage — child_nd_node would be -1 for sub-comps
-		// that span both children of nd_node — so under -unifiedPicker
-		// the deeper acceptance rounds wouldn't find any precomputed
-		// separator to mark in sep_bias_active_. Instead, free the
-		// sub-comp (it aliases comp) and fall through to the picker
-		// at the current level: same nd_node, same accepted separator
-		// already marked, residual just slightly smaller from BCP.
+		// that span both children of nd_node — so the deeper acceptance
+		// rounds wouldn't find any precomputed separator. Instead, free
+		// the sub-comp (it aliases comp) and fall through to the picker
+		// at the current level: same nd_node, same accepted separator,
+		// residual just slightly smaller from BCP.
 		if (subcomps.size() == 1 && trivial_factor == 1) {
 			delete subcomps[0];
 			// Don't return; let control continue past this block to
@@ -1066,17 +1065,13 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				// hierarchy descent) and let the recursive solveComponent
 				// fall back to reactive METIS / plain branching. When
 				// the flag is off, the original abort discipline holds.
-				// Under -decomposeInSep / -sepVarBias / -unifiedPicker,
-				// the precomputed separator no longer strictly cuts
-				// the residual. A sub-comp may legitimately span both
-				// L and R children of nd_node; treat -2 as "no clean
-				// child mapping" and descend without hierarchy guidance.
-				// (Already true under any of those flags now, after
-				// the unified-picker fix that wires mid-consumption
-				// decompose under it.)
+				// Under -decomposeInSep / -unifiedPicker, the precomputed
+				// separator no longer strictly cuts the residual. A
+				// sub-comp may legitimately span both L and R children
+				// of nd_node; treat -2 as "no clean child mapping" and
+				// descend without hierarchy guidance.
 				if (mt == -2
 				    && (config_.decompose_in_separator
-				        || config_.separator_vars_as_bias
 				        || config_.unified_picker)) {
 					mt = -1;
 				}
@@ -1556,24 +1551,19 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				                                  (unsigned)separator.size())) {
 					separator.clear();
 				}
-				// Strip sep VARs to bias_bitmap, keep CLAUSEs in
-				// carried sep. This makes carried sep empty when sep
-				// has no clauses (e.g. t1_021_k10 root sep is all
-				// vars), triggering the post-consumption decompose
-				// path that peels free vars. The picker then reads
-				// sep var membership from sep_bias_active_ instead
-				// of the carried sep.
-				if (config_.separator_vars_as_bias
+				if (config_.separator_clauses_first
 				    && !separator.empty()) {
-					std::vector<CutNode> vars_only, clauses_only;
-					vars_only.reserve(separator.size());
-					clauses_only.reserve(separator.size());
-					for (const auto &nd : separator) {
-						if (nd.kind == CutNode::VAR) vars_only.push_back(nd);
-						else clauses_only.push_back(nd);
-					}
-					if (!vars_only.empty()) markSeparatorBias(vars_only);
-					separator = std::move(clauses_only);
+					// Reorder: all CLAUSEs first, then all VARs (within-kind
+					// order preserved). Consumption loop then branches
+					// clauses first, vars after. Helps on small density-1
+					// (sees t1_021_k10_s1 4.4s vs 5.0s no-flag).
+					std::vector<CutNode> reordered;
+					reordered.reserve(separator.size());
+					for (const auto &nd : separator)
+						if (nd.kind == CutNode::CLAUSE) reordered.push_back(nd);
+					for (const auto &nd : separator)
+						if (nd.kind == CutNode::VAR)    reordered.push_back(nd);
+					separator = std::move(reordered);
 				}
 				// Verbose logging: accepted precomputed separator —
 				// record size, component size, L/R distribution.
@@ -1761,20 +1751,15 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 							          << " L=" << r.left_vars
 							          << " R=" << r.right_vars << std::endl;
 						}
-						if (config_.separator_vars_as_bias) {
-							// Strip VARs to bias_bitmap so carried sep can
-							// be exhausted (triggering free-var peeling).
-							std::vector<CutNode> vars_only, clauses_only;
-							vars_only.reserve(r.separator.size());
-							clauses_only.reserve(r.separator.size());
-							for (const auto &nd : r.separator) {
-								if (nd.kind == CutNode::VAR)
-									vars_only.push_back(nd);
-								else
-									clauses_only.push_back(nd);
-							}
-							if (!vars_only.empty()) markSeparatorBias(vars_only);
-							separator = std::move(clauses_only);
+						if (config_.separator_clauses_first) {
+							// Reorder: all CLAUSEs first, then all VARs.
+							std::vector<CutNode> reordered;
+							reordered.reserve(r.separator.size());
+							for (const auto &nd : r.separator)
+								if (nd.kind == CutNode::CLAUSE) reordered.push_back(nd);
+							for (const auto &nd : r.separator)
+								if (nd.kind == CutNode::VAR)    reordered.push_back(nd);
+							separator = std::move(reordered);
 							nd_node = -1;
 						} else {
 							// Default + -unifiedPicker: keep all elements
@@ -2469,16 +2454,12 @@ VariableIndex Solver::pickBranchVariable(Component &comp) {
 		float fq = (float)comp_manager_.scoreOf(best);
 		float ap = literal(LiteralID(best, true)).activity_score_;
 		float an = literal(LiteralID(best, false)).activity_score_;
-		bool bm = config_.separator_vars_as_bias
-		          && best < sep_bias_active_.size()
-		          && sep_bias_active_[best];
 		std::cerr << "PICK_CALL_LEG id=" << g_leg_call
 		          << " active=" << active_count
 		          << " v=" << best
 		          << " freq=" << fq
 		          << " ap=" << ap
 		          << " an=" << an
-		          << " bias=" << (bm ? 1 : 0)
 		          << " score=" << best_score
 		          << "\n";
 	}

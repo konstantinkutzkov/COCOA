@@ -84,11 +84,11 @@ CASES: List[CalibrationCase] = [
         timeout_s=60.0,
     ),
     CalibrationCase(
-        name="t1_021_k10_s1_legacy",
+        name="t1_021_k10_s1_clausesFirst",
         cnf_filename="mc2025_track1_021_k10_s1.cnf",
-        flags="-rec -sep 5 -cb 3 -sepMode metis -sepVarBias",
+        flags="-rec -sep 5 -cb 3 -sepMode metis -sepClausesFirst",
         expected_count="430052389882336036",
-        expected_wall_s=3.94,
+        expected_wall_s=4.35,
         timeout_s=20.0,
     ),
     CalibrationCase(

@@ -299,12 +299,6 @@ private:
 	// still in collision blocks after dynamic WL.
 	std::vector<uint64_t> static_wl_labels_;
 
-	// Separator-as-bias mode: set of VAR ids the picker should boost.
-	// Filled lazily via markSeparatorBias() from the separator-acceptance
-	// gate when config_.separator_vars_as_bias is on; consulted in
-	// scoreOf. Size is num_variables()+1 (1-based, entry 0 unused).
-	std::vector<bool> sep_bias_active_;
-
 	// Throttle counter for mid-consumption decompose checks. Bumped
 	// only on BRANCHING DECISIONS (setLiteralIfFree call where
 	// !ant.isAnt() — i.e. no antecedent, top-level decision).
@@ -718,28 +712,11 @@ private:
 		// τ-based BCP-cascade addend. When cascade_score_weight > 0,
 		// augment freq+activity with log(2 / τ(1 + k_+, 1 + k_-))
 		// — the branching-number-derived proxy for "branches saved
-		// by BCP" (range [0, log 2]). Bounded magnitude so it never
-		// overpowers separator_bias_weight (1000) when sep is active;
-		// only competes with freq/activity to break ties on non-sep vars.
+		// by BCP" (range [0, log 2]). Only competes with freq/activity
+		// to break ties.
 		if (config_.cascade_score_weight > 0.0) {
 			score += (float)(config_.cascade_score_weight
 			                 * computeCascadeScore(v));
-		}
-
-		// Separator-as-bias mode: VARs the ND/reactive separator gate has
-		// accepted are treated as preferred branch targets, mirroring
-		// ganak's td_score addend (counter.cpp:1289). The bias persists
-		// across recursive solveComponent calls — once a var is marked, it
-		// keeps the boost for the remainder of the search.
-		// Static separator-bias bonus, used only outside the unified
-		// picker. Under -unifiedPicker the picker applies a
-		// dynamic-magnitude bonus (scaled by a^(-k)) itself, so we
-		// must not double-count here.
-		if (config_.separator_vars_as_bias
-		    && !config_.unified_picker
-		    && v < sep_bias_active_.size()
-		    && sep_bias_active_[v]) {
-			score += (float)config_.separator_bias_weight;
 		}
 		return score;
 	}
@@ -756,16 +733,6 @@ private:
 	// Newton-iterate τ from τ^(-a) + τ^(-b) = 1. Returns the unique
 	// τ > 1 satisfying the equation. Precondition: a, b > 0.
 	static double tauBranchingNumber(double a, double b);
-
-	// Mark VAR elements of an accepted separator as preferred branch
-	// targets. Lazy-resizes sep_bias_active_ on first call.
-	void markSeparatorBias(const std::vector<CutNode> &sep) {
-		if (sep_bias_active_.size() <= num_variables())
-			sep_bias_active_.assign(num_variables() + 1, false);
-		for (const auto &nd : sep)
-			if (nd.kind == CutNode::VAR && nd.id < sep_bias_active_.size())
-				sep_bias_active_[nd.id] = true;
-	}
 
 	bool setLiteralIfFree(LiteralID lit,
 			Antecedent ant = Antecedent(NOT_A_CLAUSE)) {

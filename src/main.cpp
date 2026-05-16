@@ -103,18 +103,14 @@ int main(int argc, char *argv[]) {
         theSolver.config().separator_min_active_vars = atoi(argv[i + 1]);
         i++;
       }
-    } else if (strcmp(argv[i], "-sepBiasW") == 0) {
-      if (i + 1 >= argc) { cout << "-sepBiasW needs a number\n"; return -1; }
-      theSolver.config().separator_bias_weight = atof(argv[i + 1]);
-      i++;
     } else if (strcmp(argv[i], "-decomposeInSep") == 0) {
       theSolver.config().decompose_in_separator = true;
     } else if (strcmp(argv[i], "-decomposeAfterK") == 0) {
       if (i + 1 >= argc) { cout << "-decomposeAfterK needs an integer\n"; return -1; }
       theSolver.config().decompose_after_k = (unsigned)atoi(argv[i + 1]);
       i++;
-    } else if (strcmp(argv[i], "-sepVarBias") == 0) {
-      theSolver.config().separator_vars_as_bias = true;
+    } else if (strcmp(argv[i], "-sepClausesFirst") == 0) {
+      theSolver.config().separator_clauses_first = true;
     } else if (strcmp(argv[i], "-unifiedPicker") == 0) {
       theSolver.config().unified_picker = true;
     } else if (strcmp(argv[i], "-clauseLenMid") == 0) {
