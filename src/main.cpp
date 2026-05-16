@@ -59,8 +59,6 @@ int main(int argc, char *argv[]) {
     cout << "\t -lspNoR4\t disable definitional elimination (R4) inside the local-search pass" << endl;
     cout << "\t -lspVerbose\t per-pass stats from the local-search pass" << endl;
     cout << "\t -checkLearnInvariants\t assert antecedent-in-scope at conflict-analysis and force-set time. Debug aid for t1_011-style order-dependent bugs. Aborts on violation." << endl;
-    cout << "\t -permWatchIndep S\t per-literal independent watch-list shuffle, seed S. Companion to -permWatchSelect for bisection." << endl;
-    cout << "\t -permWatchSelect M\t hex/dec mask: permute literal l only if (l.raw() & M) != 0. Default ~0 (all). Use with -permWatchIndep." << endl;
     cout << "\t -bruteForceCacheCheck N\t at every cache store/hit, if sub-component has <=N active vars, brute-force verify. Aborts on mismatch. Try N=18." << endl;
     cout << "\t -bruteForceCacheDumpDir DIR\t dump offending sub-components here when -bruteForceCacheCheck mismatches." << endl;
     cout << "\t -dumpRecursionDir DIR\t dump SUPER-comp formula at each solveComponent entry where depth<=K. Manifest at DIR/log.txt." << endl;
@@ -289,32 +287,6 @@ int main(int argc, char *argv[]) {
       if (argc <= i + 1) { cout << " -dumpNDAndExit needs a path\n"; return -1; }
       theSolver.config().dump_nd_and_exit_path = argv[i + 1];
       i++;
-    } else if (strcmp(argv[i], "-permClauseLits") == 0) {
-      if (argc <= i + 1) { cout << " -permClauseLits needs a seed (uint)\n"; return -1; }
-      theSolver.config().perm_clause_lits_seed = (unsigned)atoi(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-permBinaryLinks") == 0) {
-      if (argc <= i + 1) { cout << " -permBinaryLinks needs a seed (uint)\n"; return -1; }
-      theSolver.config().perm_binary_links_seed = (unsigned)atoi(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-permWatchLists") == 0) {
-      if (argc <= i + 1) { cout << " -permWatchLists needs a seed (uint)\n"; return -1; }
-      theSolver.config().perm_watch_lists_seed = (unsigned)atoi(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-permOccLists") == 0) {
-      if (argc <= i + 1) { cout << " -permOccLists needs a seed (uint)\n"; return -1; }
-      theSolver.config().perm_occ_lists_seed = (unsigned)atoi(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-sortBinaryLinks") == 0) {
-      theSolver.config().sort_binary_links = true;
-    } else if (strcmp(argv[i], "-sortWatchLists") == 0) {
-      theSolver.config().sort_watch_lists = true;
-    } else if (strcmp(argv[i], "-sortOccLists") == 0) {
-      theSolver.config().sort_occ_lists = true;
-    } else if (strcmp(argv[i], "-sortClauseLits") == 0) {
-      theSolver.config().sort_clause_lits = true;
-    } else if (strcmp(argv[i], "-sortClausePool") == 0) {
-      theSolver.config().sort_clause_pool = true;
     } else if (strcmp(argv[i], "-learnTrace") == 0) {
       if (argc <= i + 1) { cout << " -learnTrace needs a path\n"; return -1; }
       theSolver.config().learn_trace_path = argv[i + 1];
@@ -402,12 +374,6 @@ int main(int argc, char *argv[]) {
       theSolver.config().lsp_verbose = true;
     } else if (strcmp(argv[i], "-checkLearnInvariants") == 0) {
       theSolver.config().check_learn_invariants = true;
-    } else if (strcmp(argv[i], "-permWatchIndep") == 0) {
-      if (argc <= i + 1) { cout << "-permWatchIndep needs a seed\n"; return -1; }
-      theSolver.config().perm_watch_indep_seed = (unsigned)atoi(argv[i + 1]); i++;
-    } else if (strcmp(argv[i], "-permWatchSelect") == 0) {
-      if (argc <= i + 1) { cout << "-permWatchSelect needs a mask\n"; return -1; }
-      theSolver.config().perm_watch_indep_mask = (unsigned)strtoul(argv[i + 1], nullptr, 0); i++;
     } else if (strcmp(argv[i], "-bruteForceCacheCheck") == 0) {
       if (argc <= i + 1) { cout << "-bruteForceCacheCheck needs N\n"; return -1; }
       theSolver.config().brute_force_cache_check_n = (unsigned)atoi(argv[i + 1]); i++;

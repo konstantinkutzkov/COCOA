@@ -583,53 +583,11 @@ struct SolverConfiguration {
   // learning has happened.
   std::string dump_nd_and_exit_path;
 
-  // Order-sensitivity probes. Post-preprocess, before search, randomly
-  // permute a specific ordering dimension of the in-memory representation
-  // and solve. A sound counter is order-invariant; if the count flips
-  // when one of these knobs is toggled, the bug is keyed on that
-  // ordering dimension.
-  //
-  //   perm_clause_lits_seed   : shuffle stored-literal order within each
-  //                             long clause in literal_pool_. Watch list
-  //                             entries for old lits[0]/lits[1] are
-  //                             removed and re-added for new lits[0]/
-  //                             lits[1] to keep the BCP invariant intact.
-  //   perm_binary_links_seed  : shuffle binary_links_[l] for every
-  //                             literal l, preserving the trailing
-  //                             SENTINEL_LIT.
-  //   perm_watch_lists_seed   : shuffle watch_list_[l] for every literal
-  //                             l, preserving the leading SENTINEL_CL.
-  //   perm_occ_lists_seed     : shuffle occurrence_lists_[l] for every
-  //                             literal l.
-  //
-  // 0 = no permutation (default). Any non-zero seed enables that knob.
-  // Multiple knobs can be active simultaneously.
-  unsigned perm_clause_lits_seed   = 0;
-  unsigned perm_binary_links_seed  = 0;
-  unsigned perm_watch_lists_seed   = 0;
-  // Independent per-literal watch-list permutation (separate from
-  // perm_watch_lists_seed which uses a SHARED rng across literals).
-  // perm_watch_indep_seed != 0 enables; mask filters which literals
-  // get permuted (literal l permuted iff (l.raw() & perm_watch_indep_mask) != 0).
-  // Use mask = ~0u to permute all literals; smaller masks for bisection.
-  unsigned perm_watch_indep_seed   = 0;
-  unsigned perm_watch_indep_mask   = 0xFFFFFFFFu;
-  unsigned perm_occ_lists_seed     = 0;
-
-  // Canonicalize (sort) each order-sensitive structure. When the bug
-  // depends on iteration order, toggling one of these ON should make
-  // the wrong and correct files produce the same count. The toggle
-  // that fixes the bug pinpoints which ordering dimension matters.
-  bool sort_binary_links   = false;
-  bool sort_watch_lists    = false;
-  bool sort_occ_lists      = false;
-  bool sort_clause_lits    = false;
-  // Rewrite literal_pool_ with original clauses in canonical (sorted)
-  // order. Required for FULL canonicalization: different line orders in
-  // the input file produce different clause ofs values, which propagate
-  // into watch_list_ and occurrence_list_ contents even after those are
-  // sorted. Only this rewrite normalizes the ofs values themselves.
-  bool sort_clause_pool    = false;
+  // (Order-sensitivity probes — perm_*_seed / sort_* fields and their
+  // -perm* / -sort* CLI flags — were the runtime bisection harness for
+  // the t1_011 order-dependent miscount investigation, fixed 2026-04-26.
+  // The regression test now lives in test_canonical_key_invariance, which
+  // uses the underscored helper Solver::_permuteClauseLiteralsForTest.)
 
   // Dump each sub-component visited during search to <dump_comp_dir>/comp_<id>.cnf
   // and log (id, depth, num_vars, num_clauses, our_count) to

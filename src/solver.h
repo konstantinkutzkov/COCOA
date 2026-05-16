@@ -245,52 +245,6 @@ public:
 	// Test-support: number of variables after preprocessing.
 	unsigned _numVariablesForTest() { return num_variables(); }
 
-	// Order-sensitivity probes (post-preprocess, pre-search). See
-	// SolverConfiguration for the purpose. Each is idempotent and
-	// operates on the current in-memory representation; applying
-	// multiple probes composes (seeds are independent).
-
-	// Shuffle stored-literal order within each long clause AND
-	// maintain the watch invariant (remove ofs from old
-	// lits[0]/lits[1]'s watch lists, add ofs to new lits[0]/lits[1]'s
-	// watch lists). Safe for a subsequent full solve.
-	void permuteClauseLiteralsSafe(unsigned seed);
-
-	// Shuffle binary_links_[l] for every literal l, preserving the
-	// trailing SENTINEL_LIT. BCP over binary_links_ is order-sensitive
-	// in the sense of "which implied literal gets pushed first", so
-	// this probe tests whether that ordering affects the final count.
-	void permuteBinaryLinksOrder(unsigned seed);
-
-	// Shuffle watch_list_[l] for every literal l, preserving the
-	// leading SENTINEL_CL (position 0). The solver iterates via
-	// .rbegin() so shuffling changes the clause traversal order
-	// during BCP.
-	void permuteWatchListsOrder(unsigned seed);
-	void permuteWatchListsIndep(unsigned seed, uint32_t mask);
-
-	// Shuffle occurrence_lists_[l] for every literal l. Component
-	// analysis iterates occurrence_lists_ to find clauses containing
-	// each variable; if that iteration order matters for correctness
-	// (it shouldn't, for a sound counter), this probe will expose it.
-	void permuteOccurrenceListsOrder(unsigned seed);
-
-	// Canonicalize (sort) each order-sensitive structure. Each function
-	// sorts its target by a deterministic key and preserves structural
-	// invariants (SENTINEL_LIT/CL in the right positions, watches on
-	// first-two-stored lits of each clause).
-	void sortBinaryLinksOrder();
-	void sortWatchListsOrder();
-	void sortOccurrenceListsOrder();
-	void sortClauseLiteralsSafe();
-
-	// Rewrite literal_pool_ with original clauses in canonical (sorted)
-	// order. Rebuilds watch_list_ and occurrence_lists_ against the new
-	// ofs values. Call AFTER sortClauseLiteralsSafe so the comparison
-	// keys are canonical. Only original clauses are affected — call
-	// post-preprocess, before any learned clauses are added.
-	void sortClausePoolOrder();
-
 	// Test-support: prepare the solver for key-building without
 	// starting a full solve (parse file, preprocess, init component
 	// manager). Does NOT allocate the guard variable — tests that
