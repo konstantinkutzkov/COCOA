@@ -14,7 +14,6 @@
 #include "component_management.h"
 #include "nd_hierarchy.h"
 #include "canonical_key.h"
-#include "anchor_probe.h"
 
 
 
@@ -102,48 +101,6 @@ public:
 	}
 
 	void solve(const string & file_name);
-
-	// Anchor-probe dispatcher. Called from Solver::solve when
-	// config_.probe_anchor_mode is true, AFTER preprocessing + ND
-	// hierarchy build + static-WL labels are ready. Loops over
-	// candidates in config_.probe_anchor_vars at both polarities,
-	// collects per-(var, polarity) probe results, aggregates into per-var
-	// summaries, and writes the JSON output. Returns false on any
-	// internal error (caller should propagate as exit code 1).
-	//
-	// State management: each per-candidate probe rolls back the trail
-	// to the pre-probe state. Across candidates, no cache, learning, or
-	// activity state should leak (the probe runs with learning disabled
-	// and bypasses the L1/L2 component cache entirely; see
-	// docs/anchor_probe_design.md §7).
-	bool runAnchorProbeMode();
-
-	// Per-candidate probe. Pins (compact_var, polarity), runs BCP,
-	// enumerates the residual sub-components to bounded depth K with
-	// path budget B, collects canonical keys into an ephemeral
-	// multiset, computes the amplification score, restores the trail
-	// to pre-probe state.
-	anchor_probe::PerPolarityResult probeOneAnchor(
-	    unsigned compact_var, bool polarity,
-	    int max_depth, int max_paths);
-
-	// Recursive depth-bounded enumerator. For each visited
-	// sub-component:
-	//   - build canonical key via buildCanonicalKey (the existing WL
-	//     cascade); record into st.keymap with its active-var count;
-	//   - if depth_remaining > 0 AND st.budget_remaining > 0, pick a
-	//     branching var (legacy activity-score picker), branch both
-	//     polarities (each with its own setLiteralIfFree + BCP +
-	//     trail-restore), decompose the post-BCP state via
-	//     discoverComponentsOf, recurse on each sub-component with
-	//     depth_remaining - 1.
-	//
-	// State discipline: every recursive call leaves the trail and the
-	// component-manager state EXACTLY as it found them. The L1/L2
-	// component cache is bypassed entirely — st.keymap is the only
-	// place keys are recorded.
-	void probeEnumerate(Component &comp, int depth_remaining,
-	                    anchor_probe::EnumState &st);
 
 	// Queue equivalences (in input-CNF variable space, 1-indexed) to be
 	// injected into the redundant-binary lane after simplePreProcess

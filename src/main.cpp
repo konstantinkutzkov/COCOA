@@ -278,36 +278,6 @@ int main(int argc, char *argv[]) {
       theSolver.statistics().maximum_cache_size_bytes_ = atol(argv[i + 1]) * (uint64_t) 1000000;
     } else if (strcmp(argv[i], "-arjunLight") == 0) {
       arjun_light = true;
-    } else if (strcmp(argv[i], "-probeAnchorMode") == 0) {
-      theSolver.config().probe_anchor_mode = true;
-    } else if (strcmp(argv[i], "-probeAnchorDepth") == 0) {
-      if (argc <= i + 1) { cout << "-probeAnchorDepth needs an int\n"; return -1; }
-      theSolver.config().probe_anchor_depth = atoi(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-probeAnchorBudget") == 0) {
-      if (argc <= i + 1) { cout << "-probeAnchorBudget needs an int\n"; return -1; }
-      theSolver.config().probe_anchor_budget = atoi(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-probeAnchorBeta") == 0) {
-      if (argc <= i + 1) { cout << "-probeAnchorBeta needs a double\n"; return -1; }
-      theSolver.config().probe_anchor_beta = atof(argv[i + 1]);
-      i++;
-    } else if (strcmp(argv[i], "-probeAnchorVars") == 0) {
-      if (argc <= i + 1) { cout << "-probeAnchorVars needs a csv var list\n"; return -1; }
-      std::string s = argv[i + 1];
-      size_t start = 0;
-      while (start < s.size()) {
-        size_t c = s.find(',', start);
-        if (c == std::string::npos) c = s.size();
-        std::string tok = s.substr(start, c - start);
-        if (!tok.empty()) theSolver.config().probe_anchor_vars.push_back(atoi(tok.c_str()));
-        start = c + 1;
-      }
-      i++;
-    } else if (strcmp(argv[i], "-probeAnchorOut") == 0) {
-      if (argc <= i + 1) { cout << "-probeAnchorOut needs a path\n"; return -1; }
-      theSolver.config().probe_anchor_out = argv[i + 1];
-      i++;
     } else if (strcmp(argv[i], "-dumpReactiveMetisInputs") == 0) {
       if (argc <= i + 1) { cout << "-dumpReactiveMetisInputs needs a path\n"; return -1; }
       theSolver.config().dump_reactive_metis_path = argv[i + 1];
