@@ -529,15 +529,6 @@ private:
 	// size / non-trivial / dedup filters and stops at the total cap.
 	void maybeLearnImplicants(unsigned bcp_start_ofs);
 
-	// Diagnostic: scan conflict_clauses_ at end of solve and report
-	// duplication + subsumption statistics. Read-only.
-	void analyzeLearnedClausePool();
-	// Diagnostic: scan the ORIGINAL formula (clauses in literal_pool_
-	// below original_lit_pool_size_) and report how much subsumption /
-	// SSR simplification would be available. Read-only. Intended to
-	// answer: would a preprocessing pass on F itself be worth writing?
-	void analyzeOriginalClausePool();
-
 	// Invariant guard (reusable): verify the formula is
 	// unit-propagation saturated — every clause has ≥ 2 active
 	// (X_TRI) literals, or is already satisfied (≥ 1 T_TRI literal),
@@ -642,15 +633,6 @@ private:
 	// the existing probeLiteralPassFail primitive which has clean
 	// state rollback.
 	void verifyNoFailedLiterals(const char *label);
-
-	// Diagnostic: after branchOnLiteral's BCP settles, scan the clauses
-	// AFFECTED by the branching (those containing a newly-falsified
-	// literal) and count how many now subsume some other clause in
-	// their effective form. Read-only; sampled by
-	// config_.analyze_dynamic_subsumption_every. Answers the dynamic
-	// question the static analyzers cannot: does branching create
-	// subsumption opportunities the stored formula doesn't show?
-	void analyzeDynamicSubsumption(unsigned bcp_start_ofs);
 
 	// Precomputed nested-dissection hierarchy (built once at solve start)
 	NDHierarchy nd_hierarchy_;

@@ -417,24 +417,6 @@ struct SolverConfiguration {
   // of BCP over an expanded clause pool.
   bool     implicant_dry_run          = false;
 
-  // Diagnostic: at end of solve, scan the learned-clause pool and
-  // report duplication + subsumption statistics. Read-only — does
-  // not modify the pool. Used to decide whether implementing a live
-  // subsumption pass would actually help.
-  bool     analyze_clause_pool        = false;
-
-  // Diagnostic: during search, after each branchOnLiteral's BCP
-  // settles, look at the clauses AFFECTED by the branching (those
-  // containing a newly-falsified literal) and count how many have
-  // shortened effective form that would now subsume another clause.
-  // Sampled (every Nth branch) to keep cost bounded. Read-only.
-  //
-  // Measures the actually-interesting question: as the solver runs,
-  // do branches create subsumption opportunities that weren't in the
-  // static formula? The static-pool analyzer cannot answer this.
-  bool     analyze_dynamic_subsumption       = false;
-  unsigned analyze_dynamic_subsumption_every = 100;  // sample every Nth branch
-
   // Diagnostic: after preprocessing, dump the resulting formula as a
   // DIMACS CNF to the given path and exit (without solving). Used to
   // verify preprocessing soundness by feeding the dump to an

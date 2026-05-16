@@ -1895,13 +1895,6 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		if (!from_separator) {
 			maybeLearnImplicants(lit_save);
 		}
-		// Dynamic-subsumption measurement. Read-only; opt-in; sampled.
-		// Also suppressed during separator branching — measurement
-		// during that phase would count events in a state where we
-		// explicitly forbid learning, so it wouldn't be actionable.
-		if (!from_separator && config_.analyze_dynamic_subsumption) {
-			analyzeDynamicSubsumption(lit_save);
-		}
 		result = solveComponent(comp, separator, separator_reset, depth, nd_node,
 		                        reactive_metis_skip_until_depth);
 	}

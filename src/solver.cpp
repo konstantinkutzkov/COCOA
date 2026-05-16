@@ -735,30 +735,6 @@ void Solver::solve(const string &file_name) {
 		          << std::endl;
 	}
 
-	if (config_.analyze_clause_pool) {
-		analyzeOriginalClausePool();
-		analyzeLearnedClausePool();
-	}
-
-	if (config_.analyze_dynamic_subsumption) {
-		cout << "\n=== Dynamic-subsumption measurement ===" << endl;
-		cout << "  branches sampled     : " << statistics_.dyn_sub_branches_sampled_ << endl;
-		cout << "  affected clauses     : " << statistics_.dyn_sub_affected_clauses_ << endl;
-		cout << "  shortened clauses    : " << statistics_.dyn_sub_shortened_clauses_ << endl;
-		cout << "  subsumption events   : " << statistics_.dyn_sub_events_ << endl;
-		cout << "    of which → binary : " << statistics_.dyn_sub_events_to_binary_ << endl;
-		cout << "  SSR events           : " << statistics_.dyn_ssr_events_ << endl;
-		cout << "    of which → binary : " << statistics_.dyn_ssr_events_to_binary_ << endl;
-		if (statistics_.dyn_sub_branches_sampled_ > 0) {
-			cout << "  sub events / branch  : "
-			     << (double)statistics_.dyn_sub_events_ /
-			        (double)statistics_.dyn_sub_branches_sampled_ << endl;
-			cout << "  SSR events / branch  : "
-			     << (double)statistics_.dyn_ssr_events_ /
-			        (double)statistics_.dyn_sub_branches_sampled_ << endl;
-		}
-	}
-
 	if (config_.perform_implicant_learning) {
 		cout << "\n=== Implicant learning summary ===" << endl;
 		cout << "  learned            : " << statistics_.num_implicants_learned_ << endl;

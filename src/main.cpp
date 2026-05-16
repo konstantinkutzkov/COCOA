@@ -230,8 +230,6 @@ int main(int argc, char *argv[]) {
       }
     } else if (strcmp(argv[i], "-implicantDryRun") == 0) {
       theSolver.config().implicant_dry_run = true;
-    } else if (strcmp(argv[i], "-analyzeClausePool") == 0) {
-      theSolver.config().analyze_clause_pool = true;
     } else if (strcmp(argv[i], "-dumpPreprocessed") == 0) {
       if (argc <= i + 1) { cout << " -dumpPreprocessed needs a path\n"; return -1; }
       theSolver.config().dump_preprocessed_path = argv[i + 1];
@@ -256,13 +254,6 @@ int main(int argc, char *argv[]) {
         start = c + 1;
       }
       i++;
-    } else if (strcmp(argv[i], "-analyzeDynamic") == 0) {
-      theSolver.config().analyze_dynamic_subsumption = true;
-    } else if (strcmp(argv[i], "-analyzeDynamicEvery") == 0) {
-      if (i + 1 < argc && isdigit(argv[i+1][0])) {
-        theSolver.config().analyze_dynamic_subsumption_every = atoi(argv[i + 1]);
-        i++;
-      }
     } else if (strcmp(argv[i], "-implicantMinChain") == 0) {
       if (i + 1 < argc && isdigit(argv[i+1][0])) {
         theSolver.config().implicant_min_chain_depth = atoi(argv[i + 1]);

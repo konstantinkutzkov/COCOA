@@ -83,16 +83,6 @@ public:
   // and are not counted here.
   unsigned long long num_learned_binary_filtered_ = 0;
 
-  // Dynamic subsumption measurement (see analyze_dynamic_subsumption
-  // in solver_config.h). All zero unless flag is enabled.
-  unsigned long dyn_sub_branches_sampled_    = 0;
-  unsigned long dyn_sub_affected_clauses_    = 0;  // clauses containing a newly-falsified lit
-  unsigned long dyn_sub_shortened_clauses_   = 0;  // of which effectively shrank
-  unsigned long dyn_sub_events_              = 0;  // pairs where shortened C subsumes some D
-  unsigned long dyn_sub_events_to_binary_    = 0;  // among events: subsuming C effectively = 2 lits
-  unsigned long dyn_ssr_events_              = 0;  // pairs where SSR on some l would shorten a D
-  unsigned long dyn_ssr_events_to_binary_    = 0;  // among SSR events: result would be length 2
-
   // Implicant learning (Phase 4). All zero unless
   // config_.perform_implicant_learning is on.
   unsigned long num_implicants_learned_        = 0;
