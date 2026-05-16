@@ -273,22 +273,6 @@ struct SolverConfiguration {
   // experiment with probing on dense instances (e.g. t1_049).
   unsigned adaptive_probing_min_vars = 60;
 
-  // Verify cache keys: lookup() always misses, and store() compares the
-  // newly computed count against any previously stored count for the
-  // same key. A mismatch indicates a semantic bug in the canonical key.
-  bool verify_cache = false;
-
-  // L2 canonical-cache key mode.
-  //   true  (default): compact — identity is the 128-bit canonical
-  //                    hash alone. No clause multiset stored. Relies on
-  //                    hash width for collision safety (~10^-20).
-  //   false           : strict — also stores and compares the full
-  //                    normalized clause multiset. Debug aid: lets us
-  //                    tell a canonical-hash collision from a
-  //                    canonicalization fault when a miscount is seen.
-  //                    Intended to be removed once compact is proven.
-  bool canonical_compact = true;
-
   // Anchor probe mode. When `probe_anchor_mode` is true, the solver
   // runs preprocessing + ND-build + static-WL-labels as normal, then
   // dispatches into the depth-bounded anchor probe (per
@@ -385,19 +369,6 @@ struct SolverConfiguration {
   // Where to dump offending sub-components when the brute-force check
   // fires. Empty = don't dump (just abort with diagnostic to stderr).
   std::string brute_force_cache_dump_dir = "";
-
-  // Diagnostic: disable the canonical-key anonymization pass
-  // (signature ranking, polarity flip, singleton collapse). Use
-  // raw per-component active-var indices instead. Two structurally
-  // identical sub-components with different var orderings will then
-  // hash differently — cache hits drop sharply, but if the bug
-  // disappears, the anonymization pass is the carrier.
-  bool no_anonymization = false;
-
-  // Print canonical-key stats (CANON_STATS, CANON_MAX_BLOCK_HISTOGRAM,
-  // CANON_STATS_ITER2) to stderr at end of solve. Off by default — these
-  // are useful for portfolio/profiling work but noisy in production.
-  bool print_canon_stats = false;
 
   // ===============================================================
   // END diagnostic flags

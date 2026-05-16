@@ -28,15 +28,18 @@
 
 static bool keys_equal(const CanonicalKey &a, const CanonicalKey &b) {
     return a.hash == b.hash
+        && a.hash_hi == b.hash_hi
         && a.num_vars == b.num_vars
-        && a.num_clauses == b.num_clauses
-        && a.clauses == b.clauses;
+        && a.n_in_clauses == b.n_in_clauses
+        && a.num_clauses == b.num_clauses;
 }
 
 static void dump(const char *label, const CanonicalKey &k) {
     std::cout << label
               << ": hash=" << k.hash
+              << " hash_hi=" << k.hash_hi
               << " nvars=" << k.num_vars
+              << " n_in_clauses=" << k.n_in_clauses
               << " nclauses=" << k.num_clauses << "\n";
 }
 
@@ -60,18 +63,13 @@ int main(int argc, char *argv[]) {
         return 2;
     }
 
-    // Pick three distinct active variables. We use the first three
-    // literals of the first clause, which by construction references
-    // active vars only.
-    if (k0.clauses.empty() || k0.clauses.front().size() < 2) {
-        std::cerr << "fixture error: no multi-literal clauses in canonical "
-                  << "key, cannot construct a learned clause over active "
-                  << "variables\n";
+    if (k0.num_clauses == 0) {
+        std::cerr << "fixture error: canonical key has no clauses, cannot "
+                  << "construct a learned clause over active variables\n";
         return 2;
     }
     // Pull three active variable IDs from the (post-preprocess,
-    // post-compact) solver. Canonical IDs in k0 are 1..n_nonsing; we
-    // need RAW variable IDs for injection. Iterate variables directly.
+    // post-compact) solver. Iterate variables directly.
     std::vector<int> active_vars;
     for (unsigned v = 1; v <= h0._numVariablesForTest() && active_vars.size() < 3; v++) {
         if (h0._isActiveForTest(v)) active_vars.push_back((int)v);

@@ -207,12 +207,12 @@ public:
 	// start), compute the canonical key for the super-component. Used
 	// by test_canonical_key_invariance to verify the key is invariant
 	// under stored-clause-literal permutations.
-	CanonicalKey _computeRootCanonicalKey(bool compact = false) {
+	CanonicalKey _computeRootCanonicalKey() {
 		Component &root = comp_manager_.superComponentOf(stack_.top());
 		return buildCanonicalKey(
 		    root, literal_pool_, literals_, literal_values_,
 		    comp_manager_.getAnalyzer().clauseIdToOfs(),
-		    removed_clauses_, original_lit_pool_size_, compact);
+		    removed_clauses_, original_lit_pool_size_);
 	}
 
 	// Test-support: randomly permute the stored-literal order within

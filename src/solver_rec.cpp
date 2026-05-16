@@ -323,158 +323,6 @@ void Solver::maybeLearnImplicants(unsigned bcp_start_ofs)
   }
 }
 
-// Signature of a component: sorted list of sorted clauses (each clause is
-// a sorted vector of current literal ints over active variables).
-static string componentSignature(
-    const Component &comp,
-    const vector<LiteralID> &literal_pool,
-    const LiteralIndexedVector<Literal> &literals,
-    const LiteralIndexedVector<TriValue> &literal_values,
-    const vector<ClauseOfs> &clause_id_to_ofs,
-    const unordered_map<ClauseOfs, unsigned> &removed_clauses,
-    unsigned original_lit_pool_size) {
-  vector<unsigned> active;
-  for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++)
-    if (literal_values[LiteralID(*it, true)] == X_TRI)
-      active.push_back(*it);
-  std::sort(active.begin(), active.end());
-
-  vector<vector<int>> clauses;
-  for (auto it = comp.clsBegin(); *it != clsSENTINEL; it++) {
-    ClauseOfs ofs = clause_id_to_ofs[*it];
-    if (removed_clauses.count(ofs)) continue;
-    if (ofs >= original_lit_pool_size) continue;
-    bool satisfied = false;
-    vector<int> lits;
-    for (auto lt = literal_pool.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
-      if (literal_values[*lt] == T_TRI) { satisfied = true; break; }
-      if (literal_values[*lt] == X_TRI) lits.push_back(lt->toInt());
-    }
-    if (satisfied || lits.size() < 2) continue;
-    std::sort(lits.begin(), lits.end());
-    clauses.push_back(std::move(lits));
-  }
-  std::unordered_set<unsigned> act_set(active.begin(), active.end());
-  for (unsigned v : active) {
-    for (int sign = 0; sign <= 1; sign++) {
-      LiteralID lit(v, sign == 0);
-      unsigned orig_count = literals[lit].original_binary_link_count_;
-      unsigned idx = 0;
-      for (auto bt = literals[lit].binary_links_.begin();
-           *bt != SENTINEL_LIT; bt++, idx++) {
-        if (idx >= orig_count) break;
-        unsigned other = bt->var();
-        if (other <= v) continue;
-        if (!act_set.count(other)) continue;
-        if (literal_values[*bt] == T_TRI) continue;
-        if (literal_values[lit] == T_TRI) continue;
-        vector<int> lits = {lit.toInt(), bt->toInt()};
-        std::sort(lits.begin(), lits.end());
-        clauses.push_back(std::move(lits));
-      }
-    }
-  }
-  std::sort(clauses.begin(), clauses.end());
-  std::ostringstream oss;
-  oss << "V:";
-  for (unsigned v : active) oss << v << ",";
-  oss << " C:";
-  for (const auto &c : clauses) {
-    oss << "[";
-    for (int l : c) oss << l << ",";
-    oss << "]";
-  }
-  return oss.str();
-}
-
-// Side-table for verify mode: key.hash -> first-occurrence signature.
-// Used to confirm whether canonical-key collisions produce different
-// component contents.
-static std::unordered_map<uint64_t, string> g_first_sig;
-
-// Dump the current state of a Component to cerr in a readable form:
-// active variables, active long clauses (with current literal values),
-// and binary clauses between active variables (original-only). Used by
-// verify_cache mode when a key-count mismatch is detected.
-static void dumpComponentState(
-    const Component &comp,
-    const vector<LiteralID> &literal_pool,
-    const LiteralIndexedVector<Literal> &literals,
-    const LiteralIndexedVector<TriValue> &literal_values,
-    const vector<ClauseOfs> &clause_id_to_ofs,
-    const unordered_map<ClauseOfs, unsigned> &removed_clauses,
-    unsigned original_lit_pool_size,
-    const char *tag) {
-  cerr << "---- " << tag << " ----\n";
-  vector<unsigned> active;
-  for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++)
-    if (literal_values[LiteralID(*it, true)] == X_TRI)
-      active.push_back(*it);
-  cerr << "  active_vars(" << active.size() << "):";
-  for (unsigned v : active) cerr << " " << v;
-  cerr << "\n";
-
-  // Long clauses from component (original + learned)
-  unsigned n_long = 0, n_learned = 0, n_removed = 0, n_sat_filtered = 0;
-  for (auto it = comp.clsBegin(); *it != clsSENTINEL; it++) {
-    ClauseOfs ofs = clause_id_to_ofs[*it];
-    if (removed_clauses.count(ofs)) { n_removed++; continue; }
-    bool satisfied = false;
-    vector<int> lits_all;       // including resolved (F_TRI) as-is
-    vector<int> lits_active;    // only X_TRI
-    for (auto lt = literal_pool.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
-      lits_all.push_back(lt->toInt());
-      if (literal_values[*lt] == T_TRI) { satisfied = true; break; }
-      if (literal_values[*lt] == X_TRI) lits_active.push_back(lt->toInt());
-    }
-    if (satisfied) { n_sat_filtered++; continue; }
-    bool is_learned = (ofs >= original_lit_pool_size);
-    if (lits_active.size() < 2) {
-      cerr << "  [SKIPPED len<2] C[id=" << *it << ",ofs=" << ofs
-           << (is_learned ? " LEARNED" : "") << "]: active:";
-      for (int l : lits_active) cerr << " " << l;
-      cerr << " | all:";
-      for (int l : lits_all) cerr << " " << l;
-      cerr << "\n";
-      continue;
-    }
-    cerr << "  C[id=" << *it << ",ofs=" << ofs
-         << (is_learned ? " LEARNED" : "") << "]:";
-    for (int l : lits_active) cerr << " " << l;
-    if (lits_active.size() != lits_all.size()) {
-      cerr << "  (full:";
-      for (int l : lits_all) cerr << " " << l;
-      cerr << ")";
-    }
-    cerr << "\n";
-    if (is_learned) n_learned++;
-    n_long++;
-  }
-  cerr << "  (n_removed_in_comp=" << n_removed << " n_satisfied_in_comp="
-       << n_sat_filtered << " n_learned=" << n_learned << ")\n";
-  // Binary clauses
-  unsigned n_bin = 0;
-  std::unordered_set<unsigned> act_set(active.begin(), active.end());
-  for (unsigned v : active) {
-    for (int sign = 0; sign <= 1; sign++) {
-      LiteralID lit(v, sign == 0);
-      unsigned orig_count = literals[lit].original_binary_link_count_;
-      unsigned idx = 0;
-      for (auto bt = literals[lit].binary_links_.begin();
-           *bt != SENTINEL_LIT; bt++, idx++) {
-        if (idx >= orig_count) break;
-        unsigned other = bt->var();
-        if (other <= v) continue;
-        if (!act_set.count(other)) continue;
-        if (literal_values[*bt] == T_TRI) continue;
-        if (literal_values[lit] == T_TRI) continue;
-        cerr << "  B: " << lit.toInt() << " " << bt->toInt() << "\n";
-        n_bin++;
-      }
-    }
-  }
-  cerr << "  n_long=" << n_long << " n_bin=" << n_bin << "\n";
-}
 
 SOLVER_StateT Solver::countSATRec() {
 	// Build precomputed ND hierarchy if separator branching is enabled.
@@ -688,8 +536,7 @@ mpz_class Solver::solveComponent(Component &comp,
 		cached_key = buildCanonicalKey(
 		    comp, literal_pool_, literals_, literal_values_,
 		    comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
-		    original_lit_pool_size_, config_.canonical_compact,
-		    config_.no_anonymization, config_.wl_iterations,
+		    original_lit_pool_size_, config_.wl_iterations,
 		    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
 		key_built = true;
 		free_vars = (cached_key.num_vars > cached_key.n_in_clauses)
@@ -1184,7 +1031,6 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			IdKey id_key;
 			if (config_.perform_component_caching
 			    && sub->num_variables() >= 3
-			    && !config_.verify_cache
 			    && sub->hasL1Hash()) {
 				id_key.hash_lo = sub->l1HashLo();
 				id_key.hash_hi = sub->l1HashHi();
@@ -1223,13 +1069,12 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			CanonicalKey key = buildCanonicalKey(
 				*sub, literal_pool_, literals_, literal_values_,
 				comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
-				original_lit_pool_size_, config_.canonical_compact,
-				config_.no_anonymization, config_.wl_iterations,
+				original_lit_pool_size_, config_.wl_iterations,
 				static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
 			bool hit = (config_.perform_component_caching &&
 			            sub->num_variables() >= 3 &&
 			            comp_manager_.contentCache().peek(key, sub_count));
-			if (hit && !config_.verify_cache) {
+			if (hit) {
 				// L2 hit: canonicalized form matches a previously-cached
 				// sub-component. Populate L1 so future visits with this
 				// same ID-set skip the canonical build.
@@ -1266,69 +1111,7 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				delete sub;
 				continue;
 			}
-			if (hit && config_.verify_cache) {
-				// Compare-on-hit: we have `sub_count` = cached value. Force
-				// a fresh recomputation (via recursion) and compare.
-				mpz_class cached = sub_count;
-				string cur_sig = componentSignature(*sub, literal_pool_, literals_,
-				    literal_values_, comp_manager_.getAnalyzer().clauseIdToOfs(),
-				    rm, original_lit_pool_size_);
-				mpz_class recomputed = solveComponent(*sub, {}, true, depth + 1, child_nd_node,
-				                                       reactive_metis_skip_until_depth);
-				comp_manager_.contentCache().stats_verify_checks++;
-				if (cached != recomputed) {
-					auto it = g_first_sig.find(key.hash);
-					cerr << "\n*** CACHE_HIT_MISMATCH ***\n"
-					     << "  current_sig   = " << cur_sig << "\n";
-					if (it != g_first_sig.end()) {
-						cerr << "  first_sig     = " << it->second << "\n";
-						cerr << "  signatures "
-						     << (it->second == cur_sig ? "MATCH (true collision in key-only algo)"
-						                                : "DIFFER (canonical key collision)")
-						     << "\n";
-					} else {
-						cerr << "  first_sig     = <not recorded>\n";
-					}
-					cerr << "  key.hash        = 0x" << std::hex << key.hash << std::dec << "\n"
-					     << "  key.num_vars    = " << key.num_vars << "\n"
-					     << "  key.num_clauses = " << key.num_clauses << "\n"
-					     << "  cached    = " << cached << "\n"
-					     << "  recomputed= " << recomputed << "\n"
-					     << "  diff      = " << (recomputed - cached) << "\n"
-					     << "  removed_clauses (current): " << removed_clauses_.size() << "\n"
-					     << "  literal_stack_ size: " << literal_stack_.size() << "\n";
-					cerr << "  literal_stack_:";
-					for (auto lit : literal_stack_) cerr << " " << lit.toInt();
-					cerr << "\n  removed_clauses (content):\n";
-					for (auto &p : removed_clauses_) {
-						cerr << "    ofs=" << p.first << " cnt=" << p.second << ":";
-						for (auto lt = literal_pool_.begin() + p.first; *lt != SENTINEL_LIT; lt++) {
-							cerr << " " << lt->toInt();
-							const char *tag = (literal_values_[*lt] == T_TRI ? "(T)"
-							               : (literal_values_[*lt] == F_TRI ? "(F)" : ""));
-							cerr << tag;
-						}
-						cerr << "\n";
-					}
-					dumpComponentState(*sub, literal_pool_, literals_, literal_values_,
-					                   comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
-					                   original_lit_pool_size_,
-					                   "SUB-COMPONENT AT CACHE-HIT");
-					cerr.flush();
-					std::abort();
-				}
-				comp_manager_.contentCache().stats_verify_ok++;
-				result *= cached;
-				delete sub;
-				continue;
-			}
 			// Miss — recurse on sub-component
-			string pre_sig;
-			if (config_.verify_cache && config_.perform_component_caching && sub->num_variables() >= 3) {
-				pre_sig = componentSignature(*sub, literal_pool_, literals_,
-				    literal_values_, comp_manager_.getAnalyzer().clauseIdToOfs(),
-				    rm, original_lit_pool_size_);
-			}
 			// Per-component BCP filter mask. Only fires when decomposition
 			// actually split the formula (`decomposed` set above). A learned
 			// clause whose vars escape *sub's varsBegin would propagate
@@ -1470,16 +1253,10 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				}
 			}
 			if (config_.perform_component_caching && sub->num_variables() >= 3) {
-				if (config_.verify_cache && g_first_sig.find(key.hash) == g_first_sig.end()) {
-					g_first_sig[key.hash] = pre_sig;
-				}
 				comp_manager_.contentCache().store(key, sub_count);
-				if (!config_.verify_cache) {
-					// Populate L1 so future visits to the same ID-set skip
-					// the canonical build. Skipped under verify_cache because
-					// that mode force-recomputes everything.
-					comp_manager_.contentCache().l1_store(id_key, sub_count);
-				}
+				// Populate L1 so future visits to the same ID-set skip
+				// the canonical build.
+				comp_manager_.contentCache().l1_store(id_key, sub_count);
 			}
 			result *= sub_count;
 			delete sub;

@@ -81,47 +81,13 @@ private:
 extern ClauseTypeDictionary g_clause_type_dict;
 
 // ---------------------------------------------------------------
-// Diagnostic stats for the anonymization pass.
-// ---------------------------------------------------------------
-struct CanonStats {
-  long long n_calls = 0;
-  long long sum_anchored = 0;
-  long long sum_collision_block_vars = 0;
-  long long sum_orientation_ambiguous_in_blocks = 0;
-  long long calls_with_any_collision = 0;
-  unsigned  max_block_size = 0;
-  // Histogram of largest-block-per-call: bucket = floor(log2(size+1))
-  long long max_block_buckets[16] = {0};  // up to size 32k+
-  // After-iter-2 (if enabled), for direct comparison
-  long long sum_anchored_iter2 = 0;
-  long long sum_collision_block_vars_iter2 = 0;
-  long long calls_with_any_collision_iter2 = 0;
-  unsigned  max_block_size_iter2 = 0;
-  long long max_block_buckets_iter2[16] = {0};
-};
-extern CanonStats g_canon_stats;
-
-// ---------------------------------------------------------------
-// Canonical key: two modes of equality.
+// Canonical key.
 //
-// COMPACT (default):
-//   Identity is a 128-bit hash — `hash` (low half) + `hash_hi` (high
-//   half), each a different FNV sum over the canonical clauses. The
-//   `clauses` vector is left empty. `operator==` compares only the
-//   two 64-bit halves. At ~10^-20 birthday-collision probability,
-//   wrong-answer risk from hash collisions is functionally zero.
-//
-// STRICT (debug-only, opt-in via -l2Strict):
-//   Adds the full normalized clause multiset. `operator==` requires
-//   the hash halves, counts, AND the full multiset to match. Closes
-//   the systematic-collision hole at the cost of larger keys and a
-//   deeper equality check. Useful for forensic debugging: if we see
-//   a miscount under compact mode, flipping to strict tells us
-//   whether the cause was a canonical-form hash collision (strict
-//   fixes it) or a canonicalization fault (strict stays broken).
-//
-// The `compact` flag carries the mode. `CanonicalKeyHash` always
-// buckets on the low half; only equality differs.
+// Identity is a 128-bit hash — `hash` (low half) + `hash_hi` (high
+// half), each a different FNV sum over the canonical clauses.
+// `operator==` compares only the two 64-bit halves. At ~10^-20
+// birthday-collision probability, wrong-answer risk is functionally
+// zero. `CanonicalKeyHash` buckets on the low half.
 // ---------------------------------------------------------------
 struct CanonicalKey {
   uint64_t hash = 0;            // low 64 bits of the 128-bit L2 hash
@@ -129,24 +95,9 @@ struct CanonicalKey {
   unsigned num_vars = 0;        // total active (X_TRI) vars in the sub-component
   unsigned n_in_clauses = 0;    // active vars actually appearing in at least one canonical clause
   unsigned num_clauses = 0;
-  bool compact = true;          // true: 128-bit pure hash; false: + clauses
-  std::vector<std::vector<int>> clauses;  // strict mode only
 
   bool operator==(const CanonicalKey &other) const {
-    if (hash != other.hash) return false;
-    if (hash_hi != other.hash_hi) return false;
-    if (compact && other.compact) return true;
-    // Strict mode: use structural fields only. num_vars (which includes
-    // free vars) is intentionally NOT checked — under the
-    // structural-count cache scheme, two sub-components that share the
-    // same active connected structure but differ only in their count of
-    // free vars (vars not in any clause) MUST collide on this key, so
-    // they share a single cache entry; the per-caller free-var factor
-    // is applied at store/retrieve via 2^(num_vars - n_in_clauses).
-    if (compact != other.compact) return false;
-    if (n_in_clauses != other.n_in_clauses) return false;
-    if (num_clauses != other.num_clauses) return false;
-    return clauses == other.clauses;
+    return hash == other.hash && hash_hi == other.hash_hi;
   }
 };
 
@@ -167,8 +118,6 @@ CanonicalKey buildCanonicalKey(
     const std::vector<ClauseOfs> &clause_id_to_ofs,
     const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
     unsigned original_lit_pool_size,
-    bool compact = true,
-    bool no_anonymization = false,
     int wl_iterations = 1,
     const std::vector<uint64_t> *static_wl_labels = nullptr);
 

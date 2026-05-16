@@ -17,9 +17,6 @@
 // Global clause type dictionary
 ClauseTypeDictionary g_clause_type_dict;
 
-// Global canon stats
-CanonStats g_canon_stats;
-
 // Reusable buffers to avoid heap allocation per call.
 //
 // PERFORMANCE NOTE — single-threaded only.
@@ -62,8 +59,6 @@ CanonicalKey buildCanonicalKey(
     const std::vector<ClauseOfs> &clause_id_to_ofs,
     const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
     unsigned original_lit_pool_size,
-    bool compact,
-    bool no_anonymization,
     int wl_iterations,
     const std::vector<uint64_t> *static_wl_labels) {
 
@@ -75,7 +70,6 @@ CanonicalKey buildCanonicalKey(
 
   if (s_active_vars.empty()) {
     CanonicalKey k;
-    k.compact = compact;
     return k;
   }
 
@@ -250,22 +244,8 @@ CanonicalKey buildCanonicalKey(
   }
 
   // Sort signatures → assign canonical IDs.
-  // When no_anonymization is set, bypass signature ranking entirely:
-  // use the raw active-vars index (i+1) as the "canonical" ID and
-  // clear all flip/singleton flags so polarity/singleton-collapse
-  // don't kick in either. This makes the key dependent on the
-  // absolute structure (modulo a stable per-component renumbering),
-  // ruling out any bug introduced by the anonymization pass.
   s_canonical_id.assign(n_vars, 0);
-  if (no_anonymization) {
-    for (unsigned i = 0; i < n_vars; i++) {
-      s_canonical_id[i] = i + 1;
-      s_var_flags[i] = 0;  // no singleton, no flip
-    }
-    s_sig_pairs.clear();
-    for (unsigned i = 0; i < n_vars; i++)
-      s_sig_pairs.push_back({0, i});
-  } else {
+  {
     s_sig_pairs.clear();
     for (unsigned i = 0; i < n_vars; i++)
       if (!(s_var_flags[i] & 1))
@@ -276,43 +256,17 @@ CanonicalKey buildCanonicalKey(
     for (unsigned i = 0; i < s_sig_pairs.size(); i++)
       s_canonical_id[s_sig_pairs[i].second] = i + 1;
 
-    // Diagnostic: scan adjacent equal-signature runs for collision blocks.
-    g_canon_stats.n_calls++;
-    unsigned anchored = 0;
-    unsigned coll_vars = 0;
-    unsigned orient_amb = 0;
-    unsigned max_block_in_call = 1;
+    // Scan adjacent equal-signature runs for collision blocks. The
+    // counters here feed WL-refinement control flow below (collision_now
+    // gates the WL loop and the static-WL combine step).
     bool had_any_collision = false;
     size_t i = 0;
     while (i < s_sig_pairs.size()) {
       size_t j = i + 1;
       while (j < s_sig_pairs.size() && s_sig_pairs[j].first == s_sig_pairs[i].first)
         j++;
-      unsigned block_size = (unsigned)(j - i);
-      if (block_size == 1) {
-        anchored++;
-      } else {
-        had_any_collision = true;
-        coll_vars += block_size;
-        if (block_size > max_block_in_call) max_block_in_call = block_size;
-        for (size_t k = i; k < j; k++) {
-          unsigned idx = s_sig_pairs[k].second;
-          if (s_pos_count[idx] == s_neg_count[idx]) orient_amb++;
-        }
-      }
+      if (j - i > 1) had_any_collision = true;
       i = j;
-    }
-    g_canon_stats.sum_anchored += anchored;
-    g_canon_stats.sum_collision_block_vars += coll_vars;
-    g_canon_stats.sum_orientation_ambiguous_in_blocks += orient_amb;
-    if (had_any_collision) g_canon_stats.calls_with_any_collision++;
-    if (max_block_in_call > g_canon_stats.max_block_size)
-      g_canon_stats.max_block_size = max_block_in_call;
-    // bucket = floor(log2(max_block_in_call)), clamped to 15
-    {
-      unsigned bucket = 0, x = max_block_in_call;
-      while (x > 1 && bucket < 15) { x >>= 1; bucket++; }
-      g_canon_stats.max_block_buckets[bucket]++;
     }
 
     // WL refinement loop.
@@ -337,9 +291,6 @@ CanonicalKey buildCanonicalKey(
     std::vector<uint64_t> block_label(n_vars, 0);
     for (unsigned i = 0; i < n_vars; i++) block_label[i] = s_sig[i];
     bool collision_now = had_any_collision;
-    unsigned final_anchored = anchored;
-    unsigned final_coll_vars = coll_vars;
-    unsigned final_max_block = max_block_in_call;
     for (int iter = 2; iter <= wl_iterations && collision_now; iter++) {
       std::vector<uint64_t> sig_k(n_vars, 0);
       for (const auto &ref : s_clause_refs) {
@@ -372,27 +323,14 @@ CanonicalKey buildCanonicalKey(
         if (s_var_flags[i] & 1) continue;
         block_label[i] = mix64(block_label[i] ^ (sig_k[i] * 0x9E3779B97F4A7C15ULL));
       }
-      // Recount blocks by sorting block_labels.
-      std::vector<std::pair<uint64_t, unsigned>> order;
-      order.reserve(s_sig_pairs.size());
-      for (auto &p : s_sig_pairs)
-        order.push_back({block_label[p.second], p.second});
-      std::sort(order.begin(), order.end());
-      unsigned anch_k = 0, coll_k = 0, max_k = 1;
-      bool any_k = false;
-      size_t a = 0;
-      while (a < order.size()) {
-        size_t b = a + 1;
-        while (b < order.size() && order[b].first == order[a].first) b++;
-        unsigned bs = (unsigned)(b - a);
-        if (bs == 1) anch_k++;
-        else { any_k = true; coll_k += bs; if (bs > max_k) max_k = bs; }
-        a = b;
-      }
-      collision_now = any_k;
-      final_anchored = anch_k;
-      final_coll_vars = coll_k;
-      final_max_block = max_k;
+      // Recount: any collision still left?
+      std::vector<uint64_t> labels;
+      labels.reserve(s_sig_pairs.size());
+      for (auto &p : s_sig_pairs) labels.push_back(block_label[p.second]);
+      std::sort(labels.begin(), labels.end());
+      collision_now = false;
+      for (size_t k = 1; k < labels.size(); k++)
+        if (labels[k] == labels[k - 1]) { collision_now = true; break; }
     }
     // Step 3: combine with static (preprocessing-time) WL labels for
     // vars still in collision blocks. Refines those blocks using
@@ -413,26 +351,14 @@ CanonicalKey buildCanonicalKey(
           block_label[i] = mix64(block_label[i] ^ (sl * 0x9E3779B97F4A7C15ULL));
         }
       }
-      // Recount blocks after step 3.
-      std::vector<std::pair<uint64_t, unsigned>> reord;
-      reord.reserve(s_sig_pairs.size());
-      for (auto &p : s_sig_pairs) reord.push_back({block_label[p.second], p.second});
-      std::sort(reord.begin(), reord.end());
-      unsigned anch3 = 0, coll3 = 0, max3 = 1;
-      bool any3 = false;
-      size_t pa = 0;
-      while (pa < reord.size()) {
-        size_t pb = pa + 1;
-        while (pb < reord.size() && reord[pb].first == reord[pa].first) pb++;
-        unsigned bs = (unsigned)(pb - pa);
-        if (bs == 1) anch3++;
-        else { any3 = true; coll3 += bs; if (bs > max3) max3 = bs; }
-        pa = pb;
-      }
-      collision_now = any3;
-      final_anchored = anch3;
-      final_coll_vars = coll3;
-      final_max_block = max3;
+      // Recount: any collisions still left after step 3?
+      std::vector<uint64_t> labels;
+      labels.reserve(s_sig_pairs.size());
+      for (auto &p : s_sig_pairs) labels.push_back(block_label[p.second]);
+      std::sort(labels.begin(), labels.end());
+      collision_now = false;
+      for (size_t k = 1; k < labels.size(); k++)
+        if (labels[k] == labels[k - 1]) { collision_now = true; break; }
     }
     // Step 4: final canonical-ID assignment with identity fallback for
     // residual collision-block vars.
@@ -469,27 +395,15 @@ CanonicalKey buildCanonicalKey(
           s_var_flags[i] |= 4;  // mark residual: pass 2 will skip flip
         }
       }
-      g_canon_stats.sum_anchored_iter2 += final_anchored;
-      g_canon_stats.sum_collision_block_vars_iter2 += final_coll_vars;
-      if (collision_now) g_canon_stats.calls_with_any_collision_iter2++;
-      if (final_max_block > g_canon_stats.max_block_size_iter2)
-        g_canon_stats.max_block_size_iter2 = final_max_block;
-      unsigned bucket_f = 0, xf = final_max_block;
-      while (xf > 1 && bucket_f < 15) { xf >>= 1; bucket_f++; }
-      g_canon_stats.max_block_buckets_iter2[bucket_f]++;
     }
   }
 
-  // Pass 2: Compute component hash using canonical IDs. In compact
-  // mode we also compute a second independent FNV to fill hash_hi
-  // (different offset basis + different multiplier), and we skip
-  // materializing the canonical clause multiset. In strict mode we
-  // still populate `canonical_clauses` for the deep equality check.
+  // Pass 2: Compute component hash using canonical IDs. Two independent
+  // FNV sums (different offset basis + different multiplier) fill hash
+  // and hash_hi for a 128-bit identity.
   uint64_t component_hash = 0;
   uint64_t component_hash_hi = 0;
   unsigned total_clauses = 0;
-  std::vector<std::vector<int>> canonical_clauses;
-  if (!compact) canonical_clauses.reserve(s_clause_refs.size());
 
   for (const auto &ref : s_clause_refs) {
     int canon_buf[256];
@@ -548,61 +462,7 @@ CanonicalKey buildCanonicalKey(
     component_hash += ch_lo;
     component_hash_hi += ch_hi;
     total_clauses++;
-
-    if (!compact) {
-      // Store the canonical clause (sorted) for structural equality check.
-      canonical_clauses.emplace_back(canon_buf, canon_buf + canon_len);
-    }
   }
-
-  // Sort clauses lexicographically so the multiset has a canonical order.
-  if (!compact) std::sort(canonical_clauses.begin(), canonical_clauses.end());
-
-  // --- Sanity-check guards: debug-only -----------------------------
-  // These structural invariants on the canonical form are redundant
-  // with the external regression tests (test_canonical_key_invariance,
-  // test_canonical_key_learned) and are O(Σ|clause|) per build. With
-  // ~100k key builds on t1_011 they add up. Keep them under NDEBUG so
-  // debug builds still catch any regression while Release pays nothing.
-  // Also gated on strict mode — compact mode never fills
-  // canonical_clauses, so there is nothing to inspect.
-#ifndef NDEBUG
-  if (!compact) {
-  const int n_nonsing = (int)s_sig_pairs.size();
-  auto fire_guard = [](const char *msg,
-                       const std::vector<int> *cl = nullptr) {
-    std::cerr << "\n*** CANONICAL_KEY_INVARIANT: " << msg << " ***\n";
-    if (cl) {
-      std::cerr << "  offending clause:";
-      for (int l : *cl) std::cerr << " " << l;
-      std::cerr << "\n";
-    }
-    std::cerr.flush();
-    std::abort();
-  };
-
-  for (const auto &cl : canonical_clauses) {
-    for (size_t i = 1; i < cl.size(); i++) {
-      if (cl[i-1] > cl[i])
-        fire_guard("canonical clause literals not sorted ascending", &cl);
-    }
-    for (int l : cl) {
-      if (l != 0 && (std::abs(l) < 1 || std::abs(l) > n_nonsing))
-        fire_guard("canonical literal ID out of valid range", &cl);
-    }
-    for (size_t i = 1; i < cl.size(); i++) {
-      if (cl[i] == 0 && cl[i-1] == 0) continue;
-      if (std::abs(cl[i]) == std::abs(cl[i-1]))
-        fire_guard("canonical clause contains a variable twice", &cl);
-    }
-  }
-  for (size_t i = 1; i < canonical_clauses.size(); i++) {
-    if (canonical_clauses[i] < canonical_clauses[i-1])
-      fire_guard("canonical_clauses not sorted lexicographically");
-  }
-  }  // if (!compact)
-#endif
-  // -----------------------------------------------------------------
 
   // Clean up var_idx entries (reset only what we set)
   for (unsigned v : s_active_vars) s_var_idx[v] = -1;
@@ -622,8 +482,6 @@ CanonicalKey buildCanonicalKey(
   key.num_vars = n_vars;
   key.n_in_clauses = n_in_clauses;
   key.num_clauses = total_clauses;
-  key.compact = compact;
-  if (!compact) key.clauses = std::move(canonical_clauses);
   return key;
 }
 

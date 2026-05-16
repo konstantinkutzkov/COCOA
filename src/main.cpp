@@ -51,7 +51,6 @@ int main(int argc, char *argv[]) {
     cout << "\t -implicantLearn\t enable implicant learning (scoped clauses from BCP traces, opt-in)" << endl;
     cout << "\t -implicantMaxSize n\t max decision literals in a learned implicant (default 4)" << endl;
     cout << "\t -implicantMaxTotal n\t cap on total implicants learned per solve (default 100000)" << endl;
-    cout << "\t -l2Strict\t L2 cache uses strict canonical keys (128-bit hash + full clause multiset for structural equality). Default is compact (128-bit hash only). Debug aid." << endl;
     cout << "\t -localSearchPreprocess\t enable probe-based #SAT-sound preprocessing (diff-and-lift; opt-in). See docs/probe_preprocessing_plan.md" << endl;
     cout << "\t -lspMaxProbes n\t max probes per local-search pass (default 1000)" << endl;
     cout << "\t -lspMaxSize n\t  max σ length for probes (default 4)" << endl;
@@ -276,12 +275,6 @@ int main(int argc, char *argv[]) {
       }
       theSolver.config().adaptive_probing_min_vars = atoi(argv[i + 1]);
       i++;
-    } else if (strcmp(argv[i], "-verifyCache") == 0) {
-      theSolver.config().verify_cache = true;
-    } else if (strcmp(argv[i], "-l2Strict") == 0) {
-      theSolver.config().canonical_compact = false;
-    } else if (strcmp(argv[i], "-l2Compact") == 0) {
-      theSolver.config().canonical_compact = true;
     } else if (strcmp(argv[i], "-localSearchPreprocess") == 0) {
       theSolver.config().perform_local_search_preprocess = true;
     } else if (strcmp(argv[i], "-lspMaxProbes") == 0) {
@@ -305,10 +298,6 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(argv[i], "-bruteForceCacheDumpDir") == 0) {
       if (argc <= i + 1) { cout << "-bruteForceCacheDumpDir needs a path\n"; return -1; }
       theSolver.config().brute_force_cache_dump_dir = argv[i + 1]; i++;
-    } else if (strcmp(argv[i], "-noAnonymization") == 0) {
-      theSolver.config().no_anonymization = true;
-    } else if (strcmp(argv[i], "-canonStats") == 0) {
-      theSolver.config().print_canon_stats = true;
     } else if (strcmp(argv[i], "-wlIter") == 0) {
       if (argc <= i + 1) { cout << "-wlIter needs an int\n"; return -1; }
       theSolver.config().wl_iterations = atoi(argv[i + 1]); i++;

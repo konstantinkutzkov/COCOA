@@ -596,13 +596,6 @@ void Solver::solve(const string &file_name) {
 
 		comp_manager_.initialize(literals_, literal_pool_, original_lit_pool_size_);
 		comp_manager_.setRemovedClauses(&removed_clauses_);
-		// Note: verify_cache logic is implemented in solver_rec.cpp at the
-		// decomposition site. The ContentCache's own verify_mode is NOT
-		// toggled here because we want the solver's lookup to behave
-		// normally (return hits); solver_rec then recomputes independently
-		// and compares cached vs. recomputed counts.
-		if (config_.verify_cache)
-			cout << "c verify_cache mode ON (compare cached vs. recomputed on every hit; aborts on mismatch)" << endl;
 
 		// Anchor-probe dispatch. When -probeAnchorMode is set, we
 		// run the depth-bounded anchor probe AFTER preprocessing + ND
@@ -742,13 +735,6 @@ void Solver::solve(const string &file_name) {
 		          << std::endl;
 	}
 
-	if (config_.verify_cache) {
-		auto &cc = comp_manager_.contentCache();
-		cout << "c verify_cache summary: forced_misses(hits_converted)=" << cc.stats_verify_checks
-		     << " verified_matches=" << cc.stats_verify_ok
-		     << " unique_stores=" << cc.stats_stores << endl;
-	}
-
 	if (config_.analyze_clause_pool) {
 		analyzeOriginalClausePool();
 		analyzeLearnedClausePool();
@@ -813,40 +799,6 @@ void Solver::solve(const string &file_name) {
 			     << (reactive_metis_bucket_total_us_[i]
 			         / (double)reactive_metis_bucket_count_[i])
 			     << " us mean" << endl;
-		}
-	}
-	if (config_.print_canon_stats) {
-		std::cerr << "CANON_STATS"
-		          << " calls=" << g_canon_stats.n_calls
-		          << " calls_with_any_collision=" << g_canon_stats.calls_with_any_collision
-		          << " sum_anchored=" << g_canon_stats.sum_anchored
-		          << " sum_collision_vars=" << g_canon_stats.sum_collision_block_vars
-		          << " sum_orient_ambiguous=" << g_canon_stats.sum_orientation_ambiguous_in_blocks
-		          << " max_block_size=" << g_canon_stats.max_block_size
-		          << "\n";
-		std::cerr << "CANON_MAX_BLOCK_HISTOGRAM";
-		for (int b = 0; b < 16; b++) {
-			if (g_canon_stats.max_block_buckets[b] == 0) continue;
-			std::cerr << " [" << (1u << b) << ".."
-			          << ((b == 15) ? "inf" : std::to_string((1u << (b+1)) - 1))
-			          << "]=" << g_canon_stats.max_block_buckets[b];
-		}
-		std::cerr << "\n";
-		if (config_.wl_iterations >= 2) {
-			std::cerr << "CANON_STATS_ITER2"
-			          << " calls_with_any_collision=" << g_canon_stats.calls_with_any_collision_iter2
-			          << " sum_anchored=" << g_canon_stats.sum_anchored_iter2
-			          << " sum_collision_vars=" << g_canon_stats.sum_collision_block_vars_iter2
-			          << " max_block_size=" << g_canon_stats.max_block_size_iter2
-			          << "\n";
-			std::cerr << "CANON_MAX_BLOCK_HISTOGRAM_ITER2";
-			for (int b = 0; b < 16; b++) {
-				if (g_canon_stats.max_block_buckets_iter2[b] == 0) continue;
-				std::cerr << " [" << (1u << b) << ".."
-				          << ((b == 15) ? "inf" : std::to_string((1u << (b+1)) - 1))
-				          << "]=" << g_canon_stats.max_block_buckets_iter2[b];
-			}
-			std::cerr << "\n";
 		}
 	}
 }
@@ -1063,7 +1015,6 @@ void Solver::probeEnumerate(Component &comp, int depth_remaining,
 	    comp, literal_pool_, literals_, literal_values_,
 	    comp_manager_.getAnalyzer().clauseIdToOfs(),
 	    removed_clauses_, original_lit_pool_size_,
-	    config_.canonical_compact, config_.no_anonymization,
 	    config_.wl_iterations, static_lbls);
 
 	unsigned active = 0;

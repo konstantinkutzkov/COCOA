@@ -37,41 +37,33 @@ int main(int argc, char *argv[]) {
     h2._permuteClauseLiteralsForTest(/*seed=*/42);
     CanonicalKey k_permuted = h2._computeRootCanonicalKey();
 
-    bool match_hash    = (k_baseline.hash        == k_permuted.hash);
-    bool match_nvars   = (k_baseline.num_vars    == k_permuted.num_vars);
-    bool match_ncls    = (k_baseline.num_clauses == k_permuted.num_clauses);
-    bool match_clauses = (k_baseline.clauses     == k_permuted.clauses);
+    bool match_hash    = (k_baseline.hash         == k_permuted.hash);
+    bool match_hash_hi = (k_baseline.hash_hi      == k_permuted.hash_hi);
+    bool match_nvars   = (k_baseline.num_vars     == k_permuted.num_vars);
+    bool match_ncls    = (k_baseline.num_clauses  == k_permuted.num_clauses);
+    bool match_ninc    = (k_baseline.n_in_clauses == k_permuted.n_in_clauses);
 
     std::cout << "baseline: hash=" << k_baseline.hash
+              << " hash_hi=" << k_baseline.hash_hi
               << " nvars=" << k_baseline.num_vars
+              << " n_in_clauses=" << k_baseline.n_in_clauses
               << " nclauses=" << k_baseline.num_clauses << "\n";
     std::cout << "permuted: hash=" << k_permuted.hash
+              << " hash_hi=" << k_permuted.hash_hi
               << " nvars=" << k_permuted.num_vars
+              << " n_in_clauses=" << k_permuted.n_in_clauses
               << " nclauses=" << k_permuted.num_clauses << "\n";
 
-    if (match_hash && match_nvars && match_ncls && match_clauses) {
+    if (match_hash && match_hash_hi && match_nvars && match_ncls && match_ninc) {
         std::cout << "PASS: canonical key invariant under clause-literal permutation\n";
         return 0;
     }
 
     std::cerr << "FAIL: canonical key DIFFERS across clause-literal permutations\n";
-    std::cerr << "  hash match:    " << (match_hash    ? "yes" : "NO") << "\n";
-    std::cerr << "  nvars match:   " << (match_nvars   ? "yes" : "NO") << "\n";
-    std::cerr << "  nclauses match:" << (match_ncls    ? "yes" : "NO") << "\n";
-    std::cerr << "  clauses match: " << (match_clauses ? "yes" : "NO") << "\n";
-    if (!match_clauses) {
-        std::cerr << "  first differing clauses:\n";
-        size_t n = std::min(k_baseline.clauses.size(), k_permuted.clauses.size());
-        int diffs_shown = 0;
-        for (size_t i = 0; i < n && diffs_shown < 5; i++) {
-            if (k_baseline.clauses[i] == k_permuted.clauses[i]) continue;
-            std::cerr << "    [" << i << "] baseline:";
-            for (int l : k_baseline.clauses[i]) std::cerr << " " << l;
-            std::cerr << "\n    [" << i << "] permuted:";
-            for (int l : k_permuted.clauses[i]) std::cerr << " " << l;
-            std::cerr << "\n";
-            diffs_shown++;
-        }
-    }
+    std::cerr << "  hash match:         " << (match_hash    ? "yes" : "NO") << "\n";
+    std::cerr << "  hash_hi match:      " << (match_hash_hi ? "yes" : "NO") << "\n";
+    std::cerr << "  nvars match:        " << (match_nvars   ? "yes" : "NO") << "\n";
+    std::cerr << "  n_in_clauses match: " << (match_ninc    ? "yes" : "NO") << "\n";
+    std::cerr << "  nclauses match:     " << (match_ncls    ? "yes" : "NO") << "\n";
     return 1;
 }
