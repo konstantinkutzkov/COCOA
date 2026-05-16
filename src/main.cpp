@@ -58,8 +58,6 @@ int main(int argc, char *argv[]) {
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-noCC") == 0)
       theSolver.config().perform_component_caching = false;
-    if (strcmp(argv[i], "-noLearn") == 0)
-      theSolver.config().perform_conflict_clause_learning = false;
     if (strcmp(argv[i], "-noSepLearn") == 0)
       theSolver.config().allow_learning_in_separator_branching = false;
     if (strcmp(argv[i], "-noIBCP") == 0)

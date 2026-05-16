@@ -1592,7 +1592,6 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		bool sep_gate_ok = !from_separator
 		                || config_.allow_learning_in_separator_branching;
 		if (sep_gate_ok
-		    && config_.perform_conflict_clause_learning
 		    && L >= 1
 		    && !uip_clauses_.empty() && uip_clauses_.back().size() >= 2
 		    && uip_clauses_.back().front() == lit.neg()) {

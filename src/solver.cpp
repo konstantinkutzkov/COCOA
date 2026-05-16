@@ -1143,7 +1143,7 @@ bool Solver::commitFailedLiteral() {
 	// Bloom filter — false positives just skip a learn (sound).
 	Antecedent ante(NOT_A_CLAUSE);
 	const int L = config_.learn_level;
-	if (!config_.perform_conflict_clause_learning || L < 1) {
+	if (L < 1) {
 		// Learning disabled for diagnosis: skip storing, still force the
 		// asserting literal with NOT_A_CLAUSE antecedent (same
 		// reasoning as the dedup-duplicate path below — sound).

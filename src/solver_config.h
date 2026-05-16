@@ -15,14 +15,6 @@ struct SolverConfiguration {
 
   bool perform_non_chron_back_track = true;
 
-  // Disable UIP conflict-clause learning. When off, BCP conflicts still
-  // trigger the analyze / backjump path, and the asserting literal is
-  // still forced; we just do not persist the learned clause in the
-  // clause pool, and do not force the literal via a clause antecedent
-  // (NOT_A_CLAUSE is used). Pure diagnostic — used to test whether a
-  // count discrepancy is driven by the learned-clause machinery.
-  bool perform_conflict_clause_learning = true;
-
   // Learning-feature ladder (for bug hunting). Removing features from
   // the top of the stack one at a time lets us pinpoint which learning
   // feature is unsound. Enable conditions (a feature runs iff the
