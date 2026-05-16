@@ -3,3 +3,14 @@ build/
 *.a
 data.out
 .claude/
+
+# macOS
+.DS_Store
+
+# LaTeX intermediates (the .tex source and .pdf output are tracked)
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.fdb_latexmk
+*.fls
