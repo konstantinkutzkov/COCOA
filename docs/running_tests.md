@@ -101,10 +101,10 @@ Common variations:
 | Flag set | When to use |
 |---|---|
 | `-rec -sep 5 -cb 3 -sepMode metis` | default production |
-| `… -sepVarBias` | small density-1 instances (e.g. t1_021_k10_s1) |
+| `… -sepClausesFirst` | small density-1 instances (e.g. t1_021_k10_s1) |
 | `… -wlIter 2 -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4` | large density-1 (t1_041 et al.) |
 | `… -adaptive` | Phase-3 τ-based branching on the no-separator path |
-| `… -unifiedPicker -pickerMode multiplicative` | unified-picker fallback (research) |
+| `… -unifiedPicker` | unified-picker fallback (research) |
 | `… -arjunLight` | CMS5-based preprocessing pass |
 | `-noPP` | disable preprocessing entirely (debug) |
 | `-q` | suppress per-step output |
@@ -136,7 +136,7 @@ regimes we care about:
 | t1_065_plain | 065 | ~0.02s | sparse uniform-5 CNF |
 | t1_071_plain | 071 | ~0.4s  | sparse 3-SAT |
 | t1_011_plain | 011 | ~14s   | sparse, larger |
-| t1_021_k10_s1_legacy | 021_k10_s1 | ~4s | density-1 with `-sepVarBias` |
+| t1_021_k10_s1_clausesFirst | 021_k10_s1 | ~4s | density-1 with `-sepClausesFirst` |
 | t1_041_react_agg_no_anchor | 041 | ~10s | density-1 + reactive METIS |
 
 
@@ -245,7 +245,8 @@ sudo mdutil -a -i on     # resume
 ## 8. The picker-comparison experiment protocol (worked example)
 
 Demonstrates how to write an experiment correctly. Compares the
-default solver against two unified-picker modes:
+default solver against the `-sepClausesFirst` reorder and the
+unified-picker fallback:
 
 ```bash
 cd ~/Desktop/Code/SharpSAT/sharpsat-separator
@@ -279,13 +280,13 @@ for line in "${cases[@]}"; do
   IFS='|' read -r name cnf base_flags expected timeout_s <<< "$line"
   cnf_path="$TEMP/$cnf"
   r_base=$(run_one "$cnf_path" "$base_flags" "$timeout_s" "$expected")
-  r_add=$( run_one "$cnf_path" \
-        "$base_flags -unifiedPicker -pickerMode additive" \
+  r_clf=$( run_one "$cnf_path" \
+        "$base_flags -sepClausesFirst" \
         "$timeout_s" "$expected")
-  r_mul=$( run_one "$cnf_path" \
-        "$base_flags -unifiedPicker -pickerMode multiplicative" \
+  r_uni=$( run_one "$cnf_path" \
+        "$base_flags -unifiedPicker" \
         "$timeout_s" "$expected")
-  printf "%-26s  %s  %s  %s\n" "$name" "$r_base" "$r_add" "$r_mul"
+  printf "%-26s  %s  %s  %s\n" "$name" "$r_base" "$r_clf" "$r_uni"
 done
 ```
 
