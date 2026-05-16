@@ -202,24 +202,24 @@ struct SolverConfiguration {
   int    cascade_score_depth  = 3;
 
   // Unified-picker scoring knobs (multiplicative form).
-  //   base(v)  = picker_var_weight · max(picker_base_floor,
+  //   base(v)  = picker_var_weight · max(eps,
   //                                      freq + activity + cheapW·cheap + cascadeW·cascade)
   //   base(C)  = picker_clause_weight · sigmoid(β · (L − mid))
   //   boost(v) = 1 + picker_alpha_var · exp(−picker_lambda_var · rel_k) · 1[v ∈ sep]
   //   boost(C) = 1 + picker_alpha_clause · exp(−picker_lambda_clause · rel_k) · 1[C ∈ sep]
-  // rel_k = (active sep elements) / (active vars in comp).
-  // Type-pure boost lets sep clauses compete with sep vars: the much
-  // larger picker_alpha_clause default compensates for the small sigmoid
-  // base on clauses. CLI: -pickerAlphaVar/-pickerAlphaClause,
-  //                  -pickerLambdaVar/-pickerLambdaClause,
-  //                  -pickerVarW/-pickerClauseW.
+  // rel_k = (active sep elements) / (active vars in comp). eps is a
+  // small constant hardcoded in the picker. Type-pure boost lets sep
+  // clauses compete with sep vars: the much larger picker_alpha_clause
+  // default compensates for the small sigmoid base on clauses.
+  // CLI: -pickerAlphaVar/-pickerAlphaClause,
+  //      -pickerLambdaVar/-pickerLambdaClause,
+  //      -pickerVarW/-pickerClauseW.
   double picker_alpha_var      = 15.0;
   double picker_alpha_clause   = 110.0;
   double picker_lambda_var     = 5.0;
   double picker_lambda_clause  = 5.0;
   double picker_var_weight     = 1.0;
   double picker_clause_weight  = 1.5;
-  double picker_base_floor     = 0.01;
 
   // When true, a NON-SEPARATOR branch (var pick, or clause pick on a
   // clause not in the carried separator) drops the ND node (passes

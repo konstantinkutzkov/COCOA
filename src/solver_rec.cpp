@@ -2299,7 +2299,11 @@ Solver::BranchTarget Solver::pickBranchTarget(
 	const double clauseW   = config_.picker_clause_weight;
 	const double cheap_w   = config_.cheap_score_weight;
 	const double cascade_w = config_.cascade_score_weight;
-	const float  eps       = (float)config_.picker_base_floor;
+	// Tiny floor on var base score so a sep boost still has a non-zero
+	// multiplicand for vars with no freq/activity signal. Hardcoded
+	// because no production tuning touched the previous knob; if you
+	// need to tune this, edit the constant.
+	const float  eps       = 0.01f;
 
 	// Optional cheap-score precomputation (matches additive path).
 	std::vector<double> cheap_scores;
