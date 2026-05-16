@@ -18,7 +18,6 @@ int main(int argc, char *argv[]) {
   string input_file;
   Solver theSolver;
   bool arjun_light = false;
-  unsigned arjun_light_verbosity = 0;
   string arjun_light_dump_and_exit;
 
 
@@ -43,7 +42,6 @@ int main(int argc, char *argv[]) {
     cout << "\t -adaptive\t use Phase-3 adaptive (τ-based) branching on the no-separator path" << endl;
     cout << "\t -adaptiveMin n\t components with fewer than n active vars skip probing (default 12)" << endl;
     cout << "\t -adaptiveAlpha f\t Stage-0 length-decay α (default auto-picked from formula density; passing this fixes it)" << endl;
-    cout << "\t -noAutoAlpha\t disable analyzer-chosen α; use the current stage0_length_decay as-is" << endl;
     cout << "\t -reactiveMetis\t enable runtime-METIS fallback at hierarchy-reject points (opt-in; measured to regress on dense sub-instances as of 2026-04-20)" << endl;
     cout << "\t -reactiveMetisMin n\t min active vars to trigger reactive METIS (default 15)" << endl;
     cout << "\t -reactiveMetisSkip k\t after a reactive-METIS failure, wait k decomposition levels before retrying (default 5)" << endl;
@@ -56,7 +54,6 @@ int main(int argc, char *argv[]) {
     cout << "\t -lspMaxSize n\t  max σ length for probes (default 4)" << endl;
     cout << "\t -lspMaxTotal n\t max clauses learned per local-search invocation (default 5000)" << endl;
     cout << "\t -lspNoR4\t disable definitional elimination (R4) inside the local-search pass" << endl;
-    cout << "\t -lspVerbose\t per-pass stats from the local-search pass" << endl;
     cout << "\t -checkLearnInvariants\t assert antecedent-in-scope at conflict-analysis and force-set time. Debug aid for t1_011-style order-dependent bugs. Aborts on violation." << endl;
     cout << "\t -bruteForceCacheCheck N\t at every cache store/hit, if sub-component has <=N active vars, brute-force verify. Aborts on mismatch. Try N=18." << endl;
     cout << "\t -bruteForceCacheDumpDir DIR\t dump offending sub-components here when -bruteForceCacheCheck mismatches." << endl;
@@ -190,12 +187,8 @@ int main(int argc, char *argv[]) {
       theSolver.config().stage0_length_decay = atof(argv[i + 1]);
       theSolver.config().auto_stage0_length_decay = false;  // user override
       i++;
-    } else if (strcmp(argv[i], "-noAutoAlpha") == 0) {
-      theSolver.config().auto_stage0_length_decay = false;
     } else if (strcmp(argv[i], "-reactiveMetis") == 0) {
       theSolver.config().use_reactive_metis = true;
-    } else if (strcmp(argv[i], "-noReactiveMetis") == 0) {
-      theSolver.config().use_reactive_metis = false;
     } else if (strcmp(argv[i], "-reactiveMetisMin") == 0) {
       if (i + 1 < argc && isdigit(argv[i+1][0])) {
         theSolver.config().reactive_metis_min_vars = atoi(argv[i + 1]);
@@ -279,8 +272,6 @@ int main(int argc, char *argv[]) {
       theSolver.config().lsp_max_total = (unsigned)atoi(argv[i + 1]); i++;
     } else if (strcmp(argv[i], "-lspNoR4") == 0) {
       theSolver.config().lsp_no_r4 = true;
-    } else if (strcmp(argv[i], "-lspVerbose") == 0) {
-      theSolver.config().lsp_verbose = true;
     } else if (strcmp(argv[i], "-checkLearnInvariants") == 0) {
       theSolver.config().check_learn_invariants = true;
     } else if (strcmp(argv[i], "-bruteForceCacheCheck") == 0) {
@@ -300,9 +291,6 @@ int main(int argc, char *argv[]) {
       theSolver.statistics().maximum_cache_size_bytes_ = atol(argv[i + 1]) * (uint64_t) 1000000;
     } else if (strcmp(argv[i], "-arjunLight") == 0) {
       arjun_light = true;
-    } else if (strcmp(argv[i], "-arjunLightVerbose") == 0) {
-      arjun_light = true;
-      arjun_light_verbosity = 1;
     } else if (strcmp(argv[i], "-arjunLightDumpAndExit") == 0) {
       if (argc <= i + 1) { cout << "-arjunLightDumpAndExit needs a path\n"; return -1; }
       arjun_light_dump_and_exit = argv[i + 1];
@@ -383,7 +371,7 @@ int main(int argc, char *argv[]) {
       simplified_path = tmpl;
       equiv_sidecar_path = simplified_path + ".eqv";
       if (!PreprocessorLight::simplify(input_file, simplified_path,
-                                       arjun_light_verbosity,
+                                       0,
                                        equiv_sidecar_path)) {
         cerr << "[arjun-light] simplification failed; using original CNF\n";
         unlink(simplified_path.c_str());
@@ -421,8 +409,7 @@ int main(int argc, char *argv[]) {
 
   theSolver.solve(input_file);
 
-  // Retain the simplified CNF when verbose, so it can be inspected.
-  if (!simplified_path.empty() && arjun_light_verbosity == 0) {
+  if (!simplified_path.empty()) {
     unlink(simplified_path.c_str());
     unlink(equiv_sidecar_path.c_str());
   }

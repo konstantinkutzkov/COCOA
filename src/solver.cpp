@@ -138,7 +138,7 @@ bool Solver::simplePreProcess() {
 		lcfg.max_total  = config_.lsp_max_total;
 		lcfg.enable_r4  = !config_.lsp_no_r4;
 		lcfg.budget_ms  = config_.preprocess_time_budget_ms;
-		lcfg.verbose    = config_.lsp_verbose || config_.preprocess_verbose;
+		lcfg.verbose    = config_.preprocess_verbose;
 		lcfg.preprocessor_cfg.enable_subsumption    = config_.perform_preprocess_subsumption;
 		lcfg.preprocessor_cfg.enable_pure_duplicate = config_.perform_preprocess_pure_duplicate;
 		lcfg.preprocessor_cfg.enable_ssr            = config_.perform_preprocess_ssr;
@@ -148,7 +148,7 @@ bool Solver::simplePreProcess() {
 		LocalSearchPreprocessResult lsp_out =
 		    runLocalSearchPreprocess(num_variables(), extracted, lcfg);
 
-		if (config_.lsp_verbose || config_.preprocess_verbose || !config_.quiet) {
+		if (config_.preprocess_verbose || !config_.quiet) {
 			std::cerr << "lsp: passes=" << lsp_out.passes
 			          << " probes=" << lsp_out.num_probes_run
 			          << " units=" << lsp_out.num_units_added

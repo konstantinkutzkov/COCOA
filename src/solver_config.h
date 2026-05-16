@@ -322,7 +322,6 @@ struct SolverConfiguration {
   unsigned lsp_max_size   = 4;
   unsigned lsp_max_total  = 5000;
   bool     lsp_no_r4      = false;
-  bool     lsp_verbose    = false;
 
   // ===============================================================
   // DIAGNOSTIC FLAGS — debug-only, NOT for benchmarking
