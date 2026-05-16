@@ -205,12 +205,6 @@ public:
 struct Variable {
   Antecedent ante;
   int decision_level = INVALID_DL;
-  // Chain depth in the BCP proof DAG. 0 = decision or unassigned.
-  // For forced literals: 1 + max(chain_depth of other literals in the
-  // antecedent clause). Maintained in setLiteralIfFree / unSet when
-  // implicant learning is enabled; otherwise left at 0. Used to
-  // early-skip the implicant walk for shallow-chain literals.
-  uint8_t chain_depth = 0;
 };
 
 // for now Clause Header is just a dummy

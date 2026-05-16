@@ -903,10 +903,6 @@ void Solver::verifyPostPreprocessCleanSlate(const char *label) {
 			     + " has decision_level="
 			     + std::to_string(variables_[v].decision_level)
 			     + " (expected INVALID_DL)");
-		if (variables_[v].chain_depth != 0)
-			fire("var " + std::to_string(v)
-			     + " has chain_depth="
-			     + std::to_string((int)variables_[v].chain_depth));
 	}
 
 	// Invariant R5: at search start, every literal's binary_links_

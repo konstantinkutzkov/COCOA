@@ -41,7 +41,6 @@ protected:
     }
     var(lit).ante = Antecedent(NOT_A_CLAUSE);
     var(lit).decision_level = INVALID_DL;
-    var(lit).chain_depth = 0;  // reset cached BCP-proof depth
     literal_values_[lit] = X_TRI;
     literal_values_[lit.neg()] = X_TRI;
     // Invariant R7: unSet must clear the antecedent so the variable
@@ -189,10 +188,10 @@ protected:
   // ------------------------------------------------------------------
   // Learned-clause deduplication via Bloom filter.
   //
-  // Rationale: measurement showed ~50% of learned clauses (from both
-  // implicant learning and conflict-UIP paths) are exact literal-set
-  // duplicates of existing clauses. The BCP pool inflation from those
-  // duplicates dominates the cost of learning.
+  // Rationale: measurement showed ~50% of learned clauses (from the
+  // conflict-UIP path) are exact literal-set duplicates of existing
+  // clauses. The BCP pool inflation from those duplicates dominates
+  // the cost of learning.
   //
   // Bloom filter is ideal here: we don't need exact dedup (a false
   // positive just means we skip learning a clause — sound, just an

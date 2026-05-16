@@ -73,7 +73,7 @@ public:
 
   // number of clauses overall learned
   unsigned num_clauses_learned_ = 0;
-  // Dedup drops across ALL learning sites (conflict-UIP + implicant).
+  // Dedup drops at the conflict-UIP learning site.
   // See instance.h's ClauseSigFilter / maybeDedupClause.
   unsigned long num_learned_dedup_dropped_ = 0;
   // Counts BCP firings that the per-sub-component membership filter
@@ -82,17 +82,6 @@ public:
   // learned clauses go through learnedClauseInComponent at watch time
   // and are not counted here.
   unsigned long long num_learned_binary_filtered_ = 0;
-
-  // Implicant learning (Phase 4). All zero unless
-  // config_.perform_implicant_learning is on.
-  unsigned long num_implicants_learned_        = 0;
-  unsigned long num_implicants_size_dropped_   = 0;  // size cap fired
-  unsigned long num_implicants_trivial_dropped_= 0;  // equal to antecedent
-  unsigned long num_implicants_dedup_dropped_  = 0;  // LRU hit
-  unsigned long num_implicants_quota_stop_     = 0;  // total cap reached
-  unsigned long num_implicants_fired_          = 0;  // used in BCP
-  unsigned long num_implicants_fired_outside_  = 0;  // fired in a subtree other than learn-site
-  unsigned long num_implicants_depth_dropped_  = 0;  // chain too shallow
 
 
   /* cache statistics */

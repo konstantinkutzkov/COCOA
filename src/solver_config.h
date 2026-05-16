@@ -352,37 +352,6 @@ struct SolverConfiguration {
   // candidate for portfolio tuning — see docs/portfolio_insights.md.
   int wl_iterations = 1;
 
-  // Implicant learning: when BCP forces a literal l* after branching,
-  // walk the antecedent chain backward to collect the decision literals
-  // that participated in the derivation. If the resulting set is small
-  // enough, learn the clause (¬d_1 v ... v ¬d_k v l*) as a scoped
-  // conflict clause — sound by resolution, potentially reusable in
-  // distant subtrees when the same decision pattern recurs.
-  //
-  // Filters (compounding, cheap):
-  //   - size cap: implicant_max_size (reject longer sets).
-  //   - non-trivial: skip if the derived clause would equal the
-  //     antecedent clause itself (no new information).
-  //   - dedup: LRU hash of recently-learned implicant signatures.
-  //
-  // Hard total cap: once implicant_max_total learned, disable for the
-  // rest of the solve.
-  bool     perform_implicant_learning = false;
-  unsigned implicant_max_size         = 4;
-  unsigned implicant_max_total        = 100000;
-  // Chain-depth filter: require the derivation to have at least this
-  // many antecedent-expansion steps ("forced-literal pops" during the
-  // walk) before we consider the implicant worth storing. A clause
-  // with chain_depth==1 equals its own antecedent (trivial filter
-  // catches it). chain_depth==2 compresses 2 BCP hops to 1 clause.
-  // chain_depth==3+ compresses 3+ hops. Higher threshold = fewer but
-  // higher-value stored clauses, less BCP pool bloat.
-  unsigned implicant_min_chain_depth  = 2;
-  // Diagnostic: do the walk + filters but skip the clause store. Lets
-  // us measure the cost of the learning machinery itself vs the cost
-  // of BCP over an expanded clause pool.
-  bool     implicant_dry_run          = false;
-
   // Diagnostic: after preprocessing, dump the resulting formula as a
   // DIMACS CNF to the given path and exit (without solving). Used to
   // verify preprocessing soundness by feeding the dump to an

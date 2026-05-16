@@ -37,85 +37,6 @@
 
 using namespace std;
 
-// Walk antecedent chain backward from l_star, collecting decision
-// literals (ante == NOT_A_CLAUSE, DL > 0) visited during the walk.
-// Returns empty vector if the collected set would exceed max_size
-// (bail-early signal: "too big, skip learning").
-std::vector<LiteralID> Solver::deriveDecisionImplicant(
-    LiteralID l_star, unsigned max_size, unsigned *out_chain_depth)
-{
-  // Guard: the walk starts from a currently-true literal. If l_star
-  // isn't true, the caller invoked us with a stale/unassigned literal.
-  assert(literal_values_[l_star] == T_TRI
-         && "deriveDecisionImplicant: l_star must be currently true");
-
-  unsigned chain_depth = 0;
-  std::vector<LiteralID> impl;
-  std::unordered_set<unsigned> seen;
-  std::queue<LiteralID> frontier;
-  frontier.push(l_star);
-  seen.insert(l_star.var());
-
-  while (!frontier.empty()) {
-    LiteralID l = frontier.front();
-    frontier.pop();
-    // Guard A: every frontier literal must be currently true. The walk
-    // traces currently-true literals back through their antecedents; a
-    // currently-false literal in the frontier means the push site got
-    // the polarity wrong (the binary-antecedent bug we already caught
-    // looked exactly like this: wrong polarity produced F_TRI literals
-    // in the frontier, leading to unsound implicants and undercounts).
-    assert(literal_values_[l] == T_TRI
-           && "frontier literal must be currently true");
-
-    int dl = var(l).decision_level;
-    if (dl <= 0) continue;  // baseline (DL 0) or not-yet-assigned — skip
-    Antecedent ante = var(l).ante;
-    if (!ante.isAnt()) {
-      // Decision. Collect in the implicant frontier.
-      if (impl.size() >= max_size) return {};  // too big — bail
-      // Guard B: decision literals we collect into the implicant must
-      // be currently true, otherwise the resulting clause would have
-      // flipped polarities.
-      assert(literal_values_[l] == T_TRI
-             && "implicant decision literal must be currently true");
-      impl.push_back(l);
-      continue;
-    }
-    // Forced literal — count this expansion step.
-    chain_depth++;
-    if (ante.isAClause()) {
-      ClauseOfs ofs = ante.asCl();
-      for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
-        if (lt->var() == l.var()) continue;
-        if (!seen.insert(lt->var()).second) continue;
-        // Stored clause contains `lt` (literal). For this clause to
-        // have forced `l`, `lt` is falsified → its negation is the
-        // currently-true trigger to walk back through.
-        // Guard: BCP invariant — non-forced literals of the antecedent
-        // clause must be falsified at firing time (and still now, since
-        // we haven't backtracked since the firing).
-        assert(literal_values_[*lt] == F_TRI
-               && "antecedent clause's non-forced literal must be F_TRI");
-        frontier.push(lt->neg());
-      }
-    } else {
-      // Binary antecedent: ante.asLit() returns the falsified partner
-      // literal (see BCP at solver.cpp:285 — setLiteralIfFree(*bt,
-      // Antecedent(unLit)) where unLit is the currently-falsified
-      // literal, the "other" half of the binary clause). To walk back
-      // we need the currently-TRUE literal: that's ante.asLit().neg().
-      LiteralID other_false = ante.asLit();
-      assert(literal_values_[other_false] == F_TRI
-             && "binary antecedent's stored literal must be F_TRI");
-      LiteralID other_true = other_false.neg();
-      if (seen.insert(other_true.var()).second) frontier.push(other_true);
-    }
-  }
-  if (out_chain_depth) *out_chain_depth = chain_depth;
-  return impl;
-}
-
 // Compute a per-variable centrality score from the ND-hierarchy.
 // Score = (max_depth − depth_of(v's leaf in the ND-tree)).  Variables
 // in shallow leaves (closer to the root) rank higher; variables in deep
@@ -177,152 +98,6 @@ void Solver::computeNdCentrality() {
     nd_centrality_score_[v] = (float)(max_depth - depth[node]);
   }
 }
-
-void Solver::maybeLearnImplicants(unsigned bcp_start_ofs)
-{
-  if (!config_.perform_implicant_learning) return;
-  if (statistics_.num_implicants_learned_
-        >= config_.implicant_max_total) {
-    // Hard cap reached — count the event once (not every call) is fine:
-    // stats_implicants_quota_stop_ tracks how many literals we skipped.
-    return;
-  }
-
-  // Iterate newly-forced literals from this BCP.
-  for (unsigned i = bcp_start_ofs + 1; i < literal_stack_.size(); i++) {
-    LiteralID l = literal_stack_[i];
-    // Must have an antecedent — pure decisions (not forced) are not
-    // mine-able as implicants (their "implicant" is themselves).
-    if (!var(l).ante.isAnt()) continue;
-
-    // Fast depth-filter: chain_depth is maintained incrementally in
-    // setLiteralIfFree. If it's below min_chain_depth, we know the
-    // walk would fail the filter anyway — skip the walk entirely.
-    // This is the big win vs. the previous "walk everything, then
-    // filter" approach: on bench_D with min_chain=8 we performed
-    // ~15M walks to keep ~440 clauses; with this fast-skip we walk
-    // only the ~440.
-    if ((unsigned)var(l).chain_depth < config_.implicant_min_chain_depth) {
-      statistics_.num_implicants_depth_dropped_++;
-      continue;
-    }
-
-    unsigned chain_depth = 0;
-    auto impl = deriveDecisionImplicant(l, config_.implicant_max_size, &chain_depth);
-    if (impl.empty()) {
-      statistics_.num_implicants_size_dropped_++;
-      continue;
-    }
-    // Debug sanity: the cached depth should match the walk's count.
-    // If they disagree, chain-depth maintenance is broken somewhere
-    // (missed update in setLiteralIfFree / unSet).
-    assert(chain_depth == (unsigned)var(l).chain_depth
-           && "cached chain_depth must match walk-computed depth");
-    // Skip size==1 (singleton implicants): a single decision that forces
-    // `l` means we'd learn a binary (¬d v l). This IS valuable — the
-    // guard-padding mechanism handles it. Keep.
-
-    // Non-trivial filter: if the derived clause's literal set equals
-    // the antecedent clause's literal set, we'd be re-storing an
-    // existing clause. Cheap check: compare sizes + content. The
-    // derived clause has `impl.size() + 1` literals; antecedent has
-    // whatever it has. If sizes match AND every impl literal appears
-    // (negated) in the antecedent, it's trivial.
-    bool trivial = false;
-    if (var(l).ante.isAClause()) {
-      ClauseOfs ofs = var(l).ante.asCl();
-      unsigned ante_len = 0;
-      for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) ante_len++;
-      if (ante_len == impl.size() + 1) {
-        // Potential trivial case. Verify each impl literal's negation
-        // appears in the antecedent.
-        std::unordered_set<uint32_t> ante_raws;
-        for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++)
-          ante_raws.insert(lt->raw());
-        bool all_match = true;
-        for (auto d : impl) {
-          if (!ante_raws.count(d.neg().raw())) { all_match = false; break; }
-        }
-        if (all_match && ante_raws.count(l.raw())) trivial = true;
-      }
-    }
-    if (trivial) {
-      statistics_.num_implicants_trivial_dropped_++;
-      continue;
-    }
-
-    // Build the learned clause: ¬d_1 ∨ ... ∨ ¬d_k ∨ l. First literal
-    // must be l (addScopedUIPConflictClause / addClause assume front
-    // is the UIP-asserting literal in the watching scheme).
-    std::vector<LiteralID> clause;
-    clause.reserve(impl.size() + 1);
-    clause.push_back(l);
-    for (auto d : impl) clause.push_back(d.neg());
-
-    // Guard C: at store time the clause must satisfy the BCP invariant
-    // for a conflict-driven learned clause: clause[0] is the asserting
-    // literal (currently TRUE, since l* was just forced by BCP), and
-    // every other literal is currently FALSE (because each d_i is a
-    // currently-true decision, so ¬d_i is currently false). If any
-    // "other" literal is TRUE, the polarity was flipped somewhere in
-    // the walk — this is exactly the class of bug we hit with binary
-    // antecedents before the fix. Runtime undercount ensues.
-    //
-    // Runtime (not just debug) check: implicant learning is opt-in via
-    // -implicantLearn, so paying a small O(k) check per learned clause
-    // is acceptable. The silent failure mode (undercount) is too bad
-    // to miss in Release.
-    if (literal_values_[clause[0]] != T_TRI) {
-      std::cerr << "\n*** UNSOUND_IMPLICANT: asserting literal not true ***\n"
-                << "  clause[0]=" << clause[0].toInt()
-                << " value=" << (int)literal_values_[clause[0]]
-                << " (expected T_TRI=" << (int)T_TRI << ")\n";
-      std::cerr.flush();
-      std::abort();
-    }
-    for (size_t ci = 1; ci < clause.size(); ci++) {
-      if (literal_values_[clause[ci]] != F_TRI) {
-        std::cerr << "\n*** UNSOUND_IMPLICANT: non-asserting literal not false ***\n"
-                  << "  clause[" << ci << "]=" << clause[ci].toInt()
-                  << " value=" << (int)literal_values_[clause[ci]]
-                  << " (expected F_TRI=" << (int)F_TRI << ")\n"
-                  << "  full clause:";
-        for (auto lx : clause) std::cerr << " " << lx.toInt();
-        std::cerr << "\n";
-        std::cerr.flush();
-        std::abort();
-      }
-    }
-
-    // Dedup via shared Bloom filter (Instance::learned_clause_sig_ via
-    // maybeDedupClause). Replaces the old 4096-entry LRU that was
-    // letting ~50% of duplicates through on long solves.
-    if (!maybeDedupClause(clause)) {
-      statistics_.num_implicants_dedup_dropped_++;
-      statistics_.num_learned_dedup_dropped_++;
-      continue;
-    }
-
-    // Learn via the scoped-UIP machinery: automatic scope tagging,
-    // guard-padding for size==2, correct behaviour under clause
-    // branching. Dry-run mode skips the actual store so we can
-    // measure walk+filter overhead in isolation.
-    if (!config_.implicant_dry_run) {
-      const int L = config_.learn_level;
-      addScopedUIPConflictClause(
-          clause,
-          /*pad_binary=*/  L >= 4,
-          /*record_scope=*/L >= 3);
-    }
-    statistics_.num_implicants_learned_++;
-    if (statistics_.num_implicants_learned_
-          >= config_.implicant_max_total) {
-      statistics_.num_implicants_quota_stop_ = 1;
-      break;
-    }
-  }
-}
-
 
 SOLVER_StateT Solver::countSATRec() {
 	// Build precomputed ND hierarchy if separator branching is enabled.
@@ -1821,8 +1596,8 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		    && L >= 1
 		    && !uip_clauses_.empty() && uip_clauses_.back().size() >= 2
 		    && uip_clauses_.back().front() == lit.neg()) {
-			// Dedup via Bloom filter (shared with commitFailedLiteral
-			// and implicant learning). FP = skip learning = sound.
+			// Dedup via Bloom filter (shared with commitFailedLiteral).
+			// FP = skip learning = sound.
 			bool go = (L <= 1) || maybeDedupClause(uip_clauses_.back());
 			if (go) {
 				addScopedUIPConflictClause(
@@ -1835,12 +1610,6 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		}
 		result = 0;
 	} else {
-		// Phase 4: mine implicants from the BCP cascade. Opt-in; no-op
-		// by default. Suppressed during separator branching (same
-		// discipline as regular clause learning at line 951-955).
-		if (!from_separator) {
-			maybeLearnImplicants(lit_save);
-		}
 		result = solveComponent(comp, separator, separator_reset, depth, nd_node,
 		                        reactive_metis_skip_until_depth);
 	}

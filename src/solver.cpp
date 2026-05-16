@@ -722,16 +722,6 @@ void Solver::solve(const string &file_name) {
 		          << std::endl;
 	}
 
-	if (config_.perform_implicant_learning) {
-		cout << "\n=== Implicant learning summary ===" << endl;
-		cout << "  learned            : " << statistics_.num_implicants_learned_ << endl;
-		cout << "  dropped (size cap) : " << statistics_.num_implicants_size_dropped_ << endl;
-		cout << "  dropped (depth<min): " << statistics_.num_implicants_depth_dropped_ << endl;
-		cout << "  dropped (trivial)  : " << statistics_.num_implicants_trivial_dropped_ << endl;
-		cout << "  dropped (dedup)    : " << statistics_.num_implicants_dedup_dropped_ << endl;
-		cout << "  quota reached      : " << (statistics_.num_implicants_quota_stop_ ? "yes" : "no") << endl;
-	}
-
 	if (config_.use_reactive_metis && reactive_metis_calls_ > 0) {
 		cout << "\n=== Reactive-METIS summary ===" << endl;
 		cout << "  calls            : " << reactive_metis_calls_ << endl;
@@ -2151,12 +2141,11 @@ void Solver::resetPostPreprocessScratch() {
 	last_ccl_cleanup_time_ = 0;
 
 	// Per-variable residue. compactVariables default-constructs every
-	// Variable (ante = Antecedent(), decision_level = INVALID_DL,
-	// chain_depth = 0) so this is defensive: belt-and-suspenders in
-	// case a future refactor changes that.
+	// Variable (ante = Antecedent(), decision_level = INVALID_DL) so
+	// this is defensive: belt-and-suspenders in case a future refactor
+	// changes that.
 	for (unsigned v = 1; v < variables_.size(); v++) {
 		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
 		variables_[v].decision_level = INVALID_DL;
-		variables_[v].chain_depth = 0;
 	}
 }

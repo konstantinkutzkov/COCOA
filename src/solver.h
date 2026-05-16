@@ -470,22 +470,6 @@ private:
 	BranchTarget pickBranchTarget(Component &comp,
 	                              const std::vector<CutNode> &separator);
 
-	// Phase 4: implicant learning helpers (see solver_config.h for design).
-	// Walks the antecedent chain backward from `l_star` and collects the
-	// decision literals that appeared along the way (DL > 0). Returns an
-	// empty vector if the collected set would exceed max_size.
-	// `out_chain_depth` receives the number of antecedent-expansion
-	// steps performed during the walk (= number of non-decision literals
-	// popped from the frontier and expanded via their antecedent). A
-	// depth of 1 means `l_star`'s ante was expanded but no recursion
-	// occurred; higher depths mean longer BCP chains.
-	std::vector<LiteralID> deriveDecisionImplicant(
-	    LiteralID l_star, unsigned max_size, unsigned *out_chain_depth = nullptr);
-	// Mine implicants for literals forced during the BCP call that
-	// started at literal-stack position `bcp_start_ofs`. Applies
-	// size / non-trivial / dedup filters and stops at the total cap.
-	void maybeLearnImplicants(unsigned bcp_start_ofs);
-
 	// Invariant guard (reusable): verify the formula is
 	// unit-propagation saturated — every clause has ≥ 2 active
 	// (X_TRI) literals, or is already satisfied (≥ 1 T_TRI literal),
@@ -727,30 +711,6 @@ private:
 		// Track BCP propagations vs decisions. ant.isAnt() == true means
 		// this literal was forced by BCP (not chosen as a decision).
 		if (ant.isAnt()) statistics_.num_implications_++;
-		// Chain-depth caching for fast implicant-filter lookup. Only
-		// computed when implicant learning is enabled — costs ~O(k)
-		// per forcing (k = antecedent clause length) but saves the
-		// O(chain_size) walk for every literal whose depth is below
-		// the min_chain_depth threshold. Decisions have depth 0.
-		if (config_.perform_implicant_learning) {
-			uint8_t cd = 0;
-			if (ant.isAnt()) {
-				if (ant.isAClause()) {
-					ClauseOfs ofs = ant.asCl();
-					for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; lt++) {
-						if (lt->var() == lit.var()) continue;
-						uint8_t lt_cd = variables_[lt->var()].chain_depth;
-						if (lt_cd > cd) cd = lt_cd;
-					}
-				} else {
-					// Binary antecedent: ante.asLit() is the falsified
-					// partner; its variable's chain_depth is stored.
-					cd = variables_[ant.asLit().var()].chain_depth;
-				}
-				if (cd < 255) cd++;  // saturate at 255 (max of uint8_t)
-			}
-			var(lit).chain_depth = cd;
-		}
 		literal_stack_.push_back(lit);
 		if (ant.isAClause() && ant.asCl() != NOT_A_CLAUSE)
 			getHeaderOf(ant.asCl()).increaseScore();
