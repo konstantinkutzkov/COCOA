@@ -772,24 +772,35 @@ void Solver::solve(const string &file_name) {
 //       at end-1, which is the super of the deeper level and is
 //       already accounted for via (a) and the deeper-level walk).
 //   (c) For each StackLevel where !isSecondBranch(), the OTHER-polarity
-//       subtree that hasn't been explored yet. Its size is approximated
-//       by the active-var count of super_component[k] rewound to level
-//       k — i.e., vars in super_component[k] that are either currently
-//       X_TRI or assigned at decision_level >= k. (Vars assigned at
-//       level >= k get unset upon backtrack to k; the branched-on var
-//       gets re-set with flipped polarity.)
+//       subtree that hasn't been explored yet. Its size is
+//       super_component[k].var_list_size - 1 (one for the branching
+//       variable, which is fixed at flipped value).
+//
+// All sizes use the COMPONENT VAR-LIST SIZE (fixed at decomposition
+// time), NOT the current X_TRI count. The var-list size is the count
+// the user's model wants: at the time the subtree was created, it had
+// this many free variables; we use 2^size as the worst-case enumeration
+// upper bound. Using current X_TRI would make the metric oscillate as
+// deeper levels assign/unassign vars in the same var-list — spuriously
+// suggesting progress or regress from trail churn that's already
+// accounted for elsewhere in the open-list.
 //
 // log2(Σ 2^n_i) is then computed via log-sum-exp:
 //     log2_bound = max(n_i) + log2(Σ 2^(n_i - max))
 //
-// progress_bits = n_root - log2_bound, which is the true monotone
-// odometer: bits of remaining-worst-case work shaved off so far.
+// progress_bits = n_root - log2_bound, the monotone odometer.
 // =====================================================================
 
 void Solver::captureOpenWorkSnapshot() {
 	open_work_sizes_.clear();
 
-	auto count_active_in_component = [&](Component *c) -> unsigned {
+	// Active-var count of a Component: count of vars in its var-list
+	// that are STILL X_TRI right now. This is the "leaves under
+	// current node" measure — the search-tree depth measured by
+	// vars not yet assigned. For (a), this shrinks as deeper levels
+	// assign more vars in this comp's var-list, and grows back upon
+	// deeper backtrack.
+	auto active_in_component = [&](Component *c) -> unsigned {
 		unsigned n = 0;
 		for (auto vt = c->varsBegin(); *vt != varsSENTINEL; vt++)
 			if (isActive(LiteralID(*vt, true))) n++;
@@ -799,7 +810,7 @@ void Solver::captureOpenWorkSnapshot() {
 	// (a) Deepest currently-in-progress sub-component.
 	if (!current_comp_chain_.empty() && current_comp_chain_.back()) {
 		open_work_sizes_.push_back(
-		    count_active_in_component(current_comp_chain_.back()));
+		    active_in_component(current_comp_chain_.back()));
 	}
 
 	// Walk the decision stack — (b) queued siblings + (c) other-polarity.
@@ -817,35 +828,19 @@ void Solver::captureOpenWorkSnapshot() {
 		for (unsigned ci = q_begin; ci < q_end; ci++) {
 			Component *c = comp_manager_.componentAt(ci);
 			if (!c) continue;
-			open_work_sizes_.push_back(count_active_in_component(c));
+			open_work_sizes_.push_back(active_in_component(c));
 		}
 
 		// (c) Other-polarity branch at this level (if not yet started).
-		// Estimate its size as count of vars in super_component[k] that
-		// will be active when we backtrack to level k and flip the
-		// branching var:
-		//   - currently X_TRI (still active right now), OR
-		//   - assigned with decision_level > (int)k (strictly deeper —
-		//     these get unset on backtrack and don't appear under the
-		//     flipped polarity unless BCP re-derives them).
-		// Strict ">" excludes the level-k branching var and BCP at
-		// level k (which become "constraint at the new starting point"
-		// under the flipped polarity, not free to choose). For level 0,
-		// strict ">" also correctly excludes preprocessing-assigned
-		// vars (decision_level=0 baseline). The estimate is a slight
-		// under-count (a few level-k BCP consequences MAY not be
-		// re-derived under flipped polarity); fine for ranking.
+		// Size = sl.active_at_push() - 1, where active_at_push is the
+		// count of active vars in the parent component captured at the
+		// moment this stack level was pushed (set by branchOnLiteral /
+		// branchOnClause). Fixed thereafter, so the metric is invariant
+		// under deeper descent / backtrack (vars assigned at deeper levels
+		// don't change this count).
 		if (!sl.isSecondBranch()) {
-			Component &sup = comp_manager_.superComponentOf(sl);
-			unsigned n = 0;
-			for (auto vt = sup.varsBegin(); *vt != varsSENTINEL; vt++) {
-				unsigned v = *vt;
-				if (literal_values_[LiteralID(v, true)] == X_TRI) {
-					n++;
-				} else if (variables_[v].decision_level > (int)k) {
-					n++;
-				}
-			}
+			unsigned a = sl.active_at_push();
+			unsigned n = (a > 0) ? a - 1 : 0;
 			open_work_sizes_.push_back(n);
 		}
 	}

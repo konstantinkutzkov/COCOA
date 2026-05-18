@@ -44,7 +44,16 @@ class StackLevel {
   bool clause_branch_ = false;
   // the ClauseOfs of the clause removed at this level (only for clause branches)
   unsigned clause_branch_ofs_ = 0;
+
+  // OPEN_WORK metric: active-var count of the parent component at the
+  // moment this stack level was pushed. Used by captureOpenWorkSnapshot
+  // to estimate the size of the polarity-2 subtree without re-walking
+  // the component (which would oscillate as deeper levels assign/unassign
+  // vars). Set via set_active_at_push() from the pusher; defaults to 0.
+  unsigned active_at_push_ = 0;
 public:
+  void set_active_at_push(unsigned n) { active_at_push_ = n; }
+  unsigned active_at_push() const { return active_at_push_; }
 
   bool hasUnprocessedComponents() {
     assert(unprocessed_components_end_ >= remaining_components_ofs_);

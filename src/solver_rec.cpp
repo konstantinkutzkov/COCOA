@@ -390,15 +390,20 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 	}
 
 	// Periodic PROGRESS emit (diagnostic; cheap when off-tick).
-	// Tick interval: 2 seconds. Only enabled when env SHARPSAT_PROGRESS=1.
+	// Tick interval: SHARPSAT_PROGRESS_INTERVAL seconds (default 2.0).
+	// Only emitted when env SHARPSAT_PROGRESS=1.
 	{
 		static const bool progress_enabled = []() {
 			const char *e = std::getenv("SHARPSAT_PROGRESS");
 			return e && e[0] == '1';
 		}();
+		static const double progress_interval = []() {
+			const char *e = std::getenv("SHARPSAT_PROGRESS_INTERVAL");
+			return (e && *e) ? std::atof(e) : 2.0;
+		}();
 		if (progress_enabled) {
 			double now = stopwatch_.getElapsedSeconds();
-			if (last_progress_emit_s_ < 0.0 || now - last_progress_emit_s_ >= 2.0) {
+			if (last_progress_emit_s_ < 0.0 || now - last_progress_emit_s_ >= progress_interval) {
 				captureOpenWorkSnapshot();  // overwrites fields; OK — final snapshot will rewrite
 				double pb = (double)open_work_n_root_ - open_work_log2_bound_;
 				std::cerr << "PROGRESS t=" << now
@@ -1522,6 +1527,14 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 	// We pop at the end regardless of outcome.
 	stack_.push_back(StackLevel(1, lit_save,
 	                            comp_manager_.component_stack_size()));
+	// Snapshot active-var count of the parent component (the one being
+	// decomposed at this level) for the OPEN_WORK polarity-2 estimate.
+	{
+		unsigned active = 0;
+		for (auto vt = comp.varsBegin(); *vt != varsSENTINEL; vt++)
+			if (isActive(LiteralID(*vt, true))) active++;
+		stack_.back().set_active_at_push(active);
+	}
 
 	static long long bol_call = 0;
 	bol_call++;
@@ -1749,6 +1762,13 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 	// learned clause when they contribute to a conflict).
 	stack_.push_back(StackLevel(1, lit_save,
 	                            comp_manager_.component_stack_size()));
+	// Snapshot active-var count of parent (for OPEN_WORK metric).
+	{
+		unsigned active = 0;
+		for (auto vt = comp.varsBegin(); *vt != varsSENTINEL; vt++)
+			if (isActive(LiteralID(*vt, true))) active++;
+		stack_.back().set_active_at_push(active);
+	}
 
 	// Mark clause as removed
 	markClauseRemoved(cl_ofs);
