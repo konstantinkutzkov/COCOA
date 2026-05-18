@@ -760,38 +760,108 @@ void Solver::solve(const string &file_name) {
 // =====================================================================
 // OPEN_WORK snapshot — captured on first time-bound break.
 //
-// Walks the open components at the moment of timeout. "Open" =
-// sub-components on the component stack that are not yet processed;
-// this corresponds to the [remaining_components_ofs, unprocessed_end)
-// range at each StackLevel. To avoid double-counting, we skip the
-// `currentRemainingComponent` of each non-deepest frame, since that
-// comp is being processed by the deeper frame (whose own open work
-// captures it).
+// Computes the true upper bound on remaining enumeration work by
+// enumerating ALL unfinished subtrees at snapshot time:
 //
-// For each open Component, count current-active vars; sum 2^n via
-// log-sum-exp to stay in float range. Output is `log2(Σ 2^n_i)`,
-// the worst-case bound on remaining enumeration cost.
+//   (a) The deepest currently-in-progress sub-component (the leaf of
+//       current_comp_chain_).
+//   (b) For each StackLevel, the queued-but-not-yet-started sibling
+//       components on the level's current branch — i.e., components
+//       at comp_stack indices [remaining_components_ofs,
+//       unprocessed_components_end - 1) (excluding the "current" one
+//       at end-1, which is the super of the deeper level and is
+//       already accounted for via (a) and the deeper-level walk).
+//   (c) For each StackLevel where !isSecondBranch(), the OTHER-polarity
+//       subtree that hasn't been explored yet. Its size is approximated
+//       by the active-var count of super_component[k] rewound to level
+//       k — i.e., vars in super_component[k] that are either currently
+//       X_TRI or assigned at decision_level >= k. (Vars assigned at
+//       level >= k get unset upon backtrack to k; the branched-on var
+//       gets re-set with flipped polarity.)
+//
+// log2(Σ 2^n_i) is then computed via log-sum-exp:
+//     log2_bound = max(n_i) + log2(Σ 2^(n_i - max))
+//
+// progress_bits = n_root - log2_bound, which is the true monotone
+// odometer: bits of remaining-worst-case work shaved off so far.
 // =====================================================================
 
 void Solver::captureOpenWorkSnapshot() {
 	open_work_sizes_.clear();
-	unsigned max_n = 0;
-	for (Component *comp : current_comp_chain_) {
-		if (!comp) continue;
+
+	auto count_active_in_component = [&](Component *c) -> unsigned {
 		unsigned n = 0;
-		for (auto vt = comp->varsBegin(); *vt != varsSENTINEL; vt++) {
+		for (auto vt = c->varsBegin(); *vt != varsSENTINEL; vt++)
 			if (isActive(LiteralID(*vt, true))) n++;
-		}
-		open_work_sizes_.push_back(n);
-		if (n > max_n) max_n = n;
+		return n;
+	};
+
+	// (a) Deepest currently-in-progress sub-component.
+	if (!current_comp_chain_.empty() && current_comp_chain_.back()) {
+		open_work_sizes_.push_back(
+		    count_active_in_component(current_comp_chain_.back()));
 	}
-	// The chain is nested: inner's vars ⊆ outer's vars. The outermost
-	// (= max in the chain) is the worst-case bound on remaining work
-	// for this entire branch of the search; the innermost is the
-	// deepest in-progress comp. We report max as bound_log2 (the
-	// conservative single-number bound) and the full chain so the
-	// script can rank by innermost (= depth-of-progress) too.
-	open_work_log2_bound_ = static_cast<double>(max_n);
+
+	// Walk the decision stack — (b) queued siblings + (c) other-polarity.
+	for (unsigned k = 0; k < stack_.size(); k++) {
+		StackLevel &sl = stack_[k];
+
+		// (b) Queued siblings under the current branch at this level.
+		// "Queued" = comp_stack indices [remaining_components_ofs,
+		// unprocessed_components_end - 1). The "current" at end-1 is
+		// the super of the deeper level (or, at the deepest level, is
+		// already counted via (a)) — so always exclude it.
+		unsigned q_begin = sl.remaining_components_ofs();
+		unsigned q_end   = sl.unprocessed_components_end();
+		if (q_end > q_begin) q_end--;  // exclude the "current" at end-1
+		for (unsigned ci = q_begin; ci < q_end; ci++) {
+			Component *c = comp_manager_.componentAt(ci);
+			if (!c) continue;
+			open_work_sizes_.push_back(count_active_in_component(c));
+		}
+
+		// (c) Other-polarity branch at this level (if not yet started).
+		// Estimate its size as count of vars in super_component[k] that
+		// will be active when we backtrack to level k and flip the
+		// branching var:
+		//   - currently X_TRI (still active right now), OR
+		//   - assigned with decision_level > (int)k (strictly deeper —
+		//     these get unset on backtrack and don't appear under the
+		//     flipped polarity unless BCP re-derives them).
+		// Strict ">" excludes the level-k branching var and BCP at
+		// level k (which become "constraint at the new starting point"
+		// under the flipped polarity, not free to choose). For level 0,
+		// strict ">" also correctly excludes preprocessing-assigned
+		// vars (decision_level=0 baseline). The estimate is a slight
+		// under-count (a few level-k BCP consequences MAY not be
+		// re-derived under flipped polarity); fine for ranking.
+		if (!sl.isSecondBranch()) {
+			Component &sup = comp_manager_.superComponentOf(sl);
+			unsigned n = 0;
+			for (auto vt = sup.varsBegin(); *vt != varsSENTINEL; vt++) {
+				unsigned v = *vt;
+				if (literal_values_[LiteralID(v, true)] == X_TRI) {
+					n++;
+				} else if (variables_[v].decision_level > (int)k) {
+					n++;
+				}
+			}
+			open_work_sizes_.push_back(n);
+		}
+	}
+
+	// log-sum-exp.
+	if (open_work_sizes_.empty()) {
+		open_work_log2_bound_ = 0.0;
+	} else {
+		unsigned max_n = 0;
+		for (unsigned n : open_work_sizes_) if (n > max_n) max_n = n;
+		double tail_sum = 0.0;
+		for (unsigned n : open_work_sizes_) {
+			tail_sum += std::exp2((double)((int)n - (int)max_n));
+		}
+		open_work_log2_bound_ = (double)max_n + std::log2(tail_sum);
+	}
 	open_work_n_open_ = static_cast<unsigned>(open_work_sizes_.size());
 }
 
