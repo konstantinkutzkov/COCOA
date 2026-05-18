@@ -22,6 +22,7 @@ computed by Solver::captureOpenWorkSnapshot. Override via --rank.
 """
 
 import argparse
+import math
 import os
 import re
 import subprocess
@@ -48,6 +49,7 @@ DEFAULT_VARIANTS = [
     "clausesFirst:-rec -sep 5 -cb 3 -sepMode metis -sepClausesFirst",
     "react-default:-rec -sep 5 -cb 3 -sepMode metis -reactiveMetis",
     "react-agg:-rec -sep 5 -cb 3 -sepMode metis -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4",
+    "react-agg-wl2:-rec -sep 5 -cb 3 -sepMode metis -wlIter 2 -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4",
     "adaptive:-rec -sep 5 -cb 3 -sepMode metis -adaptive",
     "plain-wl2:-rec -sep 5 -cb 3 -sepMode metis -wlIter 2",
 ]
@@ -207,32 +209,45 @@ def make_rank_key(rank_spec: str):
 def print_table(results: List[VariantResult]) -> None:
     if results:
         print(f"\n  n_root (active vars at root, post-preprocess): {results[0].n_root}")
-    print(f"\n{'name':<14} {'wall':>7} {'fin':>3} {'progress':>9} "
+    print(f"\n{'name':<14} {'wall':>7} {'fin':>3} {'% processed':>12} "
+          f"{'bits':>8} "
           f"{'dec':>9} {'l2_hit/dec':>10} {'big_hit/dec':>11} "
           f"{'bcp/dec':>8} {'conf':>5} "
-          f"{'chain_d':>7} {'chain_max':>9} {'chain_min':>9} "
+          f"{'chain_d':>7} {'chain_min':>9} "
           f"{'react':>5}")
-    print("-" * 132)
+    print("-" * 138)
     for vr in results:
         wall = f"{vr.wall_s:6.2f}" if vr.wall_s is not None else "   ?  "
         fin  = "Y" if vr.finished else ("T" if vr.timeout else "?")
         react = f"{vr.react_calls}" if vr.react_calls else "-"
-        # progress_bits comes directly from the solver's OPEN_WORK line
-        # (= n_root - bound_log2). For finishers, equals n_root.
-        prog = f"{vr.progress_bits:7.1f}"
-        print(f"{vr.name:<14} {wall:>7} {fin:>3} {prog:>9} {vr.decisions:>9} "
+        # fraction_processed = 1 - 2^(-progress_bits). progress_bits is
+        # the bound's log-shift (= n_root - log2(Σ 2^|unfinished|)).
+        # When finished: progress_bits = n_root, fraction = ~100%.
+        # When nothing done: progress_bits = 0, fraction = 0%.
+        # 1 bit of progress = halved remaining = 50% done.
+        if vr.progress_bits >= 60:
+            frac = 1.0  # numerically saturated
+        else:
+            frac = 1.0 - math.pow(2.0, -vr.progress_bits)
+        pct = f"{100.0 * frac:11.4f}%"
+        prog_bits = f"{vr.progress_bits:8.3f}"
+        print(f"{vr.name:<14} {wall:>7} {fin:>3} {pct:>12} {prog_bits:>8} "
+              f"{vr.decisions:>9} "
               f"{vr.l2_hit_rate:>10.4f} {vr.large_hit_rate:>11.4f} "
               f"{vr.bcp_per_dec:>8.3f} {vr.conflicts:>5} "
-              f"{vr.chain_depth:>7} {vr.chain_max_size:>9} {vr.chain_min_size:>9} "
+              f"{vr.chain_depth:>7} {vr.chain_min_size:>9} "
               f"{react:>5}")
     print()
     print("Legend:")
     print("  fin: Y=solved within budget, T=TIMEOUT marker, ?=unknown")
-    print("  progress    = n_root - log2(Σ 2^|unfinished subtree|); monotone odometer")
-    print("                (= n_root if finished; higher = more search space closed)")
+    print("  % processed = fraction of the 2^n_root search tree completed")
+    print("                = 1 - 2^(-bits) where bits = n_root - log2(remaining)")
+    print("                Examples: 1 bit = 50%, 2 bits = 75%, 10 bits = 99.9%.")
+    print("  bits        = progress_bits (raw); convenient for cross-instance comparison")
     print("  l2_hit/dec  = L2 cache hit rate per decision")
     print("  big_hit/dec = hits on components ≥200 vars / decisions")
-    print("  chain_*     = # unfinished subtrees + max/min size of any in the list")
+    print("  chain_d     = number of unfinished subtrees still on the stack")
+    print("  chain_min   = smallest subtree in the open list (larger = more consolidation)")
     print("  react       = reactive-METIS calls (only when -reactiveMetis on)")
 
 
@@ -243,8 +258,8 @@ def main() -> int:
                     help=f"CNF path (default: {DEFAULT_CNF})")
     ap.add_argument("--solver", default=DEFAULT_SOLVER,
                     help=f"sharpSAT binary (default: {DEFAULT_SOLVER})")
-    ap.add_argument("--budget", type=float, default=25.0,
-                    help="Per-variant wall budget in seconds (default 25)")
+    ap.add_argument("--budget", type=float, default=30.0,
+                    help="Per-variant wall budget in seconds (default 30)")
     ap.add_argument("--variants", nargs="+", default=None,
                     help="Variant specs as 'name:flags'. "
                          "Default: 6 mechanism toggles.")
@@ -288,7 +303,7 @@ def main() -> int:
               f"conflicts={vr.conflicts}")
         print(f"   l2_hit_rate={vr.l2_hit_rate:.4f}  "
               f"big_hit_rate={vr.large_hit_rate:.4f}  "
-              f"progress_bits={vr.progress_bits:.1f}/{vr.n_root}")
+              f"progress_bits={vr.progress_bits:.4f}/{vr.n_root}")
         print(f"   chain_depth={vr.chain_depth}  chain_max={vr.chain_max_size}  "
               f"chain_min={vr.chain_min_size}  "
               f"react_calls={vr.react_calls if vr.react_calls else '-'}")
