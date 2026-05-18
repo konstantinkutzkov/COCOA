@@ -14,10 +14,11 @@ selection probe per docs/portfolio_plan.md §6.
 Variants are passed as `name:flag-string` pairs. Each is run with -t T
 appended; the same CNF path is appended last.
 
-Output rank (default): (finished_desc, l2_hit_rate_desc, max_chain_asc).
-The intent is "did it finish > how much cache amplification per decision
-> how shallow the chain at timeout (smaller open chain = closer to a
-finished sub-tree)". Override via --rank.
+Output rank (default): (finished_desc, progress_bits_desc, l2_hit_rate_desc).
+The intent is "did it finish > how much of the search space did it close
+> how much cache amplification per decision". progress_bits is the
+monotone odometer n_root - log2(remaining-unfinished-subtree-mass)
+computed by Solver::captureOpenWorkSnapshot. Override via --rank.
 """
 
 import argparse
@@ -36,15 +37,15 @@ DEFAULT_CNF    = os.path.normpath(os.path.join(
     REPO, "..", "temp_cnf", "mc2025_track1_041.cnf"))
 
 # Default variant set, aligned with portfolio_insights.md / benchmark_log.md
-# terminology. "plain" matches the docs' definition (no -sepVarBias, no
-# -reactiveMetis, no -adaptive, default -wlIter 1). The 6 variants span:
-#   - separator-bias choice (plain vs legacy)
+# terminology. "plain" matches the docs' definition (no -reactiveMetis,
+# no -adaptive, default -wlIter 1). The 6 variants span:
+#   - separator reorder (plain vs clausesFirst)
 #   - reactive METIS regime (off vs default vs aggressive)
 #   - BCP-driven picker (off vs adaptive with auto-α)
 #   - WL-labeling sharpness (default 1 vs explicit 2)
 DEFAULT_VARIANTS = [
     "plain:-rec -sep 5 -cb 3 -sepMode metis",
-    "legacy:-rec -sep 5 -cb 3 -sepMode metis -sepVarBias",
+    "clausesFirst:-rec -sep 5 -cb 3 -sepMode metis -sepClausesFirst",
     "react-default:-rec -sep 5 -cb 3 -sepMode metis -reactiveMetis",
     "react-agg:-rec -sep 5 -cb 3 -sepMode metis -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4",
     "adaptive:-rec -sep 5 -cb 3 -sepMode metis -adaptive",
@@ -227,10 +228,11 @@ def print_table(results: List[VariantResult]) -> None:
     print()
     print("Legend:")
     print("  fin: Y=solved within budget, T=TIMEOUT marker, ?=unknown")
-    print("  progress    = n_root - log2(bound_remaining); equals n_root if finished")
+    print("  progress    = n_root - log2(Σ 2^|unfinished subtree|); monotone odometer")
+    print("                (= n_root if finished; higher = more search space closed)")
     print("  l2_hit/dec  = L2 cache hit rate per decision")
     print("  big_hit/dec = hits on components ≥200 vars / decisions")
-    print("  chain_*     = OPEN_WORK chain depth + max/min comp size in chain")
+    print("  chain_*     = # unfinished subtrees + max/min size of any in the list")
     print("  react       = reactive-METIS calls (only when -reactiveMetis on)")
 
 
@@ -241,13 +243,15 @@ def main() -> int:
                     help=f"CNF path (default: {DEFAULT_CNF})")
     ap.add_argument("--solver", default=DEFAULT_SOLVER,
                     help=f"sharpSAT binary (default: {DEFAULT_SOLVER})")
-    ap.add_argument("--budget", type=float, default=5.0,
-                    help="Per-variant wall budget in seconds (default 5)")
+    ap.add_argument("--budget", type=float, default=25.0,
+                    help="Per-variant wall budget in seconds (default 25)")
     ap.add_argument("--variants", nargs="+", default=None,
                     help="Variant specs as 'name:flags'. "
-                         "Default: 5 mechanism toggles.")
-    ap.add_argument("--rank", default="finished:desc,l2_hit_rate:desc,chain_max_size:asc",
-                    help="Sort spec: comma-separated field[:asc|desc]")
+                         "Default: 6 mechanism toggles.")
+    ap.add_argument("--rank", default="finished:desc,progress_bits:desc,l2_hit_rate:desc",
+                    help="Sort spec: comma-separated field[:asc|desc]. "
+                         "Default ranks by the monotone progress odometer "
+                         "(n_root - log2 of remaining unfinished subtree mass).")
     args = ap.parse_args()
 
     if not os.path.exists(args.solver):
