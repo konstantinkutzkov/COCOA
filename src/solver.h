@@ -20,6 +20,8 @@
 #include "solver_config.h"
 
 #include <sys/time.h>
+#include <cmath>
+#include <limits>
 #include <tuple>
 #include <unordered_set>
 
@@ -254,6 +256,29 @@ private:
 	// to stderr. Doesn't set open_work_captured_; the final timeout
 	// snapshot still captures cleanly.
 	double                     last_progress_emit_s_ = -1.0;  // -1 = never emitted
+
+	// Cumulative log-sum-exp over every cache STORE of the subtree's
+	// active-var count. Monotonically increasing by construction:
+	// the cache only grows. Approximates log2(total leaves closed).
+	// fraction_processed = 2^(closed_log_sum_ - n_root). Initialised
+	// to -inf so the first store sets it to that subtree's size exactly.
+	double closed_log_sum_ = -std::numeric_limits<double>::infinity();
+
+	// Update closed_log_sum_ with one new cached subtree of size k vars
+	// (k = number of active vars in the cached component at store time).
+	// Uses the stable log-sum-exp recurrence:
+	//   new = max(old, k) + log2(1 + 2^(min(old,k) - max(old,k)))
+	void noteCachedSubtree(unsigned k) {
+		double dk = (double)k;
+		double old = closed_log_sum_;
+		if (old == -std::numeric_limits<double>::infinity()) {
+			closed_log_sum_ = dk;
+		} else if (dk > old) {
+			closed_log_sum_ = dk + std::log2(1.0 + std::exp2(old - dk));
+		} else {
+			closed_log_sum_ = old + std::log2(1.0 + std::exp2(dk - old));
+		}
+	}
 
 	ComponentManager comp_manager_ = ComponentManager(config_,
 			statistics_, literal_values_);

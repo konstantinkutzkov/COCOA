@@ -358,6 +358,8 @@ mpz_class Solver::solveComponent(Component &comp,
 			mpz_fdiv_q_2exp(structural.get_mpz_t(),
 			                structural.get_mpz_t(), 1);
 		comp_manager_.contentCache().store(cached_key, structural);
+		// Track cumulative cached leaves for the monotone progress metric.
+		noteCachedSubtree(cached_key.num_vars);
 	}
 	return result;
 }
@@ -406,8 +408,13 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			if (last_progress_emit_s_ < 0.0 || now - last_progress_emit_s_ >= progress_interval) {
 				captureOpenWorkSnapshot();  // overwrites fields; OK — final snapshot will rewrite
 				double pb = (double)open_work_n_root_ - open_work_log2_bound_;
+				// closed_bits: monotone log_sum_exp over every cache store
+				// since solve start. fraction_done = 2^(closed - n_root).
+				double closed = (closed_log_sum_ == -std::numeric_limits<double>::infinity())
+				              ? 0.0 : closed_log_sum_;
 				std::cerr << "PROGRESS t=" << now
 				          << " progress_bits=" << pb
+				          << " closed_bits=" << closed
 				          << " open=" << open_work_n_open_
 				          << " bound_log2=" << open_work_log2_bound_
 				          << " decisions=" << statistics_.num_decisions_
@@ -1062,6 +1069,7 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				// Populate L1 so future visits to the same ID-set skip
 				// the canonical build.
 				comp_manager_.contentCache().l1_store(id_key, sub_count);
+				noteCachedSubtree(key.num_vars);
 			}
 			result *= sub_count;
 			delete sub;
