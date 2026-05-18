@@ -247,6 +247,14 @@ private:
 	std::vector<Component *>   current_comp_chain_;          // live during search
 	void captureOpenWorkSnapshot();
 
+	// Periodic PROGRESS line emission for trajectory analysis. Diagnostic:
+	// when last_progress_emit_s_ + PROGRESS_TICK_S seconds have passed,
+	// re-run captureOpenWorkSnapshot non-destructively and emit
+	//   PROGRESS t=<elapsed> progress_bits=<x> open=<n> bound_log2=<x>
+	// to stderr. Doesn't set open_work_captured_; the final timeout
+	// snapshot still captures cleanly.
+	double                     last_progress_emit_s_ = -1.0;  // -1 = never emitted
+
 	ComponentManager comp_manager_ = ComponentManager(config_,
 			statistics_, literal_values_);
 

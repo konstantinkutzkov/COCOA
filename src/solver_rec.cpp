@@ -388,6 +388,31 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		}
 		return 0;
 	}
+
+	// Periodic PROGRESS emit (diagnostic; cheap when off-tick).
+	// Tick interval: 2 seconds. Only enabled when env SHARPSAT_PROGRESS=1.
+	{
+		static const bool progress_enabled = []() {
+			const char *e = std::getenv("SHARPSAT_PROGRESS");
+			return e && e[0] == '1';
+		}();
+		if (progress_enabled) {
+			double now = stopwatch_.getElapsedSeconds();
+			if (last_progress_emit_s_ < 0.0 || now - last_progress_emit_s_ >= 2.0) {
+				captureOpenWorkSnapshot();  // overwrites fields; OK — final snapshot will rewrite
+				double pb = (double)open_work_n_root_ - open_work_log2_bound_;
+				std::cerr << "PROGRESS t=" << now
+				          << " progress_bits=" << pb
+				          << " open=" << open_work_n_open_
+				          << " bound_log2=" << open_work_log2_bound_
+				          << " decisions=" << statistics_.num_decisions_
+				          << " l2_hits=" << comp_manager_.contentCache().stats_hits
+				          << std::endl;
+				last_progress_emit_s_ = now;
+			}
+		}
+	}
+
 	if (config_.log_branches && depth == 0) {
 		static int g_root_calls = 0;
 		g_root_calls++;
