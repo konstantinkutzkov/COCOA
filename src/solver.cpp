@@ -858,6 +858,31 @@ void Solver::captureOpenWorkSnapshot() {
 		open_work_log2_bound_ = (double)max_n + std::log2(tail_sum);
 	}
 	open_work_n_open_ = static_cast<unsigned>(open_work_sizes_.size());
+
+	// Override stack-walk bound with the cache-conservation value:
+	//   remaining = 2^n_root - 2^closed_log_sum
+	//   log2(remaining) = closed + log2(2^(n_root - closed) - 1)
+	// closed_log_sum only grows (cache only stores), so remaining only
+	// shrinks → bound monotonically decreases → progress_bits monotone.
+	// This replaces the stack-walk bound, which was structurally
+	// non-monotone (chain.back transitions caused spurious bound
+	// growth even as the cache grew).
+	if (closed_log_sum_ != -std::numeric_limits<double>::infinity()) {
+		double n_root_d = (double)open_work_n_root_;
+		double diff = n_root_d - closed_log_sum_;
+		if (diff <= 0.0) {
+			// closed >= n_root: everything accounted for; bound = 0.
+			open_work_log2_bound_ = 0.0;
+		} else if (diff > 60.0) {
+			// closed << n_root: 2^diff - 1 ≈ 2^diff, log2 ≈ diff, so
+			// bound = closed + diff = n_root. Avoid the subtraction.
+			open_work_log2_bound_ = n_root_d;
+		} else {
+			// log2(2^n - 2^c) = c + log2(2^(n-c) - 1)
+			open_work_log2_bound_ =
+			    closed_log_sum_ + std::log2(std::exp2(diff) - 1.0);
+		}
+	}
 }
 
 
