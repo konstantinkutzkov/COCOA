@@ -257,33 +257,18 @@ private:
 	// snapshot still captures cleanly.
 	double                     last_progress_emit_s_ = -1.0;  // -1 = never emitted
 
-	// Flag: did THIS solveComponent invocation recurse into another
-	// solveComponent (via solveComponentImpl branching)? Reset to false
-	// at solveComponent entry, set to true on exit (so the parent's
-	// solveComponent observes that its body did recurse). A solveComponent
-	// call counts as a LEAF event (and contributes 2^k to closed_log_sum_)
-	// iff the flag is false at the end of its body — i.e., the body
-	// did NOT recurse (cache hit, or base case that BCP-closed the
-	// subtree without further branching).
-	bool my_call_recursed_ = false;
-
-	// Cumulative log-sum-exp over every BACKTRACK event during search.
-	// Each time we leave solveComponent (= finish processing a subtree of
-	// k active vars), we add 2^k to the running total. Monotonically
-	// increasing by construction. Process-independent: how we determined
-	// the subtree's count (cache hit, base case, recursion) does NOT
-	// affect the accounting — only the fact that we backtracked from it.
-	//
-	// Conservation: at finish, closed_log_sum_ = n_root exactly.
-	// fraction_processed = 2^(closed_log_sum_ - n_root). Initialised to
-	// -inf so the first backtrack sets it to that subtree's size exactly.
+	// Cumulative log-sum-exp over every cache STORE of the subtree's
+	// active-var count. Monotonically increasing by construction:
+	// the cache only grows. Approximates log2(total leaves closed).
+	// fraction_processed = 2^(closed_log_sum_ - n_root). Initialised
+	// to -inf so the first store sets it to that subtree's size exactly.
 	double closed_log_sum_ = -std::numeric_limits<double>::infinity();
 
-	// Update closed_log_sum_ with one newly-backtracked subtree of size k
-	// vars (k = the subtree's active-var count at the moment we entered
-	// it). Stable log-sum-exp recurrence:
+	// Update closed_log_sum_ with one new cached subtree of size k vars
+	// (k = number of active vars in the cached component at store time).
+	// Uses the stable log-sum-exp recurrence:
 	//   new = max(old, k) + log2(1 + 2^(min(old,k) - max(old,k)))
-	void noteBacktrackedSubtree(unsigned k) {
+	void noteCachedSubtree(unsigned k) {
 		double dk = (double)k;
 		double old = closed_log_sum_;
 		if (old == -std::numeric_limits<double>::infinity()) {
