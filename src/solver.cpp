@@ -651,11 +651,14 @@ void Solver::solve(const string &file_name) {
 		double progress_bits = open_work_captured_
 		    ? (static_cast<double>(open_work_n_root_) - open_work_log2_bound_)
 		    : static_cast<double>(open_work_n_root_);
+		double closed_for_print = (closed_log_sum_ == -std::numeric_limits<double>::infinity())
+		    ? 0.0 : closed_log_sum_;
 		std::cerr << "OPEN_WORK"
 		          << " n_root=" << open_work_n_root_
 		          << " n_open_comps=" << (open_work_captured_ ? open_work_n_open_ : 0u)
 		          << " bound_log2=" << (open_work_captured_ ? open_work_log2_bound_ : 0.0)
 		          << " progress_bits=" << progress_bits
+		          << " closed_bits=" << closed_for_print
 		          << " sizes=";
 		for (size_t i = 0; i < open_work_sizes_.size(); i++) {
 			if (i) std::cerr << ",";

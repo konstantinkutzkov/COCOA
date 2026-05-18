@@ -286,12 +286,24 @@ mpz_class Solver::solveComponent(Component &comp,
                                   int depth,
                                   int nd_node,
                                   int reactive_metis_skip_until_depth) {
+	// Progress accounting: capture this subtree's size at entry. Reset
+	// the my_call_recursed_ flag for THIS call (saving the parent's
+	// value to restore on exit). On exit: count this subtree as a LEAF
+	// event iff our body did NOT recurse into solveComponent. Set the
+	// flag to true on exit so the parent's solveComponent observes that
+	// it DID recurse (= it's not a leaf, doesn't count).
+	// Timeout return is NOT a backtrack — we abandoned, don't count.
+	unsigned k_at_entry = comp.num_variables();
+	bool parent_recursed_flag = my_call_recursed_;
+	my_call_recursed_ = false;
+
 	if (stopwatch_.timeBoundBroken()) {
 		// Capture chain (outer levels) if not already captured.
 		if (!open_work_captured_) {
 			captureOpenWorkSnapshot();
 			open_work_captured_ = true;
 		}
+		my_call_recursed_ = parent_recursed_flag;  // restore unchanged
 		return 0;
 	}
 	// Diagnostics: accumulate component sizes seen at solveComponent entry.
@@ -343,6 +355,10 @@ mpz_class Solver::solveComponent(Component &comp,
 			cc.stats_hit_buckets[ContentCache::size_bucket(cached_key.num_vars)]++;
 			mpz_class scaled = hit;
 			for (unsigned i = 0; i < free_vars; ++i) scaled *= 2;
+			// Cache hit = leaf event (didn't go through solveComponentImpl,
+			// so didn't recurse). Always count.
+			noteBacktrackedSubtree(k_at_entry);
+			my_call_recursed_ = true;  // parent sees us as recursion
 			return scaled;
 		}
 		comp_manager_.contentCache().stats_misses++;
@@ -358,9 +374,15 @@ mpz_class Solver::solveComponent(Component &comp,
 			mpz_fdiv_q_2exp(structural.get_mpz_t(),
 			                structural.get_mpz_t(), 1);
 		comp_manager_.contentCache().store(cached_key, structural);
-		// Track cumulative cached leaves for the monotone progress metric.
-		noteCachedSubtree(cached_key.num_vars);
 	}
+	// LEAF event iff solveComponentImpl did NOT recurse — i.e., it
+	// computed via BCP closure or base case without further branching.
+	// Branching solveComponentImpl sets my_call_recursed_ to true via
+	// its child solveComponent calls.
+	if (!my_call_recursed_) {
+		noteBacktrackedSubtree(k_at_entry);
+	}
+	my_call_recursed_ = true;  // parent sees us as recursion
 	return result;
 }
 
@@ -1069,7 +1091,6 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				// Populate L1 so future visits to the same ID-set skip
 				// the canonical build.
 				comp_manager_.contentCache().l1_store(id_key, sub_count);
-				noteCachedSubtree(key.num_vars);
 			}
 			result *= sub_count;
 			delete sub;
