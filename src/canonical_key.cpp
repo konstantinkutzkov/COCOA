@@ -51,20 +51,26 @@ static std::vector<ClauseRef> s_clause_refs;  // see note above re: thread_local
 // Bit 0: is_singleton, Bit 1: flip
 static std::vector<uint8_t> s_var_flags;  // see note above re: thread_local
 
-// WL refinement scratch buffers. Previously these were local
-// std::vector / std::unordered_map declarations inside the WL loop
-// and the post-WL collision/anchored-sort steps; profiling showed
-// the per-call heap allocations contributed materially to the 15%
-// allocator slice. Reusing static buffers across calls preserves
-// bucket capacity (unordered_map) and storage (vectors) without
-// changing semantics — same single-threaded restriction as the
-// other s_* buffers above.
+// WL refinement scratch buffers. Same single-threaded restriction as
+// the other s_* buffers above.
+//
+// s_labels_collision is a sorted vector of (block_label, var_idx)
+// pairs covering all non-singleton vars. It serves three purposes:
+//   (1) collision detection at the end of each WL iteration
+//       (consecutive equal labels ⇒ collision remains),
+//   (2) the static-WL refinement step's "which vars are in
+//       multi-var blocks" question (groups of size > 1 in the
+//       sorted vector),
+//   (3) the final anchored-ID assignment, which needs singletons
+//       in (block_label, var_idx) order to assign sequential IDs.
+//
+// Previously (2) and (3) each used a std::unordered_map<uint64_t,int>
+// to count block sizes; both maps + the separate `anchored_sorted`
+// vector were replaced by linear scans over this single sorted
+// vector. See commit bd48859 for the earlier static-scratch pass.
 static std::vector<uint64_t> s_block_label;
 static std::vector<uint64_t> s_sig_k;
-static std::vector<uint64_t> s_labels_collision;
-static std::vector<std::pair<uint64_t, unsigned>> s_anchored_sorted;
-static std::unordered_map<uint64_t, int> s_block_count_static;
-static std::unordered_map<uint64_t, int> s_block_count_final;
+static std::vector<std::pair<uint64_t, unsigned>> s_labels_collision;
 
 CanonicalKey buildCanonicalKey(
     Component &comp,
@@ -78,6 +84,11 @@ CanonicalKey buildCanonicalKey(
     const std::vector<uint64_t> *static_wl_labels) {
 
   // Collect active variables
+  // Reset s_labels_collision so the post-WL "is it built?" check via
+  // .size() == s_sig_pairs.size() can't be fooled by a prior call's
+  // residue (e.g. same n_vars but different block_label contents).
+  s_labels_collision.clear();
+
   s_active_vars.clear();
   for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++)
     if (literal_values[LiteralID(*it, true)] == X_TRI)
@@ -339,15 +350,18 @@ CanonicalKey buildCanonicalKey(
         if (s_var_flags[i] & 1) continue;
         block_label[i] = mix64(block_label[i] ^ (sig_k[i] * 0x9E3779B97F4A7C15ULL));
       }
-      // Recount: any collision still left?
+      // Rebuild s_labels_collision as sorted (block_label, var_idx)
+      // pairs over all non-singleton vars. Used both for collision
+      // detection and (post-loop) by the static-WL and anchored-ID
+      // steps. Sorted ascending by (block_label, var_idx).
       s_labels_collision.clear();
       s_labels_collision.reserve(s_sig_pairs.size());
       for (auto &p : s_sig_pairs)
-        s_labels_collision.push_back(block_label[p.second]);
+        s_labels_collision.push_back({block_label[p.second], p.second});
       std::sort(s_labels_collision.begin(), s_labels_collision.end());
       collision_now = false;
       for (size_t k = 1; k < s_labels_collision.size(); k++)
-        if (s_labels_collision[k] == s_labels_collision[k - 1]) {
+        if (s_labels_collision[k].first == s_labels_collision[k - 1].first) {
           collision_now = true; break;
         }
     }
@@ -357,29 +371,47 @@ CanonicalKey buildCanonicalKey(
     // Anchored vars are untouched (their labels are already unique).
     // Fires whenever collisions remain — independent of wl_iterations.
     if (collision_now && static_wl_labels != nullptr) {
-      // Identify which vars are currently in collision blocks
-      // (block_size > 1 under current block_label).
-      s_block_count_static.clear();
-      auto &count = s_block_count_static;
-      for (auto &p : s_sig_pairs) count[block_label[p.second]]++;
-      for (auto &p : s_sig_pairs) {
-        unsigned i = p.second;
-        if (count[block_label[i]] > 1) {
-          unsigned raw_var = s_active_vars[i];
-          uint64_t sl = (raw_var < static_wl_labels->size())
-                          ? (*static_wl_labels)[raw_var] : 0;
-          block_label[i] = mix64(block_label[i] ^ (sl * 0x9E3779B97F4A7C15ULL));
-        }
+      // s_labels_collision must hold sorted (block_label, var_idx)
+      // pairs for the CURRENT block_label. The WL loop's last
+      // iteration leaves it that way; rebuild defensively to cover
+      // the case where the WL loop didn't run (wl_iterations < 2
+      // but had_any_collision was true).
+      if (s_labels_collision.size() != s_sig_pairs.size()) {
+        s_labels_collision.clear();
+        s_labels_collision.reserve(s_sig_pairs.size());
+        for (auto &p : s_sig_pairs)
+          s_labels_collision.push_back({block_label[p.second], p.second});
+        std::sort(s_labels_collision.begin(), s_labels_collision.end());
       }
-      // Recount: any collisions still left after step 3?
+      // Two-pointer scan: groups with size > 1 are collision blocks.
+      // Refine each var in such a group with its static WL label.
+      size_t k = 0;
+      while (k < s_labels_collision.size()) {
+        size_t j = k + 1;
+        while (j < s_labels_collision.size()
+               && s_labels_collision[j].first == s_labels_collision[k].first)
+          j++;
+        if (j - k > 1) {
+          for (size_t m = k; m < j; m++) {
+            unsigned i = s_labels_collision[m].second;
+            unsigned raw_var = s_active_vars[i];
+            uint64_t sl = (raw_var < static_wl_labels->size())
+                            ? (*static_wl_labels)[raw_var] : 0;
+            block_label[i] = mix64(block_label[i] ^ (sl * 0x9E3779B97F4A7C15ULL));
+          }
+        }
+        k = j;
+      }
+      // Rebuild s_labels_collision against the refined block_label
+      // for the collision check + the downstream anchored-ID step.
       s_labels_collision.clear();
       s_labels_collision.reserve(s_sig_pairs.size());
       for (auto &p : s_sig_pairs)
-        s_labels_collision.push_back(block_label[p.second]);
+        s_labels_collision.push_back({block_label[p.second], p.second});
       std::sort(s_labels_collision.begin(), s_labels_collision.end());
       collision_now = false;
-      for (size_t k = 1; k < s_labels_collision.size(); k++)
-        if (s_labels_collision[k] == s_labels_collision[k - 1]) {
+      for (size_t kk = 1; kk < s_labels_collision.size(); kk++)
+        if (s_labels_collision[kk].first == s_labels_collision[kk - 1].first) {
           collision_now = true; break;
         }
     }
@@ -393,32 +425,41 @@ CanonicalKey buildCanonicalKey(
     // Fires whenever iter 1 left any collision, since the post-iter-1
     // canonical IDs from the heuristic var_idx tie-break are unsafe.
     if (had_any_collision) {
-      s_block_count_final.clear();
-      auto &blk_count = s_block_count_final;
-      for (auto &p : s_sig_pairs) blk_count[block_label[p.second]]++;
-      // Collect anchored vars; sort by (block_label, idx); assign 1..k.
-      s_anchored_sorted.clear();
-      s_anchored_sorted.reserve(s_sig_pairs.size());
-      auto &anchored_sorted = s_anchored_sorted;
-      for (auto &p : s_sig_pairs)
-        if (blk_count[block_label[p.second]] == 1)
-          anchored_sorted.push_back({block_label[p.second], p.second});
-      std::sort(anchored_sorted.begin(), anchored_sorted.end(),
-        [](const std::pair<uint64_t, unsigned> &x,
-           const std::pair<uint64_t, unsigned> &y) {
-          if (x.first != y.first) return x.first < y.first;
-          return x.second < y.second;
-        });
-      for (size_t k = 0; k < anchored_sorted.size(); k++)
-        s_canonical_id[anchored_sorted[k].second] = (int)(k + 1);
-      // Residual vars: raw_var_id + offset, no flip.
+      // s_labels_collision holds sorted (block_label, var_idx) pairs.
+      // After the WL loop and/or static-WL step it's current; if
+      // neither ran (wl_iterations < 2 and static_wl_labels == nullptr),
+      // build it now.
+      if (s_labels_collision.size() != s_sig_pairs.size()) {
+        s_labels_collision.clear();
+        s_labels_collision.reserve(s_sig_pairs.size());
+        for (auto &p : s_sig_pairs)
+          s_labels_collision.push_back({block_label[p.second], p.second});
+        std::sort(s_labels_collision.begin(), s_labels_collision.end());
+      }
+      // Two-pointer scan: groups of size 1 are anchored (sequential
+      // 1..k_anchored in sorted (block_label, idx) order, same
+      // ordering as the previous anchored_sorted std::sort). Groups
+      // of size > 1 are residual (RESIDUAL_OFFSET + raw_var_id, flag
+      // bit 4).
       const int RESIDUAL_OFFSET = (int)max_var + 1;
-      for (auto &p : s_sig_pairs) {
-        unsigned i = p.second;
-        if (blk_count[block_label[i]] > 1) {
-          s_canonical_id[i] = RESIDUAL_OFFSET + (int)s_active_vars[i];
-          s_var_flags[i] |= 4;  // mark residual: pass 2 will skip flip
+      unsigned anchor_id = 1;
+      size_t k = 0;
+      while (k < s_labels_collision.size()) {
+        size_t j = k + 1;
+        while (j < s_labels_collision.size()
+               && s_labels_collision[j].first == s_labels_collision[k].first)
+          j++;
+        if (j - k == 1) {
+          unsigned i = s_labels_collision[k].second;
+          s_canonical_id[i] = (int)(anchor_id++);
+        } else {
+          for (size_t m = k; m < j; m++) {
+            unsigned i = s_labels_collision[m].second;
+            s_canonical_id[i] = RESIDUAL_OFFSET + (int)s_active_vars[i];
+            s_var_flags[i] |= 4;  // pass 2 will skip flip for residuals
+          }
         }
+        k = j;
       }
     }
   }
