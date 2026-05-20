@@ -1220,3 +1220,57 @@ PID=$!; sleep 8; sample $PID 30 -file /tmp/prof.txt; wait $PID
 
 Most recent profile (post-`d7e2a1c`, pre-`010ef37`): `buildCanonicalKey` still ~30% (the inner clause-iteration loops + the new sort), component analysis (`recordComponentOf` + `setupAnalysisContext` + `makeComponentFromState` + `discoverComponentsOf`) ~13%, allocator ~7% (down from ~14% in baseline). The remaining `buildCanonicalKey` slice is now dominated by the WL clause iteration and the sort — both essential to the algorithm; further wins would require either (a) algorithmic changes (skip WL when canonical-id collisions can't happen) or (b) attacking component analysis next.
 
+
+## 2026-05-20 — t1_045 first solve (PENDING INDEPENDENT VERIFICATION)
+
+After the four-commit optimization chain landed, re-ran t1_045 with the same adaptive+wlIter=2 config under a 45-min budget. **The solver finished in 40.5 min** — first time this instance has been solved end-to-end by sharpSAT.
+
+### Invocation
+```
+build/sharpSAT -rec -sep 5 -cb 3 -sepMode metis -adaptive -wlIter 2 \
+               -t 2700 ../temp_cnf/mc2025_track1_045.cnf
+```
+
+### Result
+```
+# solutions
+132951278067432
+time: 2429.5s   (≈ 40.5 min)
+```
+
+- `decisions = 717,595,836`
+- `avg_bcp/dec = 1.19021`
+- L2: 730.3 M stores, 204.6 M hits (28% hit rate)
+- L1: 230.1 M stores, 195.1 M hits
+- 22,539 learned clauses
+- `closed_bits = 90` (full close), `n_open_comps = 0`
+
+### Progress trajectory (per minute, abridged)
+
+| t (min) | closed_bits | pct_lin | decisions |
+|---:|---:|---:|---:|
+| 2 | 83.64 | 1.2% | 44.6 M |
+| 5 | 85.69 | 5.0% | 107.4 M |
+| 10 | 87.83 | 22.2% | 208.2 M |
+| 15 | 88.92 | 47.3% | 307.7 M |
+| 20 | 89.68 | 80.0% | 395.4 M |
+| 25 | 89.90 | 93.1% | 481.7 M |
+| 30 | 89.91 | 93.6% | 563.4 M |
+| 33 | 89.93 | 95.3% | 608.7 M |
+| 37 | 89.96 | 97.6% | 665.8 M |
+| 40 | 89.98 | 98.5% | 710.1 M |
+| 40.5 | 90.00 | 100.0% | 717.6 M (SOLVE) |
+
+The original (pre-optimization) wl2 run reached `closed_bits = 89.93` at t=20 min and `closed_bits = 89.96` at t=45 min then timed out. This run matched 89.93 at t=33 min (12 min earlier) and **finished the deep tail in the remaining 7-8 min** of budget the original never had access to.
+
+### Verification status
+
+- ⚠ **The count `132,951,278,067,432` is currently unverified by an independent solver.** Prior attempts with ganak `--td 1` and `--td 0` (16 GB cache) timed out at 40 min on this instance, per the [t1_045 characterization session](#).
+- The optimization stack (`bd48859`/`c61cefc`/`d7e2a1c`/`010ef37`) is mechanical refactoring; counts on t1_065, t1_071, and t1_041 all match documented values across all four commits.
+- **Next step is to confirm with ganak** (extended budget, increased cache) or sharpsat-td before quoting this externally.
+
+### Reproducibility note
+
+Trajectory varies modestly between runs at the same wall time (PROGRESS emit is wall-clock-triggered, decision rate fluctuates ±5% from CPU jitter), but the search itself is deterministic (decisions → closed_bits is fixed for a given input + flags + binary). The 40.5-min solve time should reproduce within seconds across runs on the same machine, provided no other CPU load.
+
+
