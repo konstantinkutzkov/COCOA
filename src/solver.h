@@ -257,19 +257,27 @@ private:
 	// snapshot still captures cleanly.
 	double                     last_progress_emit_s_ = -1.0;  // -1 = never emitted
 
-	// Cumulative log-sum-exp over every cache STORE of the subtree's
-	// active-var count. Monotonically increasing by construction:
-	// the cache only grows. Approximates log2(total leaves closed).
+	// Cumulative log-sum-exp over every LEAF event of the abstract-budget
+	// passed to that event. Monotonically increasing by construction.
+	// Sums in 2^budget space to exactly 2^n_root when the search finishes,
+	// because the budget-threading invariant guarantees that every
+	// solveComponent invocation contributes its budget once to a leaf.
 	// fraction_processed = 2^(closed_log_sum_ - n_root). Initialised
-	// to -inf so the first store sets it to that subtree's size exactly.
+	// to -inf so the first event sets it to that subtree's budget exactly.
 	double closed_log_sum_ = -std::numeric_limits<double>::infinity();
 
-	// Update closed_log_sum_ with one new cached subtree of size k vars
-	// (k = number of active vars in the cached component at store time).
+	// A solveComponent call with abstract_budget B is responsible for
+	// resolving 2^B abstract leaves of the worst-case decision tree.
+	// When the call terminates without further recursion (cache hit,
+	// trivial closure, conflict), it issues exactly one credit of B
+	// log-bits. When the call recurses (branch / decomposition), the
+	// budget is split among children such that 2^B is conserved, and
+	// the LEAVES of the recursion sum the credit to 2^B.
+	//
 	// Uses the stable log-sum-exp recurrence:
-	//   new = max(old, k) + log2(1 + 2^(min(old,k) - max(old,k)))
-	void noteCachedSubtree(unsigned k) {
-		double dk = (double)k;
+	//   new = max(old, B) + log2(1 + 2^(min(old,B) - max(old,B)))
+	void noteResolved(double log_bits) {
+		double dk = log_bits;
 		double old = closed_log_sum_;
 		if (old == -std::numeric_limits<double>::infinity()) {
 			closed_log_sum_ = dk;
@@ -438,18 +446,26 @@ private:
 	                         bool separator_reset,
 	                         int depth = 0,
 	                         int nd_node = -1,  // hierarchy node, -1 = use root
-	                         int reactive_metis_skip_until_depth = 0);
+	                         int reactive_metis_skip_until_depth = 0,
+	                         double abstract_budget = 0.0);
 
 	// The body of solveComponent. The public solveComponent wraps this
 	// with function-boundary memoization (canonical-key lookup at
 	// entry, store on return). All recursive calls go through the
 	// public wrapper to benefit from the cache uniformly.
+	//
+	// `abstract_budget` (log-bits) is the share of the worst-case
+	// 2^n_root decision tree this call must resolve. Threaded through:
+	// at a binary branch each child receives `parent - 1`; at a
+	// decomposition each sub-comp i receives `parent + a_i - logsumexp(a)`
+	// so the children's 2^budget sums equal the parent's 2^budget exactly.
 	mpz_class solveComponentImpl(Component &comp,
 	                             std::vector<CutNode> separator,
 	                             bool separator_reset,
 	                             int depth = 0,
 	                             int nd_node = -1,
-	                             int reactive_metis_skip_until_depth = 0);
+	                             int reactive_metis_skip_until_depth = 0,
+	                             double abstract_budget = 0.0);
 	// Branch on a literal, run BCP, recurse, then restore state.
 	//
 	// `from_separator` distinguishes the two call sites:
@@ -465,6 +481,11 @@ private:
 	//  - false : regular variable branching on the no-separator path.
 	//            Learning is allowed and safe (scoped by
 	//            removed_clauses_ for clause-branch contexts).
+	// `child_abstract_budget` is the budget for the recursive
+	// solveComponent call made by this branch (= parent budget - 1).
+	// On a conflict-at-entry leaf (F_TRI / BCP failure) this budget is
+	// credited directly via noteResolved, since no solveComponent call
+	// is made to issue the credit for us.
 	mpz_class branchOnLiteral(LiteralID lit,
 	                           Component &comp,
 	                           std::vector<CutNode> separator,
@@ -472,7 +493,8 @@ private:
 	                           int depth = 0,
 	                           int nd_node = -1,
 	                           bool from_separator = false,
-	                           int reactive_metis_skip_until_depth = 0);
+	                           int reactive_metis_skip_until_depth = 0,
+	                           double child_abstract_budget = 0.0);
 	// Branch on a clause (removed vs removed+negated).
 	mpz_class branchOnClause(ClauseOfs cl_ofs,
 	                          Component &comp,
@@ -481,7 +503,8 @@ private:
 	                          bool negate_literals,
 	                          int depth = 0,
 	                          int nd_node = -1,
-	                          int reactive_metis_skip_until_depth = 0);
+	                          int reactive_metis_skip_until_depth = 0,
+	                          double child_abstract_budget = 0.0);
 	// Discover independent sub-components of the current formula state
 	// restricted to `super_comp`. Returns owned components.
 	std::vector<Component*> discoverComponentsOf(Component &super_comp,

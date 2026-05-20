@@ -30,12 +30,45 @@
 
 #include "solver.h"
 
+#include <cmath>
+#include <limits>
 #include <queue>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 
 using namespace std;
+
+namespace {
+
+// Stable log2(sum 2^x_i). Empty vector → -infinity.
+double logSumExp2(const std::vector<unsigned> &xs) {
+	if (xs.empty()) return -std::numeric_limits<double>::infinity();
+	unsigned mx = 0;
+	for (unsigned x : xs) if (x > mx) mx = x;
+	double s = 0.0;
+	for (unsigned x : xs) s += std::exp2((double)x - (double)mx);
+	return (double)mx + std::log2(s);
+}
+
+// Distribute a parent's abstract budget across sub-components such that
+// the sum of children's 2^budget exactly equals 2^parent_budget.
+// Per-child: budget_i = parent_budget + a_i - log2(sum 2^a_j).
+// Free / BCP-pruned vars are absorbed in the slack
+//   (parent_budget - log2(sum 2^a_j)) ≥ (# free vars).
+std::vector<double> distributeBudget(double parent_budget,
+                                     const std::vector<unsigned> &sub_active) {
+	if (sub_active.empty()) return {};
+	if (sub_active.size() == 1) return {parent_budget};
+	double lse = logSumExp2(sub_active);
+	std::vector<double> out;
+	out.reserve(sub_active.size());
+	for (unsigned a : sub_active)
+		out.push_back(parent_budget + (double)a - lse);
+	return out;
+}
+
+} // anonymous namespace
 
 // Compute a per-variable centrality score from the ND-hierarchy.
 // Score = (max_depth − depth_of(v's leaf in the ND-tree)).  Variables
@@ -251,12 +284,37 @@ SOLVER_StateT Solver::countSATRec() {
 		std::cerr << "\n";
 	}
 	result = trivial_factor;
+	// Compute per-sub-comp active vars (= abstract budget shares) and
+	// distribute the root's n_root budget so children's 2^budget sums
+	// to exactly 2^n_root. Free/peeled vars (trivial_factor > 1) are
+	// absorbed in the slack between n_root and logsumexp(a_i).
+	std::vector<unsigned> sub_active;
+	sub_active.reserve(subcomps.size());
 	for (Component *sub : subcomps) {
+		unsigned a = 0;
+		for (auto vt = sub->varsBegin(); *vt != varsSENTINEL; vt++)
+			if (isActive(LiteralID(*vt, true))) a++;
+		sub_active.push_back(a);
+	}
+	std::vector<double> sub_budgets =
+	    distributeBudget((double)open_work_n_root_, sub_active);
+	for (size_t i = 0; i < subcomps.size(); ++i) {
+		Component *sub = subcomps[i];
 		mpz_class sub_count =
-		    solveComponent(*sub, {}, true, 0, start_node);
+		    solveComponent(*sub, {}, true, 0, start_node, 0, sub_budgets[i]);
 		result *= sub_count;
 		delete sub;
-		if (result == 0) break;
+		if (result == 0) {
+			// Short-circuit: remaining sub-comps' abstract subtrees
+			// are also resolved (the whole product is 0). Credit the
+			// remaining budgets so closed_log_sum_ still reaches
+			// n_root exactly.
+			for (size_t j = i + 1; j < subcomps.size(); ++j) {
+				noteResolved(sub_budgets[j]);
+				delete subcomps[j];
+			}
+			break;
+		}
 	}
 	statistics_.num_long_conflict_clauses_ = num_conflict_clauses();
 	// If solveComponent returned because of the time bound, the count is
@@ -285,9 +343,13 @@ mpz_class Solver::solveComponent(Component &comp,
                                   bool separator_reset,
                                   int depth,
                                   int nd_node,
-                                  int reactive_metis_skip_until_depth) {
+                                  int reactive_metis_skip_until_depth,
+                                  double abstract_budget) {
 	if (stopwatch_.timeBoundBroken()) {
 		// Capture chain (outer levels) if not already captured.
+		// NOTE: timeout is an abort, not a leaf event — closed_log_sum_
+		// is intentionally left as-is so the open-work odometer reports
+		// the actual progress at the moment of timeout.
 		if (!open_work_captured_) {
 			captureOpenWorkSnapshot();
 			open_work_captured_ = true;
@@ -343,6 +405,9 @@ mpz_class Solver::solveComponent(Component &comp,
 			cc.stats_hit_buckets[ContentCache::size_bucket(cached_key.num_vars)]++;
 			mpz_class scaled = hit;
 			for (unsigned i = 0; i < free_vars; ++i) scaled *= 2;
+			// LEAF event: cache hit resolves this whole subtree without
+			// recursing. Credit the full abstract budget.
+			noteResolved(abstract_budget);
 			return scaled;
 		}
 		comp_manager_.contentCache().stats_misses++;
@@ -350,7 +415,7 @@ mpz_class Solver::solveComponent(Component &comp,
 
 	mpz_class result = solveComponentImpl(
 	    comp, std::move(separator), separator_reset, depth, nd_node,
-	    reactive_metis_skip_until_depth);
+	    reactive_metis_skip_until_depth, abstract_budget);
 
 	if (can_cache && key_built) {
 		mpz_class structural = result;
@@ -358,8 +423,10 @@ mpz_class Solver::solveComponent(Component &comp,
 			mpz_fdiv_q_2exp(structural.get_mpz_t(),
 			                structural.get_mpz_t(), 1);
 		comp_manager_.contentCache().store(cached_key, structural);
-		// Track cumulative cached leaves for the monotone progress metric.
-		noteCachedSubtree(cached_key.num_vars);
+		// Cache store does NOT credit — the credit was issued by the
+		// LEAF events inside solveComponentImpl that resolved this
+		// subtree. Caching is a memoization detail orthogonal to
+		// progress accounting.
 	}
 	return result;
 }
@@ -369,7 +436,8 @@ mpz_class Solver::solveComponentImpl(Component &comp,
                                   bool separator_reset,
                                   int depth,
                                   int nd_node,
-                                  int reactive_metis_skip_until_depth) {
+                                  int reactive_metis_skip_until_depth,
+                                  double abstract_budget) {
 	// Push this comp onto the chain of in-progress sub-components for
 	// the OPEN_WORK snapshot. RAII guard ensures we pop on every exit
 	// path (normal return, timeout return, etc.).
@@ -408,11 +476,25 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			if (last_progress_emit_s_ < 0.0 || now - last_progress_emit_s_ >= progress_interval) {
 				captureOpenWorkSnapshot();  // overwrites fields; OK — final snapshot will rewrite
 				double pb = (double)open_work_n_root_ - open_work_log2_bound_;
-				// closed_bits: monotone log_sum_exp over every cache store
-				// since solve start. fraction_done = 2^(closed - n_root).
+				// closed_bits: monotone log-sum-exp over every leaf event's
+				// abstract budget. Conserves to exactly n_root at finish.
 				double closed = (closed_log_sum_ == -std::numeric_limits<double>::infinity())
 				              ? 0.0 : closed_log_sum_;
+				// Two percentages for human reading:
+				//   pct_log  = closed/n_root × 100 — smooth log-scale share
+				//              of the abstract tree. Best for comparing
+				//              configurations at fixed time budgets.
+				//   pct_lin  = 2^(closed-n_root) × 100 — linear fraction.
+				//              Stays ~0 until the very end, then jumps to
+				//              100. Useful only for "are we done yet?".
+				double n_root_d = (double)open_work_n_root_;
+				double pct_log = (n_root_d > 0.0) ? (closed / n_root_d) * 100.0 : 0.0;
+				double pct_lin = (n_root_d > 0.0)
+				    ? std::exp2(std::min(0.0, closed - n_root_d)) * 100.0
+				    : 0.0;
 				std::cerr << "PROGRESS t=" << now
+				          << " pct_log=" << pct_log
+				          << " pct_lin=" << pct_lin
 				          << " progress_bits=" << pb
 				          << " closed_bits=" << closed
 				          << " open=" << open_work_n_open_
@@ -512,6 +594,20 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				          << " trivial=" << trivial_factor
 				          << " parent_sep=" << separator.size() << std::endl;
 			}
+			// Budget distribution: sub_i_budget = abstract_budget + a_i
+			// - logsumexp(a_j). Sum_i 2^budget_i = 2^abstract_budget by
+			// construction; free / BCP-pruned vars are absorbed in the
+			// slack between abstract_budget and logsumexp.
+			std::vector<unsigned> mid_sub_active;
+			mid_sub_active.reserve(subcomps.size());
+			for (Component *sub : subcomps) {
+				unsigned a = 0;
+				for (auto it = sub->varsBegin(); *it != varsSENTINEL; ++it)
+					if (isActive(LiteralID(*it, true))) a++;
+				mid_sub_active.push_back(a);
+			}
+			std::vector<double> mid_sub_budgets =
+			    distributeBudget(abstract_budget, mid_sub_active);
 			for (size_t i = 0; i < subcomps.size(); ++i) {
 				Component *sub = subcomps[i];
 				// Build var/clause membership sets for filtering.
@@ -609,13 +705,19 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				mpz_class sub_count = solveComponent(
 				    *sub, std::move(sub_sep), sub_reset,
 				    depth + 1, sub_nd_eff,
-				    reactive_metis_skip_until_depth);
+				    reactive_metis_skip_until_depth,
+				    mid_sub_budgets[i]);
 				result *= sub_count;
 				delete sub;
 				if (result == 0) {
-					// Free remaining sub-comps before returning.
-					for (size_t j = i + 1; j < subcomps.size(); ++j)
+					// Short-circuit: remaining sub-comps' subtrees are
+					// also resolved (whole product is 0). Credit their
+					// budgets so closed_log_sum_ still totals to
+					// abstract_budget.
+					for (size_t j = i + 1; j < subcomps.size(); ++j) {
+						noteResolved(mid_sub_budgets[j]);
 						delete subcomps[j];
+					}
 					return 0;
 				}
 			}
@@ -698,7 +800,22 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		// caller's mask. Only when we actually decompose (multiple subs
 		// OR isolated vars peeled) do we update the filter.
 		bool decomposed = (subcomps.size() > 1) || (trivial_factor != 1);
+		// Distribute abstract_budget across sub-comps. See solveComponent
+		// docstring + distributeBudget() above for the math.
+		std::vector<unsigned> post_sub_active;
+		post_sub_active.reserve(subcomps.size());
 		for (Component *sub : subcomps) {
+			unsigned a = 0;
+			for (auto it = sub->varsBegin(); *it != varsSENTINEL; ++it)
+				if (isActive(LiteralID(*it, true))) a++;
+			post_sub_active.push_back(a);
+		}
+		std::vector<double> post_sub_budgets =
+		    distributeBudget(abstract_budget, post_sub_active);
+		size_t post_sub_idx = 0;
+		for (Component *sub : subcomps) {
+			double sub_budget = post_sub_budgets[post_sub_idx];
+			post_sub_idx++;
 			// Map sub-component to ND hierarchy child node.
 			// mapToChild's return convention:
 			//   >= 0 : valid child to descend to.
@@ -872,6 +989,9 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 							std::abort();
 						}
 					}
+					// LEAF event: L1 hit resolves this sub-comp without
+					// recursing. Credit its full abstract budget.
+					noteResolved(sub_budget);
 					result *= sub_count;
 					delete sub;
 					continue;
@@ -919,6 +1039,9 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				if (sub->num_variables() >= 3) {
 					comp_manager_.contentCache().l1_store(id_key, sub_count);
 				}
+				// LEAF event: L2 hit resolves this sub-comp without
+				// recursing. Credit its full abstract budget.
+				noteResolved(sub_budget);
 				result *= sub_count;
 				delete sub;
 				continue;
@@ -991,7 +1114,8 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			} sub_filter(*this, *sub, decomposed);
 			int sub_nd = config_.picker_root_sep_only ? -1 : child_nd_node;
 			sub_count = solveComponent(*sub, {}, true, depth + 1, sub_nd,
-			                           reactive_metis_skip_until_depth);
+			                           reactive_metis_skip_until_depth,
+			                           sub_budget);
 
 
 			// Brute-force cache check at STORE time. If sub-component is
@@ -1069,11 +1193,21 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				// Populate L1 so future visits to the same ID-set skip
 				// the canonical build.
 				comp_manager_.contentCache().l1_store(id_key, sub_count);
-				noteCachedSubtree(key.num_vars);
+				// Cache STORE is no longer a credit event — credits
+				// were issued inside solveComponent's leaf paths.
 			}
 			result *= sub_count;
 			delete sub;
-			if (result == 0) break;
+			if (result == 0) {
+				// Short-circuit: remaining sub-comps' subtrees are
+				// also resolved (the product is 0). Credit their
+				// budgets so closed_log_sum_ totals abstract_budget.
+				for (size_t j = post_sub_idx; j < subcomps.size(); ++j) {
+					noteResolved(post_sub_budgets[j]);
+					delete subcomps[j];
+				}
+				break;
+			}
 		}
 		return result;
 		}  // close the else (real decomposition path)
@@ -1381,7 +1515,13 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		BranchTarget tgt = pickBranchTarget(comp, separator);
 		// Empty-component sentinel: score stays at -1.0f if no candidate
 		// was found (the picker's `best` is default-initialized that way).
-		if (tgt.score < 0.0f) return 1;
+		if (tgt.score < 0.0f) {
+			// LEAF event: comp is empty / fully resolved.
+			noteResolved(abstract_budget);
+			return 1;
+		}
+		// Binary branch: each child has abstract budget = parent - 1.
+		const double child_budget = abstract_budget - 1.0;
 		if (tgt.kind == BranchTarget::VAR) {
 			VariableIndex v = tgt.id;
 			LiteralID lit_t(v, true), lit_f(v, false);
@@ -1404,11 +1544,13 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp,
 			                              separator, false, depth, nd_fwd,
 			                              v_in_sep,
-			                              reactive_metis_skip_until_depth);
+			                              reactive_metis_skip_until_depth,
+			                              child_budget);
 			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp,
 			                              separator, false, depth, nd_fwd,
 			                              v_in_sep,
-			                              reactive_metis_skip_until_depth);
+			                              reactive_metis_skip_until_depth,
+			                              child_budget);
 			return A + B;
 		} else {
 			ClauseOfs ofs = (ClauseOfs)tgt.id;
@@ -1426,10 +1568,12 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			                 ? -1 : nd_node;
 			mpz_class A = branchOnClause(ofs, comp, separator, false,
 			                              false, depth, nd_fwd,
-			                              reactive_metis_skip_until_depth);
+			                              reactive_metis_skip_until_depth,
+			                              child_budget);
 			mpz_class B = branchOnClause(ofs, comp, separator, false,
 			                              true, depth, nd_fwd,
-			                              reactive_metis_skip_until_depth);
+			                              reactive_metis_skip_until_depth,
+			                              child_budget);
 			return A - B;
 		}
 	}
@@ -1442,34 +1586,118 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		if (el.kind == CutNode::VAR) {
 			// Variable element
 			if (!isActive(LiteralID(el.id, true))) {
-				// Consumed by BCP — skip
+				// Consumed by BCP — skip. No decision spent, no
+				// budget split: pass abstract_budget through.
 				return solveComponent(comp, rest, false, depth, nd_node,
-				                      reactive_metis_skip_until_depth);
+				                      reactive_metis_skip_until_depth,
+				                      abstract_budget);
 			}
 			// Branch: A = v=true, B = v=false. This branch consumes a
 			// separator element — learning must be suppressed inside.
+			const double child_budget = abstract_budget - 1.0;
 			LiteralID lit_t(el.id, true), lit_f(el.id, false);
 			bool t_first = literal(lit_t).activity_score_ >
 			               literal(lit_f).activity_score_;
 			mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f,
 			                              comp, rest, false, depth, nd_node,
 			                              /*from_separator=*/true,
-			                              reactive_metis_skip_until_depth);
+			                              reactive_metis_skip_until_depth,
+			                              child_budget);
 			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t,
 			                              comp, rest, false, depth, nd_node,
 			                              /*from_separator=*/true,
-			                              reactive_metis_skip_until_depth);
+			                              reactive_metis_skip_until_depth,
+			                              child_budget);
 			return A + B;
 		} else {
 			// Clause element
 			if (isClauseRemoved(el.id) || isSatisfied(el.id)) {
 				return solveComponent(comp, rest, false, depth, nd_node,
-				                      reactive_metis_skip_until_depth);
+				                      reactive_metis_skip_until_depth,
+				                      abstract_budget);
+			}
+			// Count active literals; if the separator clause has been
+			// shortened by BCP to length ≤ 2, a clause-branch loses
+			// efficiency: branchOnClause's B-branch forces ALL the
+			// clause's literals to false at once, which on a length-2
+			// clause adds 2 simultaneous forced literals — that's a
+			// narrow residual, and one of the two branches' work is
+			// largely lost to BCP-conflict cascade. Switch to a
+			// variable branch on one of the active literals instead:
+			// both branches contribute non-trivially (one satisfies
+			// the clause, one forces the OTHER literal via BCP).
+			unsigned active_len = 0;
+			LiteralID first_active = LiteralID(0, false);
+			LiteralID second_active = LiteralID(0, false);
+			for (auto lt = beginOf(el.id); *lt != SENTINEL_LIT; ++lt) {
+				if (literal_values_[*lt] == X_TRI) {
+					if (active_len == 0) first_active = *lt;
+					else if (active_len == 1) second_active = *lt;
+					active_len++;
+					if (active_len > 2) break;
+				}
+			}
+			const double child_budget = abstract_budget - 1.0;
+			if (active_len <= 2 && active_len >= 1) {
+				// Diagnostic counter: only emitted under -logBranches.
+				if (config_.log_branches) {
+					static long long g_sep_clause_shortened = 0;
+					g_sep_clause_shortened++;
+					if (g_sep_clause_shortened <= 5) {
+						std::cerr << "SEP_CLAUSE_SHORTENED #"
+						          << g_sep_clause_shortened
+						          << " ofs=" << el.id
+						          << " active_len=" << active_len
+						          << " depth=" << depth << "\n";
+					} else if (g_sep_clause_shortened % 10000 == 0) {
+						std::cerr << "SEP_CLAUSE_SHORTENED count="
+						          << g_sep_clause_shortened << "\n";
+					}
+				}
+				// Pick the active var with higher activity score, as the
+				// existing var-branching code does. The literal's polarity
+				// in the clause is irrelevant to the branch decision.
+				LiteralID lit_t, lit_f;
+				if (active_len == 1) {
+					// Should not normally occur (BCP would have
+					// propagated a unit clause). Defensive: branch on
+					// the only active var.
+					lit_t = LiteralID(first_active.var(), true);
+					lit_f = LiteralID(first_active.var(), false);
+				} else {
+					// Pick the higher-activity var of the two.
+					VariableIndex v1 = first_active.var();
+					VariableIndex v2 = second_active.var();
+					float s1 = std::max(literal(LiteralID(v1, true)).activity_score_,
+					                    literal(LiteralID(v1, false)).activity_score_);
+					float s2 = std::max(literal(LiteralID(v2, true)).activity_score_,
+					                    literal(LiteralID(v2, false)).activity_score_);
+					VariableIndex v_pick = (s1 >= s2) ? v1 : v2;
+					lit_t = LiteralID(v_pick, true);
+					lit_f = LiteralID(v_pick, false);
+				}
+				bool t_first = literal(lit_t).activity_score_ >
+				               literal(lit_f).activity_score_;
+				// Treat as separator consumption: suppress learning to
+				// preserve the structural cut invariant.
+				mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, rest,
+				                              false, depth, nd_node,
+				                              /*from_separator=*/true,
+				                              reactive_metis_skip_until_depth,
+				                              child_budget);
+				mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, rest,
+				                              false, depth, nd_node,
+				                              /*from_separator=*/true,
+				                              reactive_metis_skip_until_depth,
+				                              child_budget);
+				return A + B;
 			}
 			mpz_class A = branchOnClause(el.id, comp, rest, false, false, depth, nd_node,
-			                              reactive_metis_skip_until_depth);
+			                              reactive_metis_skip_until_depth,
+			                              child_budget);
 			mpz_class B = branchOnClause(el.id, comp, rest, false, true, depth, nd_node,
-			                              reactive_metis_skip_until_depth);
+			                              reactive_metis_skip_until_depth,
+			                              child_budget);
 			return A - B;
 		}
 	}
@@ -1484,23 +1712,32 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 	if (config_.perform_adaptive_branching) {
 		bool comp_unsat = false;
 		v = pickBranchVariableAdaptive(comp, comp_unsat);
-		if (comp_unsat) return 0;
+		if (comp_unsat) {
+			// LEAF event: adaptive picker proved this subtree UNSAT.
+			noteResolved(abstract_budget);
+			return 0;
+		}
 	} else {
 		v = pickBranchVariable(comp);
 	}
 	if (v == 0) {
+		// LEAF event: comp closed / fully satisfied. No more decisions.
+		noteResolved(abstract_budget);
 		return 1;
 	}
+	const double child_budget = abstract_budget - 1.0;
 	LiteralID lit_t(v, true), lit_f(v, false);
 	bool t_first = literal(lit_t).activity_score_ >
 	               literal(lit_f).activity_score_;
 	// Non-separator variable branching: learning IS allowed here.
 	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth, -1,
 	                              /*from_separator=*/false,
-	                              reactive_metis_skip_until_depth);
+	                              reactive_metis_skip_until_depth,
+	                              child_budget);
 	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false, depth, -1,
 	                              /*from_separator=*/false,
-	                              reactive_metis_skip_until_depth);
+	                              reactive_metis_skip_until_depth,
+	                              child_budget);
 	return A + B;
 }
 
@@ -1509,7 +1746,8 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
                                    vector<CutNode> separator,
                                    bool separator_reset, int depth, int nd_node,
                                    bool from_separator,
-                                   int reactive_metis_skip_until_depth) {
+                                   int reactive_metis_skip_until_depth,
+                                   double child_abstract_budget) {
 	unsigned lit_save = literal_stack_.size();
 	// Invariants T1+T2 (gated): snapshot trail state for restore-check.
 	std::size_t snap_removed_size = 0;
@@ -1524,9 +1762,19 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 
 	// Check if literal is already assigned
 	if (!isActive(lit)) {
-		if (literal_values_[lit] == F_TRI) return 0;
+		if (literal_values_[lit] == F_TRI) {
+			// LEAF event: this branch is forbidden by upstream
+			// context — the entire 2^child_abstract_budget subtree
+			// is UNSAT. No solveComponent call is made, so credit
+			// here directly.
+			noteResolved(child_abstract_budget);
+			return 0;
+		}
+		// Literal already T_TRI: no decision made, pass budget
+		// through unchanged.
 		return solveComponent(comp, separator, separator_reset, depth, nd_node,
-		                      reactive_metis_skip_until_depth);
+		                      reactive_metis_skip_until_depth,
+		                      child_abstract_budget);
 	}
 
 	// Push a placeholder StackLevel BEFORE setLiteralIfFree so:
@@ -1653,10 +1901,15 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 				statistics_.num_learned_dedup_dropped_++;
 			}
 		}
+		// LEAF event: BCP found conflict → this branch is fully
+		// resolved as UNSAT. No solveComponent call is made, so
+		// credit the child budget here.
+		noteResolved(child_abstract_budget);
 		result = 0;
 	} else {
 		result = solveComponent(comp, separator, separator_reset, depth, nd_node,
-		                        reactive_metis_skip_until_depth);
+		                        reactive_metis_skip_until_depth,
+		                        child_abstract_budget);
 	}
 
 	if (config_.log_branches) {
@@ -1739,7 +1992,8 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
                                   vector<CutNode> separator,
                                   bool separator_reset,
                                   bool negate_literals, int depth, int nd_node,
-                                  int reactive_metis_skip_until_depth) {
+                                  int reactive_metis_skip_until_depth,
+                                  double child_abstract_budget) {
 	unsigned lit_save = literal_stack_.size();
 	std::size_t snap_removed_size = 0;
 	std::size_t snap_lscope_size  = 0;
@@ -1836,6 +2090,9 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 
 	mpz_class result;
 	if (conflict) {
+		// LEAF event: clause-satisfied conflict — no solveComponent
+		// call below will fire to issue this branch's credit.
+		noteResolved(child_abstract_budget);
 		result = 0;
 	} else {
 		bool bcp_ok = BCP(lit_save);
@@ -1846,10 +2103,13 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 			// the clause's literals), each marked as a "decision literal".
 			// Standard CDCL conflict analysis assumes one decision per
 			// decision level, so it fails on this multi-decision setup.
+			// LEAF event: BCP conflict.
+			noteResolved(child_abstract_budget);
 			result = 0;
 		} else {
 			result = solveComponent(comp, separator, separator_reset, depth, nd_node,
-			                        reactive_metis_skip_until_depth);
+			                        reactive_metis_skip_until_depth,
+			                        child_abstract_budget);
 		}
 	}
 
@@ -2026,6 +2286,34 @@ Solver::BranchTarget Solver::pickBranchTarget(
     Component &comp,
     const std::vector<CutNode> &separator) {
 	BranchTarget best;
+
+	// -pickerSepLockstep: mimic plain's "consume separator in METIS order".
+	// If any element of the carried separator is still active, return the
+	// FIRST active one directly (preserving METIS order) and skip the
+	// scoring loop entirely. Falls through to scoring only when the sep
+	// has been fully consumed (no active elements remain).
+	if (config_.picker_sep_lockstep) {
+		for (const auto &nd : separator) {
+			if (nd.kind == CutNode::VAR) {
+				if (isActive(LiteralID(nd.id, true))) {
+					best.kind = BranchTarget::VAR;
+					best.id = nd.id;
+					best.score = 1.0f;  // any positive value passes
+					return best;        // the score<0 sentinel check
+				}
+			} else {
+				ClauseOfs ofs = (ClauseOfs)nd.id;
+				if (!isClauseRemoved(ofs) && !isSatisfied(ofs)) {
+					best.kind = BranchTarget::CLAUSE;
+					best.id = nd.id;
+					best.score = 1.0f;
+					return best;
+				}
+			}
+		}
+		// All sep elements consumed — fall through to scoring loop on
+		// the residual.
+	}
 
 	// Build sep sets from the carried `separator` (vars + clauses).
 	std::unordered_set<unsigned> sep_var_set;

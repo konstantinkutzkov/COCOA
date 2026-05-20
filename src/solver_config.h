@@ -228,6 +228,22 @@ struct SolverConfiguration {
   // CLI: -pickerRootSepOnly.
   bool picker_root_sep_only = false;
 
+  // When true, the unified picker mimics "plain" semantics on the
+  // separator-consumption phase: if the carried `separator` has any
+  // still-active element, the picker returns the FIRST active element
+  // (preserving METIS order) and skips the full scoring loop. After
+  // the carried separator is fully consumed (no active elements), the
+  // normal multiplicative scoring runs over non-sep candidates.
+  // CLI: -pickerSepLockstep. Default off (full scoring).
+  //
+  // Why: the multiplicative picker scores sep elements by their
+  // internal `freq + 10·act + cascade` value, which doesn't reproduce
+  // METIS order even at extreme α_var. On small structured instances
+  // where the precomputed cut is already correct, this divergence costs
+  // 10×-100× wall time. Lockstep restores plain's "trust the cut"
+  // behavior while keeping the picker's scoring for the post-sep phase.
+  bool picker_sep_lockstep = false;
+
   // Phase 3 / Tier 2: adaptive branching via probe-scored τ minimization.
   // When enabled, replaces `pickBranchVariable` on the no-separator path
   // inside `solveComponent`.

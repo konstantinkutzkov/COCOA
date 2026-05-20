@@ -148,6 +148,8 @@ int main(int argc, char *argv[]) {
       theSolver.config().picker_non_sep_kills_nd = true;
     } else if (strcmp(argv[i], "-pickerRootSepOnly") == 0) {
       theSolver.config().picker_root_sep_only = true;
+    } else if (strcmp(argv[i], "-pickerSepLockstep") == 0) {
+      theSolver.config().picker_sep_lockstep = true;
     } else if (strcmp(argv[i], "-rec") == 0) {
       // Accepted for backward compatibility; recursive is now the only solver.
     } else if (strcmp(argv[i], "-learnLevel") == 0) {

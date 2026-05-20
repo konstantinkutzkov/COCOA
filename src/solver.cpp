@@ -859,14 +859,17 @@ void Solver::captureOpenWorkSnapshot() {
 	}
 	open_work_n_open_ = static_cast<unsigned>(open_work_sizes_.size());
 
-	// Override stack-walk bound with the cache-conservation value:
+	// Override stack-walk bound with the leaf-credit-conservation value:
 	//   remaining = 2^n_root - 2^closed_log_sum
 	//   log2(remaining) = closed + log2(2^(n_root - closed) - 1)
-	// closed_log_sum only grows (cache only stores), so remaining only
-	// shrinks → bound monotonically decreases → progress_bits monotone.
-	// This replaces the stack-walk bound, which was structurally
-	// non-monotone (chain.back transitions caused spurious bound
-	// growth even as the cache grew).
+	// closed_log_sum_ is the cumulative log-sum-exp over every LEAF
+	// event's abstract budget. By the budget-distribution invariant
+	// (binary branches split B→B-1,B-1; decompositions split B across
+	// sub-comps via logsumexp), closed_log_sum_ grows monotonically
+	// toward exactly n_root at finish, so `remaining` only shrinks
+	// → bound monotone → progress_bits monotone. This replaces the
+	// stack-walk bound, which was structurally non-monotone
+	// (chain.back transitions caused spurious bound growth).
 	if (closed_log_sum_ != -std::numeric_limits<double>::infinity()) {
 		double n_root_d = (double)open_work_n_root_;
 		double diff = n_root_d - closed_log_sum_;

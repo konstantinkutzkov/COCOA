@@ -928,3 +928,230 @@ This is a **research finding, not a portfolio config yet**. No prediction on whe
 - Min-rate is non-monotone with total solve time (v5 / v459 rank in top 10 but have ~60 s polarities). What additional feature separates them? Hypothesis: max(rate_F, rate_T)/min(rate_F, rate_T) ratio — high ratio signals lopsidedness even when min is moderate.
 
 
+## 2026-05-18 — t1_041 SOLVES in 9.7 s with reactiveMetis + wlIter 2
+
+Supersedes the 2026-05-11 framing of t1_041 as "structural class where our solver loses to ganak regardless of config." A specific flag combination cracks it cleanly.
+
+**Winning invocation** (Release build):
+```
+build/sharpSAT -rec -sep 5 -cb 3 -sepMode metis -wlIter 2 \
+  -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4 \
+  -q ../temp_cnf/mc2025_track1_041.cnf
+```
+**Wall time: 9.74 s** (verified via `probe_flags.py --budget 30`). Count matches ganak.
+
+### Synergy: neither flag alone is enough
+
+7-variant `probe_flags.py` portfolio comparison (30 s/variant budget) on `mc2025_track1_041.cnf`:
+
+| variant | wlIter | reactiveMetis | result | pct_lin | l2_hit_rate | big_hit_rate |
+|---|---|---|---|---|---|---|
+| **react-agg-wl2** | **2** | **aggressive (min 10, skip 4)** | **SOLVE 9.74 s** | 100% | 0.324 | 0.049 |
+| plain-wl2 | 2 | OFF | TIMEOUT 30.98 s | ~0% | 0.222 | 0.022 |
+| react-agg | 1 (default) | aggressive | TIMEOUT 30.86 s | 0.391% | 0.185 | 0.011 |
+| react-default | 1 | default (no min/skip tuning) | TIMEOUT 30.86 s | 0.098% | 0.190 | 0.005 |
+| plain | 1 | OFF | TIMEOUT 30.42 s | ~0% | 0.120 | 0.001 |
+| clausesFirst | 1 | OFF + `-sepClausesFirst` | TIMEOUT 30.87 s | ~0% | 0.120 | 0.001 |
+| adaptive | 1 | OFF + `-adaptive` | TIMEOUT 30.12 s | ~0% | 0.238 | 0.013 |
+
+The combination is multiplicative, not additive: react-agg-wl2 has ~75 % higher overall L2-hit rate than react-agg, and **4.4× the big-hit rate** (hits on subcomponents ≥ 200 vars). Big hits are what crack the residual core; with `-wlIter 1` the canonical keys fail to identify structurally-equivalent residual sub-components, so the cache misses where it should hit, and the solver grinds.
+
+### Failure mode of react-agg confirmed: hard residual plateau
+
+Extended probe of react-agg (the strongest non-winning config) at `-t 3600`:
+
+- t = 5 s: pct_lin = 0.0008 % (closed_bits 1013)
+- t = 85 s: pct_lin = **3.22 %** (closed_bits 1025.04) — residual plateau begins
+- t = 600 s (10 min): pct_lin = 3.229 %, closed_bits 1025.05
+- t = 2760 s (46 min — exit, likely macOS memory pressure): pct_lin = **3.22938 %**
+
+Over 44 min of "plateau", closed_bits moved 0.01 bits while the solver did 88 M decisions and 14 M cache hits — deep small subtrees that fall below the double-precision granularity of the log-sum-exp accumulator. **react-agg will not crack t1_041 with more budget.** Only the wlIter=2 combination breaks through.
+
+### Connection to 2026-05-12 anchor-variable study
+
+The 2026-05-12 anchor study probed `-rec -sep 5 -cb 3 -sepMode metis -wlIter 2` (no reactive METIS) and found that **specific anchor variables** solve t1_041 in ~2 s, but the default picker doesn't pick them. The portfolio finding here is consistent: wlIter=2 alone (= `plain-wl2`) doesn't solve at the default picker, but the reactive-METIS path supplies runtime separators that, combined with wlIter=2 canonicalization, expose the same residual structure that the anchor variables expose.
+
+### Progress-metric correction landed alongside this measurement
+
+This run used the [Progress metric fix](progress_metric_issue.md): `closed_log_sum_` is now credited at LEAF events with budget threading, not at cache STOREs. Old metric overshot to 1030.24 on react-agg-wl2 finish; new metric lands at exactly 1030.0 (n_root). This is what made the portfolio probe's `progress_bits=0.4 %` for react-agg meaningfully distinguishable from the other timed-out configs at ~0 %; the previous metric collapsed all timeouts to the same value.
+
+### Catalog entry for folklore
+
+> **If react-agg plateaus hard (pct_lin stuck below 5 % after ~60 s), try `-wlIter 2`.** Signal: low big-hit rate (≤ 0.02) suggests canonical-key collisions on residual sub-components.
+
+Worth testing this folklore rule on the other density-1 structured instances flagged 2026-05-11: t1_021 family, t1_023, t1_025, t1_027.
+
+### Follow-up — adding `-unifiedPicker -decomposeAfterK 1000` drops solve time to 3.04 s
+
+Added the unified picker on top of `react-agg-wl2`:
+
+```
+build/sharpSAT -rec -sep 5 -cb 3 -sepMode metis -wlIter 2 \
+  -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4 \
+  -unifiedPicker -decomposeAfterK 1000 \
+  -q ../temp_cnf/mc2025_track1_041.cnf
+```
+
+**Wall: 3.04 s real, 3.02 s user.** Count verified against ganak (`…43259892051805732864`).
+
+Comparison on t1_041:
+
+| variant | wall | speedup vs `react-agg-wl2` |
+|---|---|---|
+| `react-agg-wl2` (today's portfolio winner) | 9.74 s | 1× |
+| `react-agg-wl2 + -unifiedPicker -decomposeAfterK 1000` | **3.04 s** | **3.2×** |
+
+### Re-frames the 2026-05-09 "unified picker is scaffolding" verdict
+
+The 2026-05-09 cascade-weight sweep declared the unified-picker code path "research scaffolding, not a production path" because every variant lost to plain on the four instances tested (t1_065 / t1_071 / t1_011 / t1_021_k10_s1). **That sweep did not include `-wlIter 2` or `-reactiveMetis*`.** On those instances, plain already wins, so the picker has nothing to add.
+
+This finding flips the verdict on t1_041 specifically: when the picker has GOOD candidates to score (because reactiveMetis supplies dynamic cuts the precomputed hierarchy misses) AND a reliable cache (because wlIter=2 keeps canonical keys consistent across structurally-equivalent residual sub-components), its "soft override of the precomputed cut" is a net WIN, not the net loss documented in the 2026-05-09 sweep.
+
+The flag triple is fully multiplicative-synergistic:
+
+| `-wlIter 2` | `-reactiveMetis*` | `-unifiedPicker` | wall | notes |
+|---|---|---|---|---|
+| ✓ | – | – | TIMEOUT 30 s | `plain-wl2` |
+| – | ✓ | – | TIMEOUT 46 min (memory pressure exit at 3.23 %) | `react-agg`, plateaued |
+| – | – | ✓ | (untested in this combination — would be one to fill in) | |
+| – | ✓ | ✓ | **~20 min** | wlIter=1 + reactiveMetis + unifiedPicker. Solves cleanly (verified 2026-05-19; final OPEN_WORK in [20, 21] min interval, progress trajectory reached 96.9 % at t=20 min) |
+| ✓ | ✓ | – | 9.74 s | `react-agg-wl2` |
+| ✓ | ✓ | ✓ | **3.04 s** | best known |
+
+### Picker breaks the plateau even at wlIter=1
+
+The 4th row above is the key new datapoint (2026-05-19). Compared to `react-agg` (which plateaus permanently at 3.2 %), adding `-unifiedPicker -decomposeAfterK 1000` makes the same wlIter=1 config solve in ~20 min — categorically a different regime, not a quantitative speedup. **The unified picker is sufficient to make the instance solvable**; wlIter=2 then provides a ~400× multiplier on top.
+
+Trajectory (PROGRESS every 60 s):
+
+| t (min) | pct_lin | closed_bits | progress_bits |
+|---|---|---|---|
+| 1 | 4.15 % | 1025.41 | 0.06 |
+| 2 | 7.54 % | 1026.27 | 0.11 |
+| 3 | 9.81 % | 1026.65 | 0.15 |
+| 4 | 12.46 % | 1026.99 | 0.19 |
+| 5 | 23.30 % | 1027.90 | 0.38 |
+| 10 | 50.10 % | 1029.00 | 1.00 |
+| 15 | 75.64 % | 1029.60 | 2.04 |
+| 20 | 96.92 % | 1029.95 | 5.02 |
+| ~20-21 | 100 % (OPEN_WORK fired) | 1030.00 | 1030 |
+
+Unlike react-agg's exponentially-decaying plateau, this trajectory is **roughly linear in pct_lin** with periodic big jumps (e.g. +12 pp at t=5, +12 pp at t=15, +10 pp at t=20). Those jumps correspond to upper-level subtree closures; their regularity suggests the picker is finding a balanced search order that progressively closes branches of similar abstract size.
+
+### Updated catalog entry for folklore
+
+> **On a density-1 structured instance, the right baseline to compare against is `react-agg-wl2 + -unifiedPicker -decomposeAfterK 1000`, not plain.** The 2026-05-09 "plain dominates" finding applies to instances where the precomputed cut is already correct; for instances where it isn't (t1_041, and likely the rest of the density-1 structured class), the picker contributes meaningfully once it has reactiveMetis-supplied cuts to score.
+
+Open question: does this triple-flag also dominate on the 2026-05-09 sweep instances (t1_065 / t1_071 / t1_011 / t1_021_k10_s1)? If yes → universal recommendation. If no → density-1 structured is its own regime requiring its own folklore.
+
+
+## 2026-05-19 — Triple-flag config does NOT generalize across density-1 structured class; "plain" must remain in any portfolio
+
+### Findings
+
+Tested the triple-flag config (`-wlIter 2 -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4 -unifiedPicker -decomposeAfterK 1000 -cascadeW 0`) on the other density-1 structured instances flagged 2026-05-11 (t1_023, t1_025, t1_027, t1_047), with 600 s budget per run and ganak `--td 1` (and `--td 0` if td1 timed out) as baselines.
+
+| Instance | ganak --td 1 | ganak --td 0 | sharpSAT triple-flag | Documented plain (2026-05-11) | Documented legacy (2026-05-11) |
+|---|---|---|---|---|---|
+| t1_023 | TIMEOUT > 600 s | TIMEOUT > 600 s | TIMEOUT > 600 s (progress_bits 3 × 10⁻⁷) | TIMEOUT > 60 s | TIMEOUT > 60 s |
+| t1_025 | 1.69 s | — | 22.23 s ✓ | 7.31 s | 7.50 s |
+| t1_027 | 2.81 s | — | 440.48 s ✓ | 5.78 s | 4.80 s |
+| t1_047 | 480.87 s ✓ (count `11123864327733`) | — | TIMEOUT > 600 s (progress_bits 0.57) | TIMEOUT > 60 s | TIMEOUT > 60 s |
+
+Re-ran plain on t1_027 to confirm: 5.28 s solver time, count matches `1115259056499565`. Plain regression-free.
+
+### The triple-flag wins on t1_041 but loses badly on smaller density-1 instances
+
+The 2026-05-18 t1_041 result (3.04 s with triple-flag, plain TIMEOUT > 30 s) does **not** generalize:
+
+- t1_025: triple-flag 22.23 s vs. plain 7.31 s → **3.0× slower**.
+- t1_027: triple-flag 440 s vs. plain 5.78 s → **76× slower**.
+
+The density-1-structured class is not homogeneous: t1_041 is large (1920 vars, mixed clause lengths, density 0.99), while t1_023/t1_025/t1_027/t1_047 are small (63-102 vars, pure 3-SAT). The picker's value depends on instance size, not just density.
+
+### 2D parameter sweep on t1_027 (8 runs, `-pickerAlphaVar` × `-wlIter` × `-reactiveMetis on/off`)
+
+| wlIter | α_var | reactiveMetis | wall | progress_bits | decisions |
+|---|---|---|---|---|---|
+| 1 | 15 | on | TIMEOUT 61 s | 0.21 | 22.3 M |
+| 1 | 50 | on | TIMEOUT 61 s | 0.14 | 22.0 M |
+| 1 | 100 | on | TIMEOUT 61 s | 0.13 | 22.2 M |
+| 1 | 200 | on | TIMEOUT 61 s | 0.13 | 21.9 M |
+| 2 | 15 | on | TIMEOUT 61 s | 0.21 | 19.9 M |
+| 2 | {50, 100, 200} | on | TIMEOUT 61 s | 0.10-0.12 | 20.2-20.4 M |
+| 1 | {15..200} | off | TIMEOUT 61 s | 0.11-0.21 | 22.0-22.3 M |
+| 2 | {15..200} | off | TIMEOUT 61 s | 0.11-0.21 | 20.0-20.5 M |
+
+No setting solves t1_027 in 60 s. The picker generates ~10× more decisions than plain (22 M vs 2 M) at similar per-decision throughput (~370 K dec/s vs plain's ~350 K dec/s). The cost is the *search tree* the picker explores, not per-pick overhead.
+
+Counter-intuitively, *higher* α_var produces *lower* progress (0.21 → 0.13 as α goes 15 → 200). Forcing the picker to favor sep more aggressively makes the search worse — strong evidence that sep-element *ordering within the cut* is wrong: picker scores sep vars by `freq + 10·act` while plain consumes them in METIS order (sep[0] first).
+
+### Plain ≠ "picker with some α setting"
+
+Reading `pickBranchTarget()` ([solver_rec.cpp:2210-2383](../src/solver_rec.cpp#L2210-L2383)):
+- Plain: pops `separator[0]`, branches on it, recurses with `separator[1:]`. Zero scoring, METIS-fixed order.
+- Picker: scores every active VAR and CLAUSE with multiplicative formula `score = varW · raw · (1 + α · exp(-λ · rel_k) · is_sep)`; picks argmax across all candidates of both kinds.
+
+Even at extreme α the picker picks sep elements by *internal score*, not by *METIS index*. No flag currently restores plain's "sep in order" behavior. A new flag `-pickerSepLockstep` (return the first active sep element directly, skip scoring when sep is non-empty) would be needed to mimic plain exactly; that's a code change, not a parameter sweep.
+
+### Policy update
+
+> **`plain` (`-rec -sep 5 -cb 3 -sepMode metis`) must remain a mandatory portfolio config.** It is the only configuration we have that consumes the precomputed METIS separator in METIS order without per-pick scoring overhead. On small density-1 structured instances (t1_025, t1_027, t1_065, t1_071), this is decisively faster than any unified-picker setting. The 2026-05-18 t1_041 finding does NOT change this — picker-based configs win on *large* instances where the picker can override poor precomputed cuts, but on instances where the precomputed cut is already correct (and the search tree is small), plain has no overhead to amortize.
+
+Until `-pickerSepLockstep` (or equivalent) is implemented, any portfolio driver must evaluate at minimum: `plain` AND the picker-based triple-flag, choosing per-instance.
+
+### Open follow-ups
+
+- Implement `-pickerSepLockstep` and validate against plain on t1_025/t1_027 (expect near-identical wall) and against the current picker on t1_041 (expect identical wall, since t1_041's win came from picker behavior *after* sep was exhausted, not from picker overriding the cut).
+- Confirm the picker's relative-ordering hypothesis directly by dumping the first 20 picks of plain vs picker on t1_027 and comparing which separator indices each picks at each level.
+- Re-evaluate the 2026-05-18 "react-agg-wl2 + unified picker" entry: the win on t1_041 is real but the entry's universal-recommendation framing was over-strong. Treat the triple-flag as one of N portfolio members, not a default.
+
+
+## 2026-05-19 (continued) — Adaptive solver: separator-disabled is the right default
+
+### Empirical finding
+
+On t1_047 (80 vars, density 3.0, dense pure 3-SAT), tested adaptive (`-rec -sep 5 -cb 3 -sepMode metis -adaptive`) with and without the separator flag. Five `-adaptive` variants run at 15 min budget each:
+
+| variant | wall | notes |
+|---|---|---|
+| `-adaptive -sep 5` (default) | 648.4 s | with precomputed METIS hierarchy |
+| `-adaptive -sep 5 -wlIter 2` | 642.9 s | within noise of default |
+| `-adaptive -sep 5 -adaptiveAlpha 0.5` | 651.9 s | within noise |
+| `-adaptive -sep 5 -adaptiveAlpha 1.0` | 703.8 s | 8% slower |
+| `-adaptive -sep 5 -reactiveMetis*` | TIMEOUT 908 s | reactive dynamic cuts destructive on dense small |
+| `-adaptive` (NO `-sep`) | 600-660 s | indistinguishable from `-adaptive -sep 5` |
+
+### Diagnostic confirming separator is unused
+
+Verbose log on t1_047 with `-adaptive -sep 5 -v -logBranches`:
+```
+NDHierarchy: 37 tree nodes, 8 internal (sep), ..., max_sep=47 ...
+ROOT_DECOMP: root_active=80 subcomps=1 trivial_factor=1 sub0=80
+ROOT_ENTRY call=1 sep_size=0 sep_reset=1 comp_total_vars=80 comp_active=80 trail=0
+  TIER1_REJECT nd=0 reason=size sep=47 n=80 allowed=20
+  TIER2_PICK v=2 tau=1.61322 scored=20
+BRANCH_ENTER id=1 lit=2 lit_orig=2 DL=1 ...
+```
+
+The first decision is `V2` (NOT in the root separator V1,V5,V7,...). Reason: the root separator has 47 elements, but the gate `Solver::hierarchySeparatorAcceptable` ([solver.cpp:1259](../src/solver.cpp#L1259), [solver.h:386](../src/solver.h#L386)) rejects whenever `sep_size > min(0.3·n_active, 100)`. For t1_047 root: `0.3·80 = 24`, so `47 > 24` → rejected. The print's "allowed=20" is stale (a `DIAG: relax 20→100` comment in the code shows the actual cap is 100). Same rejection cascades to deeper hierarchy nodes — adaptive runs end-to-end without consuming a single sep element.
+
+### Why the size gate exists and why it's right here
+
+The 2026-04-19 "Phase 1" rationale: a separator larger than ~30% of the active sub-component is structurally bad (branching on 24+ vars before any decomposition has the same effect as full variable branching, with extra bookkeeping overhead). The gate is correct *as a policy*. The issue on t1_047 is that **every** ND-hierarchy node has a separator that exceeds the gate, so the ND machinery is dead code throughout the search.
+
+This is a property of dense small instances. METIS-style decompositions don't find small balanced cuts on density-3 graphs; the formula is too connected. The gate rejects everything, the search runs as if `-sep` wasn't passed.
+
+### Policy update
+
+> **When using `-adaptive`, the default should be NO `-sep` flag.** The precomputed METIS hierarchy is rejected at runtime on instances where it would matter least (dense small ones where adaptive's τ-based picker is already strong), and only ever helps when METIS finds small balanced cuts (which adaptive itself can't exploit — adaptive has no sep-awareness in its scoring). Dropping `-sep` saves the METIS build cost at startup (~1-2 seconds on larger instances) without changing the search.
+
+This is the adaptive analogue of [[plain-baseline-required]] for the picker family: the right default depends on instance class, and `-sep` for `-adaptive` is an opt-in (paying startup cost to potentially help, but the runtime gate decides if it actually does).
+
+### Open follow-ups
+
+- Quantify the METIS startup cost on a range of instance sizes — is `-adaptive -sep 5` ever materially slower than `-adaptive` due to that cost alone?
+- Test `-adaptive` (no sep) on the broader density-1 structured class (t1_023, t1_025, t1_027 — already documented; revisit with adaptive specifically).
+- The size-gate-cascade-rejection pattern suggests an early-exit: at ND-build time, scan all separator sizes and if no node has an acceptable sep, **don't build the hierarchy at all**. ~5 lines in `countSATRec`. Saves 1-2 s on density-3 small instances.
+- Implement sep-awareness in adaptive's score formula (a `+α_sep · is_sep(v)` boost in `cheap_score`) — could unlock the METIS hierarchy for adaptive on instances where the gate *would* accept it (i.e., medium-density instances with reasonably small precomputed cuts).
+
