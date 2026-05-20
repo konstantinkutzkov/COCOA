@@ -45,9 +45,28 @@ public:
   StopWatch();
 
   bool timeBoundBroken() {
+    // Throttle the gettimeofday syscall: do the actual check once
+    // every TIMEBOUND_POLL_MASK + 1 calls; otherwise return the
+    // last cached result. Profile (commit c61cefc) showed the
+    // syscall family (gettimeofday + __commpage_gettimeofday_internal
+    // + mach_absolute_time) at ~5% of wall time on a hot t1_045 run,
+    // because solveComponent + solveComponentImpl each check on
+    // every recursive call.
+    //
+    // Granularity: up to 1023 recursive calls past the actual
+    // deadline before we notice. At ~340 K decisions/s on t1_045
+    // that's ~3 ms — negligible vs. user time bounds in seconds.
+    // Once broken, cached value is true and stays true (elapsed
+    // time only grows), so the timeout is sticky once seen.
+    static constexpr unsigned TIMEBOUND_POLL_MASK = 1023;
+    if ((time_bound_poll_counter_++ & TIMEBOUND_POLL_MASK) != 0) {
+      return last_time_bound_result_;
+    }
     timeval actual_time;
     gettimeofday(&actual_time, NULL);
-    return actual_time.tv_sec - start_time_.tv_sec > time_bound_;
+    last_time_bound_result_ =
+        (actual_time.tv_sec - start_time_.tv_sec > time_bound_);
+    return last_time_bound_result_;
   }
 
   bool start() {
@@ -89,6 +108,10 @@ private:
 
   timeval interval_length_;
   timeval last_interval_start_;
+
+  // Throttling state for timeBoundBroken — see that method.
+  unsigned time_bound_poll_counter_ = 0;
+  bool     last_time_bound_result_  = false;
 
   // if we have started and then stopped the watch, this returns
   // the elapsed time
