@@ -71,6 +71,11 @@ static std::vector<uint8_t> s_var_flags;  // see note above re: thread_local
 static std::vector<uint64_t> s_block_label;
 static std::vector<uint64_t> s_sig_k;
 static std::vector<std::pair<uint64_t, unsigned>> s_labels_collision;
+// Per-clause scratch for the WL inner loop's contribution gather.
+// Reused across all clauses within a single WL iteration so that the
+// long-clause case can walk literal_pool ONCE per clause instead of
+// twice. Each entry is (sig_pair_var_idx, mix64(block_label[idx])).
+static std::vector<std::pair<int, uint64_t>> s_wl_clause_contribs;
 
 CanonicalKey buildCanonicalKey(
     Component &comp,
@@ -323,18 +328,22 @@ CanonicalKey buildCanonicalKey(
       for (const auto &ref : s_clause_refs) {
         uint64_t clause_h = 0;
         if (!ref.is_binary) {
+          // Single walk of literal_pool: gather (idx, mix64(block_label[idx]))
+          // into a small scratch buffer while accumulating clause_h. Then
+          // iterate the buffer to apply sig_k[idx] += clause_h - h_idx.
+          // Bitwise identical to the previous two-pass implementation —
+          // see safety analysis in the commit that introduced this.
+          s_wl_clause_contribs.clear();
           for (auto lt = literal_pool.begin() + ref.ofs; *lt != SENTINEL_LIT; lt++) {
             if (literal_values[*lt] != X_TRI) continue;
             int idx = s_var_idx[lt->var()];
             if (idx < 0 || (s_var_flags[idx] & 1)) continue;
-            clause_h += mix64(block_label[idx]);
+            uint64_t h = mix64(block_label[idx]);
+            s_wl_clause_contribs.push_back({idx, h});
+            clause_h += h;
           }
-          for (auto lt = literal_pool.begin() + ref.ofs; *lt != SENTINEL_LIT; lt++) {
-            if (literal_values[*lt] != X_TRI) continue;
-            int idx = s_var_idx[lt->var()];
-            if (idx < 0 || (s_var_flags[idx] & 1)) continue;
-            sig_k[idx] += clause_h - mix64(block_label[idx]);
-          }
+          for (const auto &c : s_wl_clause_contribs)
+            sig_k[c.first] += clause_h - c.second;
         } else {
           int ia = s_var_idx[ref.var_a];
           int ib = s_var_idx[ref.var_b];
