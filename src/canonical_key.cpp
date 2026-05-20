@@ -51,6 +51,21 @@ static std::vector<ClauseRef> s_clause_refs;  // see note above re: thread_local
 // Bit 0: is_singleton, Bit 1: flip
 static std::vector<uint8_t> s_var_flags;  // see note above re: thread_local
 
+// WL refinement scratch buffers. Previously these were local
+// std::vector / std::unordered_map declarations inside the WL loop
+// and the post-WL collision/anchored-sort steps; profiling showed
+// the per-call heap allocations contributed materially to the 15%
+// allocator slice. Reusing static buffers across calls preserves
+// bucket capacity (unordered_map) and storage (vectors) without
+// changing semantics — same single-threaded restriction as the
+// other s_* buffers above.
+static std::vector<uint64_t> s_block_label;
+static std::vector<uint64_t> s_sig_k;
+static std::vector<uint64_t> s_labels_collision;
+static std::vector<std::pair<uint64_t, unsigned>> s_anchored_sorted;
+static std::unordered_map<uint64_t, int> s_block_count_static;
+static std::unordered_map<uint64_t, int> s_block_count_final;
+
 CanonicalKey buildCanonicalKey(
     Component &comp,
     const std::vector<LiteralID> &literal_pool,
@@ -288,11 +303,12 @@ CanonicalKey buildCanonicalKey(
       x ^= x >> 33;
       return x;
     };
-    std::vector<uint64_t> block_label(n_vars, 0);
-    for (unsigned i = 0; i < n_vars; i++) block_label[i] = s_sig[i];
+    s_block_label.assign(s_sig.begin(), s_sig.begin() + n_vars);
+    auto &block_label = s_block_label;
     bool collision_now = had_any_collision;
     for (int iter = 2; iter <= wl_iterations && collision_now; iter++) {
-      std::vector<uint64_t> sig_k(n_vars, 0);
+      s_sig_k.assign(n_vars, 0);
+      auto &sig_k = s_sig_k;
       for (const auto &ref : s_clause_refs) {
         uint64_t clause_h = 0;
         if (!ref.is_binary) {
@@ -324,13 +340,16 @@ CanonicalKey buildCanonicalKey(
         block_label[i] = mix64(block_label[i] ^ (sig_k[i] * 0x9E3779B97F4A7C15ULL));
       }
       // Recount: any collision still left?
-      std::vector<uint64_t> labels;
-      labels.reserve(s_sig_pairs.size());
-      for (auto &p : s_sig_pairs) labels.push_back(block_label[p.second]);
-      std::sort(labels.begin(), labels.end());
+      s_labels_collision.clear();
+      s_labels_collision.reserve(s_sig_pairs.size());
+      for (auto &p : s_sig_pairs)
+        s_labels_collision.push_back(block_label[p.second]);
+      std::sort(s_labels_collision.begin(), s_labels_collision.end());
       collision_now = false;
-      for (size_t k = 1; k < labels.size(); k++)
-        if (labels[k] == labels[k - 1]) { collision_now = true; break; }
+      for (size_t k = 1; k < s_labels_collision.size(); k++)
+        if (s_labels_collision[k] == s_labels_collision[k - 1]) {
+          collision_now = true; break;
+        }
     }
     // Step 3: combine with static (preprocessing-time) WL labels for
     // vars still in collision blocks. Refines those blocks using
@@ -340,7 +359,8 @@ CanonicalKey buildCanonicalKey(
     if (collision_now && static_wl_labels != nullptr) {
       // Identify which vars are currently in collision blocks
       // (block_size > 1 under current block_label).
-      std::unordered_map<uint64_t, int> count;
+      s_block_count_static.clear();
+      auto &count = s_block_count_static;
       for (auto &p : s_sig_pairs) count[block_label[p.second]]++;
       for (auto &p : s_sig_pairs) {
         unsigned i = p.second;
@@ -352,13 +372,16 @@ CanonicalKey buildCanonicalKey(
         }
       }
       // Recount: any collisions still left after step 3?
-      std::vector<uint64_t> labels;
-      labels.reserve(s_sig_pairs.size());
-      for (auto &p : s_sig_pairs) labels.push_back(block_label[p.second]);
-      std::sort(labels.begin(), labels.end());
+      s_labels_collision.clear();
+      s_labels_collision.reserve(s_sig_pairs.size());
+      for (auto &p : s_sig_pairs)
+        s_labels_collision.push_back(block_label[p.second]);
+      std::sort(s_labels_collision.begin(), s_labels_collision.end());
       collision_now = false;
-      for (size_t k = 1; k < labels.size(); k++)
-        if (labels[k] == labels[k - 1]) { collision_now = true; break; }
+      for (size_t k = 1; k < s_labels_collision.size(); k++)
+        if (s_labels_collision[k] == s_labels_collision[k - 1]) {
+          collision_now = true; break;
+        }
     }
     // Step 4: final canonical-ID assignment with identity fallback for
     // residual collision-block vars.
@@ -370,11 +393,13 @@ CanonicalKey buildCanonicalKey(
     // Fires whenever iter 1 left any collision, since the post-iter-1
     // canonical IDs from the heuristic var_idx tie-break are unsafe.
     if (had_any_collision) {
-      std::unordered_map<uint64_t, int> blk_count;
+      s_block_count_final.clear();
+      auto &blk_count = s_block_count_final;
       for (auto &p : s_sig_pairs) blk_count[block_label[p.second]]++;
       // Collect anchored vars; sort by (block_label, idx); assign 1..k.
-      std::vector<std::pair<uint64_t, unsigned>> anchored_sorted;
-      anchored_sorted.reserve(s_sig_pairs.size());
+      s_anchored_sorted.clear();
+      s_anchored_sorted.reserve(s_sig_pairs.size());
+      auto &anchored_sorted = s_anchored_sorted;
       for (auto &p : s_sig_pairs)
         if (blk_count[block_label[p.second]] == 1)
           anchored_sorted.push_back({block_label[p.second], p.second});
