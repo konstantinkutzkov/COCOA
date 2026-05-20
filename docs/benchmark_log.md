@@ -1155,3 +1155,68 @@ This is the adaptive analogue of [[plain-baseline-required]] for the picker fami
 - The size-gate-cascade-rejection pattern suggests an early-exit: at ND-build time, scan all separator sizes and if no node has an acceptable sep, **don't build the hierarchy at all**. ~5 lines in `countSATRec`. Saves 1-2 s on density-3 small instances.
 - Implement sep-awareness in adaptive's score formula (a `+α_sep · is_sep(v)` boost in `cheap_score`) — could unlock the METIS hierarchy for adaptive on instances where the gate *would* accept it (i.e., medium-density instances with reasonably small precomputed cuts).
 
+
+## 2026-05-20 — Per-decision throughput optimization stack: +102% on t1_045 (profile-driven)
+
+Four-commit chain on top of `3882e3f` after macOS `sample` identified the real per-decision hotspots — none of which were the previously-attempted target (`count_active_2clauses`, 0.06% self-time). Same algorithm, same counts; pure overhead reduction.
+
+### t1_045 adaptive+wlIter=2 (300 s budget, `-rec -sep 5 -cb 3 -sepMode metis -adaptive -wlIter 2 -t 300`)
+
+| commit | decisions/300s | throughput (dec/s) | vs baseline | step Δ |
+|---|---|---|---|---|
+| `3882e3f` (baseline) | 53,745,480 | 178,914 | — | — |
+| `bd48859` | 93,749,222 | 312,287 | +74% | +74% |
+| `c61cefc` | 102,837,920 | 342,665 | +91% | +10% |
+| `d7e2a1c` | 106,264,064 | 354,213 | +98% | +3.4% |
+| `010ef37` | 108,672,794 | 362,234 | **+102%** | +2.3% |
+
+`avg_bcp/dec` is 1.17128 → 1.18000 across the chain — essentially constant. The +102% is entirely per-decision overhead removed, not algorithmic change.
+
+### t1_041 winning config (`-rec -sep 5 -cb 3 -sepMode metis -wlIter 2 -reactiveMetis -reactiveMetisMin 10 -reactiveMetisSkip 4 -unifiedPicker -decomposeAfterK 1000`)
+
+| commit | wall time |
+|---|---|
+| `3882e3f` (documented baseline) | 3.04 s |
+| `bd48859` | 2.82 s |
+| `c61cefc` | 2.16 s |
+| `d7e2a1c` | 2.03 s |
+| `010ef37` | 2.05 s |
+
+### What each commit changed
+
+- **`bd48859` — static-scratch buffers in `buildCanonicalKey`.** Six per-call heap-allocated structures (`block_label`, `sig_k`, two `labels` collision vectors, `anchored_sorted`, two `unordered_map` count tables) became module-static buffers reused via `auto &` aliases. Allocator slice (`_xzm_*` family) dropped from ~14% to ~7% of CPU. Single biggest win at +74%.
+
+- **`c61cefc` — sort-scan replacing post-WL count maps.** The two `unordered_map<uint64_t, int>` count tables answered the same "how many sig_pairs share this block_label?" question. Replaced both — and the separate `anchored_sorted` vector — with a single sorted vector of `(block_label, var_idx)` pairs (`s_labels_collision`) and two-pointer group scans. Hash insert/lookup overhead removed; one extra sort feeds three downstream uses.
+
+- **`d7e2a1c` — throttle `gettimeofday`.** `solveComponent` + `solveComponentImpl` each invoke `stopwatch_.timeBoundBroken()` per recursive call. Profile showed the `gettimeofday` family at ~5% of wall time. Throttle to 1 in 1024 calls (counter + cached last result; once broken, sticky). Granularity ≤ ~3 ms at current throughput — well under any user-set time bound.
+
+- **`010ef37` — merged WL inner-loop two-pass.** The long-clause branch of the WL refinement loop walked `literal_pool` twice per clause: pass 1 to accumulate `clause_h`, pass 2 to distribute `clause_h − h_i` into `sig_k`. Replaced with a single walk that gathers `(idx, mix64(block_label[idx]))` into a small static scratch buffer (`s_wl_clause_contribs`); pass 2 iterates the contiguous buffer instead of re-walking. Bitwise-identical arithmetic.
+
+### Methodology note
+
+The previous attempt to optimize the adaptive picker by incrementally maintaining `count_active_2clauses` (a `n_active_2c_long_phys_` counter + per-clause `active_len_`/`sat_count_` updates in `setLiteralIfFree`/`unSet` hooks) was a **net 1% regression** on t1_045. Cause: the function is called only from `probeLiteral`, which fires only on the adaptive picker's slow path (`n_active ≥ adaptive_probing_min_vars`, default 60). With `avg_comp_at_entry = 13.5` on t1_045, most adaptive calls hit the fast-path argmax and the slow scan was already amortized to nothing — while the per-flip incremental maintenance cost paid on every BCP step (~63M times per 300 s) accumulated.
+
+The lesson: **profile before optimizing**. The `Explore` agent's structural prediction that `count_active_2clauses` was "60-70% of per-decision time" was based on call structure, not measurement. The actual `sample` profile showed `count_active_2clauses` at 0.06% — far below the noise floor. Optimizing it was both pointless and harmful. The first thing I did after reverting was the macOS `sample` profile run, which pointed straight at `buildCanonicalKey` (24.7%) and the allocator (~14%); both bd48859 and c61cefc fall out of that data directly.
+
+### How to re-profile
+
+```bash
+# Build with frame pointers + debug symbols (Release-O3 otherwise):
+mkdir -p build_prof && cd build_prof
+cmake -DCMAKE_BUILD_TYPE=Profiling \
+      -DCMAKE_CXX_FLAGS_PROFILING="-std=c++11 -O3 -g -fno-omit-frame-pointer -DNDEBUG -Wall" \
+      -DMETIS_DIR=$HOME/Desktop/Code/METIS \
+      -DGKLIB_DIR=$HOME/Desktop/Code/GKlib ..
+make sharpSAT -j4
+
+# Start solver in background, sample for 30 s, read flat profile from
+# the "Sort by top of stack" section near the end of the output file.
+./sharpSAT -rec -sep 5 -cb 3 -sepMode metis -adaptive -wlIter 2 \
+           -t 70 ../../temp_cnf/mc2025_track1_045.cnf &
+PID=$!; sleep 8; sample $PID 30 -file /tmp/prof.txt; wait $PID
+```
+
+### What's still on top after this chain
+
+Most recent profile (post-`d7e2a1c`, pre-`010ef37`): `buildCanonicalKey` still ~30% (the inner clause-iteration loops + the new sort), component analysis (`recordComponentOf` + `setupAnalysisContext` + `makeComponentFromState` + `discoverComponentsOf`) ~13%, allocator ~7% (down from ~14% in baseline). The remaining `buildCanonicalKey` slice is now dominated by the WL clause iteration and the sort — both essential to the algorithm; further wins would require either (a) algorithmic changes (skip WL when canonical-id collisions can't happen) or (b) attacking component analysis next.
+
