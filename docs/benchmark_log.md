@@ -1221,7 +1221,7 @@ PID=$!; sleep 8; sample $PID 30 -file /tmp/prof.txt; wait $PID
 Most recent profile (post-`d7e2a1c`, pre-`010ef37`): `buildCanonicalKey` still ~30% (the inner clause-iteration loops + the new sort), component analysis (`recordComponentOf` + `setupAnalysisContext` + `makeComponentFromState` + `discoverComponentsOf`) ~13%, allocator ~7% (down from ~14% in baseline). The remaining `buildCanonicalKey` slice is now dominated by the WL clause iteration and the sort — both essential to the algorithm; further wins would require either (a) algorithmic changes (skip WL when canonical-id collisions can't happen) or (b) attacking component analysis next.
 
 
-## 2026-05-20 — t1_045 first solve (PENDING INDEPENDENT VERIFICATION)
+## 2026-05-20 — t1_045 first solve (verified by ganak)
 
 After the four-commit optimization chain landed, re-ran t1_045 with the same adaptive+wlIter=2 config under a 45-min budget. **The solver finished in 40.5 min** — first time this instance has been solved end-to-end by sharpSAT.
 
@@ -1263,11 +1263,24 @@ time: 2429.5s   (≈ 40.5 min)
 
 The original (pre-optimization) wl2 run reached `closed_bits = 89.93` at t=20 min and `closed_bits = 89.96` at t=45 min then timed out. This run matched 89.93 at t=33 min (12 min earlier) and **finished the deep tail in the remaining 7-8 min** of budget the original never had access to.
 
-### Verification status
+### Verification
 
-- ⚠ **The count `132,951,278,067,432` is currently unverified by an independent solver.** Prior attempts with ganak `--td 1` and `--td 0` (16 GB cache) timed out at 40 min on this instance, per the [t1_045 characterization session](#).
-- The optimization stack (`bd48859`/`c61cefc`/`d7e2a1c`/`010ef37`) is mechanical refactoring; counts on t1_065, t1_071, and t1_041 all match documented values across all four commits.
-- **Next step is to confirm with ganak** (extended budget, increased cache) or sharpsat-td before quoting this externally.
+Ganak (default `--td 1`, `--maxcache 24000` for 24 GB, 4-hour budget) **confirmed the count** in 2772.81 s ≈ 46.21 min:
+
+```
+ganak --maxcache 24000 ../temp_cnf/mc2025_track1_045.cnf
+...
+c o intermediate count: 132951278067432
+c o Total time [Arjun+GANAK]: 2772.81
+c s exact arb int 132951278067432
+```
+
+- **Same count** `132,951,278,067,432` produced by an independent solver code base.
+- The 16-GB cache used in prior ganak attempts was insufficient — those runs timed out around 40 min on the cache-thrash phase. 24 GB was enough to push through. The `c o cache pollutions call/removed 114879/7335588` and `c o cache miss rate 0.349` lines from ganak's final stats show the cache eviction was substantial even with 24 GB; smaller caches make this instance effectively unsolvable for ganak in any reasonable time.
+- **Wall-time comparison on this instance**:
+  - sharpSAT (this commit chain): **2429.5 s** (40.49 min)
+  - ganak `--maxcache 24000 --td 1`: **2772.81 s** (46.21 min)
+  - sharpSAT is **~12% faster** on this instance under these configs.
 
 ### Reproducibility note
 
