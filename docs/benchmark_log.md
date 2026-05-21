@@ -1287,3 +1287,73 @@ c s exact arb int 132951278067432
 Trajectory varies modestly between runs at the same wall time (PROGRESS emit is wall-clock-triggered, decision rate fluctuates ±5% from CPU jitter), but the search itself is deterministic (decisions → closed_bits is fixed for a given input + flags + binary). The 40.5-min solve time should reproduce within seconds across runs on the same machine, provided no other CPU load.
 
 
+## 2026-05-21 — Portfolio finding: separator branching HURTS on binary-heavy / structurally-wide instances (t1_059)
+
+Sweeping a refined 12-config portfolio (drops `clausesFirst`, `picker_vanilla`, one of the redundant ND-kill picker variants; adds `adaptive+wl2`) on **mc2025_track1_059.cnf** (264 vars, 1552 clauses, 1392 binary + 28 length-6 + 132 length-8, density 5.9) revealed that the *separator-branching machinery is actively harmful* on this instance class. Removing `-sep -cb` produced a **+12 closed_bits jump** on the best picker config.
+
+### Instance structure
+- 264 vars; **1392 binary clauses (90% of total)** + only 160 long (all length 6 or 8 — clear structured encoding signature, possibly cardinality / cryptographic / combinatorial design).
+- Variable-incidence graph: avg degree ~15. Too dense for nested-dissection cuts.
+
+### Decomposition tool agreement that the graph is structurally wide
+- **METIS (ours):** `NDHierarchy: 437 tree nodes, 17 internal (sep), 201 passthrough, 219 leaves, 124 total sep elements, max_sep=43, sep_buckets=[1-2:11, 3-4:0, 5-7:0, 8-15:5, 16-31:0, 32-63:1, 64+:0]` — only 17 separator nodes out of 437 total; one of size 43 at the root.
+- **Flowcutter (ganak):** `nodes: 324 ... [td] Calculated TD width: 97 ... centroid bag id: 0 bag size: 88` — treewidth 97 on 324 nodes (≈30 % of n).
+- Both tools agree: **structural-width / n ≈ 30 %**. No useful nested-dissection cuts exist.
+
+### v2 12-config sweep (60 s each, all TIMEOUT)
+
+| Rank | Config | closed_bits | pct_lin |
+|---:|---|---:|---:|
+| 1 | plain+wl2+react | 239.54 | 4.3e-6% |
+| 2 | triple+lockstep | 239.48 | 4.1e-6% |
+| 3 | adaptive+wl2 | 239.34 | 3.8e-6% |
+| 4 | plain | 239.21 | 3.4e-6% |
+| 5 | plain+react | 239.15 | 3.3e-6% |
+| 6 | legacy_sepVarBias | 239.13 | 3.3e-6% |
+| 7 | adaptive | 238.88 | 2.7e-6% |
+| 8 | picker_cascade2 | 233.83 | 8.3e-8% |
+| 9 | picker_alpha100 \| picker_rootSepOnly \| picker_+react \| triple_no_lockstep | 230.49 (identical) | 8.2e-9% |
+
+**Four picker variants converged to cb=230.49.** They make the same first-decision sequence under this instance's structure (picker scoring is deterministic and these flag overlaps don't change the early branches).
+
+### No-sep mini-sweep (5 configs, 60 s each, all TIMEOUT)
+
+| Rank | Config | closed_bits | pct_lin | Δ vs with-sep counterpart |
+|---:|---|---:|---:|---:|
+| **1** | **picker_cascade10d9_noSep** | **246.97** | 7.50e-4% | (new config) |
+| 2 | picker_cascade2_noSep | 245.94 | 3.67e-4% | **+12.11** vs picker_cascade2 |
+| 3 | picker_cascade5d6_noSep | 245.48 | 2.67e-4% | (new config) |
+| 4 | plain_noSep | 240.86 | 1.08e-5% | **+1.65** vs plain |
+| 5 | adaptive+wl2_noSep | 240.45 | 8.15e-6% | **+1.11** vs adaptive+wl2 |
+
+Every config beat its with-sep counterpart. The picker-cascade family won by **+12 closed_bits** — a ~175× improvement in pct_lin terms.
+
+### Diagnosis
+
+The size gate at the root (`min(0.3·n_active, 100) = min(79.2, 100) = 79`) **accepts** the 43-element separator. So `-sep` forces every config to branch on those 43 *structural* vars first — even though they're not the variables with the strongest BCP cascade.
+
+t1_059's 1392 binary clauses mean BCP cascades are massive (avg degree 10+ from binaries alone). The high-cascade vars and the structural-separator vars are essentially disjoint sets on this instance — and the structural ones are *worse* because:
+- They don't trigger the deep BCP chains
+- Picker / adaptive scoring (which knows about cascade depth) can't choose freely until the separator is exhausted
+
+Removing `-sep -cb` lets the picker/adaptive use their own scoring (cascade-aware) directly. cascadeW=10, cascadeDepth=9 squeezes out the most progress: deeper chains visible to the score → better first-decision selection on binary-dominated structure.
+
+### Test signal for "drop `-sep`"
+
+> When **treewidth/n ratio ≥ ~25–30 %** (either reported by our METIS hierarchy as `max_sep/n_active`, or by flowcutter as `tw/n`), the separator is unlikely to disconnect the formula meaningfully and may force the search away from the high-BCP-cascade variables. Run the portfolio's `picker_cascadeNdM_noSep` variant instead.
+
+### Portfolio implication
+
+A **noSep cascade-deep** variant should be added as a permanent portfolio entry for binary-heavy / uniform-density / cryptographic-style instances:
+```
+-rec -sepMode metis -unifiedPicker -decomposeAfterK 1000 -cascadeW 10 -cascadeDepth 9
+```
+
+This is the **first instance class we've identified where the documented portfolio leaderboard is *wrong by 12+ closed_bits*** until we add a no-sep variant. The structural-width diagnostic (METIS sep + flowcutter tw) is the test of whether this matters.
+
+### Open follow-ups
+- Validate the noSep cascade-deep variant generalizes: try on at least one more binary-heavy instance with high tw/n.
+- Check whether the same finding applies to other untouched instances in the queue (t1_003, t1_005, t1_163, t1_159, t1_053, t1_105) — all are size-class candidates for the same diagnostic.
+- Should the solver auto-detect tw/n ratio and skip `-sep` runtime-internally? Currently the size gate handles only the *upper* size threshold; we may want a *ratio* gate too.
+
+
