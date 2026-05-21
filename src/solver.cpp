@@ -8,9 +8,11 @@
 #include "preprocessor.h"
 #include "probe_preprocessor.h"
 #include "canonical_key.h"
+#include "sat_check.h"
 #include <deque>
 #include <cmath>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <random>
@@ -595,6 +597,20 @@ void Solver::solve(const string &file_name) {
 
 		comp_manager_.initialize(literals_, literal_pool_, original_lit_pool_size_);
 		comp_manager_.setRemovedClauses(&removed_clauses_);
+
+		// Phase 1 SAT-check diagnostic: initialize the persistent CMS
+		// solver with the post-preprocess original CNF if the flag is
+		// on. Allocated lazily — bear no startup cost when -satCheckEvery=0.
+		if (config_.sat_check_every > 0) {
+			sat_check_init_();
+		}
+
+		// Phase 1 derivative-cache probe diagnostic: assign random hash
+		// to every existing long clause; learned clauses get a hash
+		// on first access. No startup cost when -derivCacheEvery=0.
+		if (config_.deriv_cache_every > 0) {
+			deriv_cache_init_();
+		}
 
 		// Snapshot the root active-var count for the OPEN_WORK metric
 		// (denominator of the progress measure: progress_bits =
@@ -2240,5 +2256,253 @@ void Solver::resetPostPreprocessScratch() {
 	for (unsigned v = 1; v < variables_.size(); v++) {
 		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
 		variables_[v].decision_level = INVALID_DL;
+	}
+}
+
+// ============================================================================
+// Phase 1 SAT-check diagnostic. See solver_config.h::sat_check_every.
+//
+// Builds one incremental CMSat::SATSolver populated with the post-preprocess
+// original CNF (long + binary). On each diagnose call we pass the current
+// literal_stack_ as assumptions, with a small conflict budget. The solver
+// retains learned clauses across calls so successive checks on similar
+// assignments may settle faster (incremental SAT).
+//
+// SOUNDNESS: This path is *diagnostic only* — it never modifies counts,
+// returns, or any solver state outside its own stat counters. The
+// search runs as if -satCheckEvery were not set.
+//
+// Restriction: caller (in solver_rec.cpp) only invokes this when
+// `removed_clauses_.empty()`. Inside a clause-branch context, the
+// effective formula has clauses removed that CMS still believes are
+// in scope, so a "SAT" result is meaningless and "UNSAT" could be
+// either a real UNSAT or a removed-clause false positive. Phase 2 (if
+// we proceed) will need to handle scope, e.g. by gating on this same
+// emptiness check.
+// ============================================================================
+
+void Solver::sat_check_init_() {
+	if (cms_solver_) return;  // already initialized
+	cms_solver_.reset(new SatChecker());
+
+	// Build a vector<vector<int>> of clauses in DIMACS lit convention:
+	//   positive int = positive lit, negative = negated lit, vars 1..N.
+	// LiteralID::toInt() already produces that encoding (sign() = positive,
+	// returns v; otherwise returns -v).
+	std::vector<std::vector<int>> clauses;
+	clauses.reserve(num_variables() * 4);
+
+	// 1) Binary clauses via binary_links_. Each binary appears twice
+	// (once per endpoint); emit only when partner var > current var.
+	unsigned n_bin = 0;
+	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
+		const auto &blinks = literals_[l].binary_links_;
+		for (auto bt = blinks.begin(); *bt != SENTINEL_LIT; ++bt) {
+			if (bt->var() <= l.var()) continue;
+			clauses.push_back({ l.toInt(), bt->toInt() });
+			n_bin++;
+		}
+	}
+
+	// 2) Long clauses from literal_pool_ (original clauses only for
+	// Phase 1; learned clauses excluded — see comment block above).
+	unsigned n_long = 0;
+	ClauseOfs cl_ofs = (ClauseOfs)(1 + ClauseHeader::overheadInLits());
+	while (cl_ofs < (ClauseOfs)literal_pool_.size()) {
+		if (cl_ofs >= (ClauseOfs)original_lit_pool_size_) break;
+		if (!isClauseRemoved(cl_ofs)) {
+			std::vector<int> lits;
+			for (auto lt = literal_pool_.begin() + cl_ofs;
+			     *lt != SENTINEL_LIT; ++lt) {
+				lits.push_back(lt->toInt());
+			}
+			clauses.push_back(std::move(lits));
+			n_long++;
+		}
+		auto it = literal_pool_.begin() + cl_ofs;
+		while (*it != SENTINEL_LIT) ++it;
+		cl_ofs = (ClauseOfs)((it - literal_pool_.begin()) + 1
+		                      + ClauseHeader::overheadInLits());
+	}
+
+	// 3) Unit clauses.
+	for (LiteralID l : unit_clauses_) {
+		clauses.push_back({ l.toInt() });
+	}
+
+	cms_solver_->init(num_variables(), clauses);
+
+	std::cerr << "SAT_CHECK_INIT bin=" << n_bin
+	          << " long=" << n_long
+	          << " units=" << unit_clauses_.size()
+	          << " vars=" << num_variables() << std::endl;
+}
+
+void Solver::sat_check_diagnose_() {
+	if (!cms_solver_) return;
+
+	std::vector<int> assumptions;
+	assumptions.reserve(literal_stack_.size());
+	for (LiteralID l : literal_stack_) {
+		assumptions.push_back(l.toInt());
+	}
+
+	auto t0 = std::chrono::steady_clock::now();
+	SatChecker::Result result =
+	    cms_solver_->check(assumptions, config_.sat_check_max_confl);
+	auto dt = std::chrono::duration_cast<std::chrono::microseconds>(
+	    std::chrono::steady_clock::now() - t0).count();
+
+	sat_check_n_calls_++;
+	sat_check_total_us_ += (double)dt;
+
+	const char *res_str;
+	if      (result == SatChecker::UNSAT) { res_str = "UNSAT"; sat_check_n_unsat_++; }
+	else if (result == SatChecker::SAT)   { res_str = "SAT";   sat_check_n_sat_++;   }
+	else                                   { res_str = "UNDEF"; sat_check_n_undef_++; }
+
+	std::cerr << "SAT_CHECK dl=" << stack_.get_decision_level()
+	          << " assumptions=" << assumptions.size()
+	          << " result=" << res_str
+	          << " elapsed_us=" << dt << std::endl;
+}
+
+// ============================================================================
+// Derivative-cache probe (Phase 1: diagnostic-only). See
+// project_derivative_cache_idea memory entry for the full design.
+//
+// Idea: at each L2 cache miss, hypothetically fix each of the top-K active
+// vars to T and F, run BCP, compute the resulting clause-XOR fingerprint,
+// check against the set of all stored sub-components' clause-XORs (cheap
+// pre-filter), and only if the XOR matches do a full canonical-key lookup.
+// Log how often a hit *would* have occurred.
+//
+// SOUNDNESS: Phase 1 does NOT modify search behavior — counts, branching,
+// caching are unchanged. We setLiteralIfFree + BCP + canonical_key + unSet
+// the cascade; state is fully restored before the search continues. The
+// only side effect is the stat counters and a log line.
+// ============================================================================
+
+void Solver::deriv_cache_init_() {
+	long_clause_hashes_.clear();
+	deriv_cache_xors_seen_.clear();
+	deriv_cache_counter_     = 0;
+	deriv_cache_n_probes_    = 0;
+	deriv_cache_n_xor_hits_  = 0;
+	deriv_cache_n_real_hits_ = 0;
+
+	// Generate a deterministic random hash per long clause currently in
+	// literal_pool_. Learned clauses get their hash on first lookup
+	// (lazy). Deterministic seed so multi-run comparisons are stable.
+	std::mt19937_64 rng(0x9e3779b97f4a7c15ULL);
+	ClauseOfs cl_ofs = (ClauseOfs)(1 + ClauseHeader::overheadInLits());
+	while (cl_ofs < (ClauseOfs)literal_pool_.size()) {
+		long_clause_hashes_[cl_ofs] = rng();
+		auto it = literal_pool_.begin() + cl_ofs;
+		while (*it != SENTINEL_LIT) ++it;
+		cl_ofs = (ClauseOfs)((it - literal_pool_.begin()) + 1
+		                      + ClauseHeader::overheadInLits());
+	}
+}
+
+// Lazy clause-hash assignment for clauses added after deriv_cache_init_
+// (i.e. learned clauses). Same deterministic seed family — separate RNG
+// from init so subsequent learn-time hashes don't shift earlier ones.
+namespace {
+std::mt19937_64 g_deriv_cache_learn_rng(0xbf58476d1ce4e5b9ULL);
+}
+
+static inline uint64_t get_or_make_hash(
+    std::unordered_map<ClauseOfs, uint64_t> &hashes, ClauseOfs ofs) {
+	auto it = hashes.find(ofs);
+	if (it != hashes.end()) return it->second;
+	uint64_t h = g_deriv_cache_learn_rng();
+	hashes[ofs] = h;
+	return h;
+}
+
+// Helper: compute XOR of long-clause hashes for clauses currently in
+// scope (not removed, not satisfied, in learned-scope if learned).
+uint64_t Solver::deriv_cache_component_xor_(Component &comp) {
+	uint64_t xor_val = 0;
+	for (auto cl_it = comp.clsBegin(); *cl_it != clsSENTINEL; ++cl_it) {
+		ClauseOfs ofs = comp_manager_.clauseOfsOf(*cl_it);
+		if (isClauseRemoved(ofs))  continue;
+		if (isSatisfied(ofs))      continue;
+		if (ofs >= (ClauseOfs)original_lit_pool_size_
+		    && !learnedClauseInScope(ofs)) continue;
+		xor_val ^= get_or_make_hash(long_clause_hashes_, ofs);
+	}
+	return xor_val;
+}
+
+void Solver::deriv_cache_record_store_(Component &comp) {
+	deriv_cache_xors_seen_.insert(deriv_cache_component_xor_(comp));
+}
+
+void Solver::deriv_cache_probe_(Component &comp) {
+	deriv_cache_n_probes_++;
+
+	// Pick top-K active vars from `comp`. Simplest stable selection:
+	// the first K active vars in component-iteration order. This is NOT
+	// the picker's score order; it's deterministic and cheap. Phase 2
+	// can integrate with the picker's actual top-K once we have hit-rate
+	// data.
+	std::vector<unsigned> candidates;
+	candidates.reserve(config_.deriv_cache_top_k);
+	for (auto v_it = comp.varsBegin();
+	     *v_it != varsSENTINEL && candidates.size() < config_.deriv_cache_top_k;
+	     ++v_it) {
+		if (isActive(LiteralID(*v_it, true))) candidates.push_back(*v_it);
+	}
+
+	for (unsigned v : candidates) {
+		// Skip if it was forced since we collected candidates.
+		if (!isActive(LiteralID(v, true))) continue;
+
+		for (int pol_int = 0; pol_int < 2; ++pol_int) {
+			LiteralID lit(v, pol_int == 1);
+
+			// Hypothetical assignment + BCP cascade (mirrors probeLiteralPassFail).
+			unsigned sz = literal_stack_.size();
+			if (!setLiteralIfFree(lit)) continue;
+			bool ok = BCP(sz);
+
+			if (ok) {
+				// Compute clause_xor on the post-BCP state.
+				uint64_t deriv_xor = deriv_cache_component_xor_(comp);
+
+				if (deriv_cache_xors_seen_.count(deriv_xor) > 0) {
+					deriv_cache_n_xor_hits_++;
+
+					// Pre-filter says maybe — do the full canonical-key check.
+					CanonicalKey k = buildCanonicalKey(
+					    comp, literal_pool_, literals_, literal_values_,
+					    comp_manager_.getAnalyzer().clauseIdToOfs(),
+					    removed_clauses_, original_lit_pool_size_,
+					    config_.wl_iterations,
+					    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+					mpz_class out;
+					if (comp_manager_.contentCache().peek(k, out)) {
+						deriv_cache_n_real_hits_++;
+					}
+				}
+			}
+
+			// Restore — unSet the BCP cascade.
+			while (literal_stack_.size() > sz) {
+				unSet(literal_stack_.back());
+				literal_stack_.pop_back();
+			}
+		}
+	}
+
+	// Periodic summary log — every 1000 probes.
+	if (deriv_cache_n_probes_ % 1000 == 0) {
+		std::cerr << "DERIV_CACHE_PROBE probes=" << deriv_cache_n_probes_
+		          << " xor_hits=" << deriv_cache_n_xor_hits_
+		          << " real_hits=" << deriv_cache_n_real_hits_
+		          << " cache_size=" << deriv_cache_xors_seen_.size()
+		          << std::endl;
 	}
 }

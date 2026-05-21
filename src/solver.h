@@ -22,8 +22,15 @@
 #include <sys/time.h>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <tuple>
 #include <unordered_set>
+
+// sat_check.h is C++11-clean (the CMS internals are pimpl'd into
+// sat_check.cpp, which is the only TU compiled as C++17). Including
+// the full header here lets std::unique_ptr<SatChecker> see the
+// complete type for its destructor.
+#include "sat_check.h"
 
 enum retStateT {
 	EXIT, RESOLVED, PROCESS_COMPONENT, BACKTRACK
@@ -271,6 +278,41 @@ private:
 	std::vector<unsigned>      open_work_sizes_;             // outer → inner
 	std::vector<Component *>   current_comp_chain_;          // live during search
 	void captureOpenWorkSnapshot();
+
+	// Phase 1 SAT-check diagnostic state (see solver_config.h::sat_check_every).
+	// cms_solver_ holds an incremental CMSat::SATSolver populated with the
+	// post-preprocess original CNF once at solve() startup. Subsequent
+	// sat_check_diagnose_() calls pass the current literal_stack_ as
+	// assumptions; CMS retains learned clauses across calls. Allocated
+	// only when sat_check_every > 0 to avoid the startup cost otherwise.
+	std::unique_ptr<SatChecker>       cms_solver_;
+	unsigned long long                sat_check_counter_  = 0;
+	unsigned long long                sat_check_n_calls_  = 0;
+	unsigned long long                sat_check_n_unsat_  = 0;
+	unsigned long long                sat_check_n_sat_    = 0;
+	unsigned long long                sat_check_n_undef_  = 0;
+	double                            sat_check_total_us_ = 0.0;
+	void sat_check_init_();
+	void sat_check_diagnose_();
+
+	// Derivative-cache probe (Phase 1: diagnostic-only).
+	// long_clause_hashes_[ofs] holds a random uint64_t per long clause,
+	// generated once at solve startup and once per learned long clause.
+	// deriv_cache_xors_seen_ accumulates the clause_xor of every
+	// sub-component stored in the L2 cache. Probe checks whether a
+	// hypothetical var-branch derivative's clause_xor is in the set,
+	// and if so does a full canonical-key lookup to confirm a hit.
+	// See project_derivative_cache_idea memory for the full design.
+	std::unordered_map<ClauseOfs, uint64_t> long_clause_hashes_;
+	std::unordered_set<uint64_t>      deriv_cache_xors_seen_;
+	unsigned long long                deriv_cache_counter_      = 0;  // throttle
+	unsigned long long                deriv_cache_n_probes_     = 0;
+	unsigned long long                deriv_cache_n_xor_hits_   = 0;
+	unsigned long long                deriv_cache_n_real_hits_  = 0;
+	void deriv_cache_init_();
+	uint64_t deriv_cache_component_xor_(Component &comp);
+	void deriv_cache_record_store_(Component &comp);
+	void deriv_cache_probe_(Component &comp);
 
 	// Periodic PROGRESS line emission for trajectory analysis. Diagnostic:
 	// when last_progress_emit_s_ + PROGRESS_TICK_S seconds have passed,

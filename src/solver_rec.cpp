@@ -423,6 +423,8 @@ mpz_class Solver::solveComponent(Component &comp,
 			mpz_fdiv_q_2exp(structural.get_mpz_t(),
 			                structural.get_mpz_t(), 1);
 		comp_manager_.contentCache().store(cached_key, structural);
+		if (config_.deriv_cache_every > 0)
+			deriv_cache_record_store_(comp);
 		// Cache store does NOT credit — the credit was issued by the
 		// LEAF events inside solveComponentImpl that resolved this
 		// subtree. Caching is a memoization detail orthogonal to
@@ -457,6 +459,23 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			open_work_captured_ = true;
 		}
 		return 0;
+	}
+
+	// Phase 1 SAT-check diagnostic. Throttled by config_.sat_check_every;
+	// restricted to empty-scope (removed_clauses_.empty()) so the
+	// pre-loaded CMS state is sound. Logs only — does not affect search.
+	if (config_.sat_check_every > 0 && removed_clauses_.empty()) {
+		if ((++sat_check_counter_ % config_.sat_check_every) == 0) {
+			sat_check_diagnose_();
+		}
+	}
+
+	// Phase 1 derivative-cache probe diagnostic. Throttled by
+	// config_.deriv_cache_every. Logs only — does not affect search.
+	if (config_.deriv_cache_every > 0) {
+		if ((++deriv_cache_counter_ % config_.deriv_cache_every) == 0) {
+			deriv_cache_probe_(comp);
+		}
 	}
 
 	// Periodic PROGRESS emit (diagnostic; cheap when off-tick).
@@ -1193,6 +1212,8 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				// Populate L1 so future visits to the same ID-set skip
 				// the canonical build.
 				comp_manager_.contentCache().l1_store(id_key, sub_count);
+				if (config_.deriv_cache_every > 0)
+					deriv_cache_record_store_(*sub);
 				// Cache STORE is no longer a credit event — credits
 				// were issued inside solveComponent's leaf paths.
 			}

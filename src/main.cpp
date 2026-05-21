@@ -239,6 +239,22 @@ int main(int argc, char *argv[]) {
       theSolver.config().lsp_no_r4 = true;
     } else if (strcmp(argv[i], "-checkLearnInvariants") == 0) {
       theSolver.config().check_learn_invariants = true;
+    } else if (strcmp(argv[i], "-satCheckEvery") == 0) {
+      if (argc <= i + 1) { cout << "-satCheckEvery needs an integer\n"; return -1; }
+      theSolver.config().sat_check_every = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-satCheckMaxConfl") == 0) {
+      if (argc <= i + 1) { cout << "-satCheckMaxConfl needs an integer\n"; return -1; }
+      theSolver.config().sat_check_max_confl = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-derivCacheEvery") == 0) {
+      if (argc <= i + 1) { cout << "-derivCacheEvery needs an integer\n"; return -1; }
+      theSolver.config().deriv_cache_every = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-derivCacheTopK") == 0) {
+      if (argc <= i + 1) { cout << "-derivCacheTopK needs an integer\n"; return -1; }
+      theSolver.config().deriv_cache_top_k = (unsigned)atoi(argv[i + 1]);
+      i++;
     } else if (strcmp(argv[i], "-bruteForceCacheCheck") == 0) {
       if (argc <= i + 1) { cout << "-bruteForceCacheCheck needs N\n"; return -1; }
       theSolver.config().brute_force_cache_check_n = (unsigned)atoi(argv[i + 1]); i++;

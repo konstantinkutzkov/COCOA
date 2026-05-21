@@ -1357,3 +1357,50 @@ This is the **first instance class we've identified where the documented portfol
 - Should the solver auto-detect tw/n ratio and skip `-sep` runtime-internally? Currently the size gate handles only the *upper* size threshold; we may want a *ratio* gate too.
 
 
+## 2026-05-21 — Derivative-cache probe Phase 1: STRONG positive signal
+
+A new diagnostic flag `-derivCacheEvery N` (default 0 = off) was added. At every Nth `solveComponentImpl` cache miss it hypothetically fixes each of the top-K=5 active variables to T and F (with full BCP propagation), computes the resulting sub-formula's "clause-XOR" fingerprint (XOR of per-clause random uint64 hashes over still-in-scope long clauses), checks against an `unordered_set<uint64_t>` of every L2-stored sub-component's XOR (cheap pre-filter), and on a positive pre-filter does a full canonical-key lookup. Logs hits; does **not** modify search behavior. Counts verified unchanged on t1_065/t1_071/t1_041 with and without the flag.
+
+### Phase 1 measurement (60 s, `-derivCacheEvery 100`)
+
+| Instance | Probe sites | XOR-filter hits | Real (canonical-confirmed) hits | Real hits / probe site |
+|---|---:|---:|---:|---:|
+| **t1_045** (`-rec -sep 5 -cb 3 -sepMode metis -adaptive -wlIter 2`)         | 237,000 | 340,090 | **246,930** | **1.04** |
+| **t1_059** (`-rec -sepMode metis -unifiedPicker -decomposeAfterK 1000 -cascadeW 10 -cascadeDepth 9`) | 117,000 | 474,656 | **168,776** | **1.44** |
+
+Each probe site checks ~10 derivative candidates (K=5 vars × ±1 polarity). Both instances find on average ≥ 1 cached neighbor per probe site — far above the 5% threshold we set as the go/no-go bar.
+
+The XOR pre-filter is doing real work:
+- t1_045: 14 % of derivative checks pass the XOR filter; of those, 73 % confirm a real canonical-key hit (rest are XOR collisions correctly rejected by the canonical key).
+- t1_059: 41 % pass the XOR filter; 36 % of those confirm.
+
+### What this means
+
+Even at the conservative every-100 probe rate, each second of search produced ~4 K cached-neighbor matches. The probe overhead at this rate is modest (~5 % wall-time bump on t1_041 in tests). Extrapolating to probe-at-every-miss (Phase 2 plan), the hit count would scale ~100 ×.
+
+If we can convert "real hit" into "skip that branch of the upcoming branchOnLiteral and use the cached count directly," each hit saves a full sub-tree recursion. This is potentially a *substantial* speedup on cache-heavy instances like both t1_045 and t1_059.
+
+### Implementation summary
+
+- Config: `-derivCacheEvery N` (default 0), `-derivCacheTopK K` (default 5).
+- New Solver members: `long_clause_hashes_` (lazy `unordered_map<ClauseOfs, uint64_t>`), `deriv_cache_xors_seen_` (`unordered_set<uint64_t>`), throttle counter + 3 stats.
+- New Solver methods: `deriv_cache_init_`, `deriv_cache_component_xor_`, `deriv_cache_record_store_`, `deriv_cache_probe_`.
+- Existing-code touches: 1 line at solve() init, 2 lines at L2 cache `store(...)` sites, 1 line at solveComponentImpl entry. All guarded by `config_.deriv_cache_every > 0`.
+- ~190 lines total. No correctness risk to existing flows.
+
+### Phase 2 plan (next session)
+
+1. Probe at every miss (or every-N with small N) — measure raw throughput cost.
+2. Actually use the hits: pick branch variable from probed candidates whose XOR matched, return cached count for one arm, recurse only on the other.
+3. Heuristic to choose which var: prefer both-arms-cached (both branches free), else any cached arm. Among ties, use picker score.
+4. Validate counts on the standard small-CNF set.
+5. Test whether this lets us solve t1_059 or push significantly past the cb=249 plateau.
+
+### Open follow-ups (Phase 3+)
+
+- Migrate `long_clause_hashes_` to a vector indexed by ClauseOfs for cache locality.
+- Replace `unordered_set` of seen XORs with a Bloom filter — drops memory from ~190 MB (at 12 M entries) to ~12 MB.
+- Add clause-deletion derivative probes (currently var-branching only).
+- Incremental WL canonical-key computation — defer until profiling shows canonical-key cost dominates the probe.
+
+

@@ -332,6 +332,33 @@ struct SolverConfiguration {
   // OFF: zero (single bool check at the top of each guard).
   bool check_learn_invariants = false;
 
+  // Periodic SAT-check diagnostic. Every N solveComponentImpl entries
+  // (when removed_clauses_ is empty), call CryptoMiniSat with the
+  // current literal_stack_ as assumptions and a small conflict budget;
+  // log the result. Phase 1 = diagnostic only, does NOT change search
+  // behavior. Used to measure whether catching deep UNSAT cases — that
+  // BCP + failed-literal probing miss — would justify the overhead.
+  // Default 0 = off. CLI: -satCheckEvery N.
+  unsigned sat_check_every    = 0;
+  // Per-call CMS conflict budget (caps single-call cost). CLI:
+  // -satCheckMaxConfl K.
+  unsigned sat_check_max_confl = 1000;
+
+  // Derivative-cache probe (Phase 1: diagnostic-only).
+  // Every N L2 cache misses in solveComponentImpl, hypothetically
+  // fix each of the top-K picker-scored variables to T and F, look
+  // up the resulting sub-formula in the cache via a clause-XOR
+  // pre-filter + canonical-key check, and log whether a hit *would*
+  // have occurred. Does NOT change search behavior in Phase 1 — only
+  // measures whether the idea has promise.
+  //
+  // Default 0 = off. CLI: -derivCacheEvery N. See
+  // project_derivative_cache_idea memory for the full design.
+  unsigned deriv_cache_every = 0;
+  // Number of top picker candidates to probe per probe-site. CLI:
+  // -derivCacheTopK K.
+  unsigned deriv_cache_top_k = 5;
+
   // Brute-force cache check: at every cache store and cache hit, if the
   // sub-component has <= N active variables, brute-force enumerate
   // 2^N assignments and verify the count matches what's being stored

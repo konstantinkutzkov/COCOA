@@ -77,43 +77,50 @@ add_executable (test_probe tests/test_probe.cpp)
 target_include_directories (test_probe PRIVATE src)
 target_link_libraries (test_probe libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
-    ${GKLIB_DIR}/build/libGKlib.a)
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
 
 add_executable (test_canonical_key_invariance tests/test_canonical_key_invariance.cpp)
 target_include_directories (test_canonical_key_invariance PRIVATE src)
 target_link_libraries (test_canonical_key_invariance libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
-    ${GKLIB_DIR}/build/libGKlib.a)
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
 
 add_executable (test_canonical_key_learned tests/test_canonical_key_learned.cpp)
 target_include_directories (test_canonical_key_learned PRIVATE src)
 target_link_libraries (test_canonical_key_learned libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
-    ${GKLIB_DIR}/build/libGKlib.a)
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
 
 add_executable (test_probe_preprocessor_harness tests/test_probe_preprocessor_harness.cpp)
 target_include_directories (test_probe_preprocessor_harness PRIVATE src)
 target_link_libraries (test_probe_preprocessor_harness libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
-    ${GKLIB_DIR}/build/libGKlib.a)
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
 
 add_executable (test_probe_preprocessor_lift tests/test_probe_preprocessor_lift.cpp)
 target_include_directories (test_probe_preprocessor_lift PRIVATE src)
 target_link_libraries (test_probe_preprocessor_lift libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
-    ${GKLIB_DIR}/build/libGKlib.a)
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
 
 add_executable (test_probe_preprocessor_r4 tests/test_probe_preprocessor_r4.cpp)
 target_include_directories (test_probe_preprocessor_r4 PRIVATE src)
 target_link_libraries (test_probe_preprocessor_r4 libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
-    ${GKLIB_DIR}/build/libGKlib.a)
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
 
 add_executable (test_probe_preprocessor_filter tests/test_probe_preprocessor_filter.cpp)
 target_include_directories (test_probe_preprocessor_filter PRIVATE src)
 target_link_libraries (test_probe_preprocessor_filter libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
-    ${GKLIB_DIR}/build/libGKlib.a)
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
 
 # Standalone METIS replay tool — reads a dump produced by sharpSAT's
 # -dumpReactiveMetisInputs flag and replays each input through METIS to
@@ -121,4 +128,5 @@ target_link_libraries (test_probe_preprocessor_filter libsharpSAT ${GMP_LIB} ${G
 add_executable (metis_replay tools/metis_replay.cpp)
 target_link_libraries (metis_replay
     ${METIS_DIR}/build/libmetis/libmetis.a
-    ${GKLIB_DIR}/build/libGKlib.a)
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
