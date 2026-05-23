@@ -1404,3 +1404,57 @@ If we can convert "real hit" into "skip that branch of the upcoming branchOnLite
 - Incremental WL canonical-key computation — defer until profiling shows canonical-key cost dominates the probe.
 
 
+## 2026-05-23 — canonical_key free-var invariance fix → t1_045 in 34.87 min (13.9% faster than historical 40.5 min, 24.5% faster than ganak)
+
+The L2 cache stores **structural** sub-component counts and multiplies back by 2^free_vars at retrieval, so `canonical_key` MUST be invariant to free-var addition. The implementation broke that invariant in two places:
+
+1. `canonical_key.cpp` line ~294: free vars (sig == 0) were included in `s_sig_pairs`, shifting the 1..k anchor canonical_ids of in-clause vars. Fix: filter `s_sig[i] != 0` before pushing.
+2. `canonical_key.cpp` line ~465: `RESIDUAL_OFFSET = max_var + 1` — `max_var` includes free vars, so when WL refinement falls back to residual IDs, the offset moved with free-var count. Fix: use the fixed sentinel `1 << 30`.
+
+Both fixes are needed; either alone is insufficient. Two regression tests added (`tests/test_canonical_key_free_var.cpp` initial-state + `tests/test_canonical_key_free_var_midsearch.cpp` mid-search) to prevent regression of the documented-but-untested invariant.
+
+### t1_045 result (winning config, post-fix)
+
+Invocation:
+```
+SHARPSAT_PROGRESS=1 ./sharpsat-separator/build/sharpSAT \
+    -rec -sep 5 -cb 3 -adaptive -wlIter 2 -t 2700 \
+    temp_cnf/mc2025_track1_045.cnf
+```
+(equivalent to the 2026-05-20 historical command minus the dropped `-sepMode metis`)
+
+| metric | 2026-05-20 historical | **2026-05-23 with fix** | delta |
+|---|---:|---:|---:|
+| **wall time** | 2429.5 s (40.5 min) | **2092.2 s (34.87 min)** | **−13.9 % / −5.62 min** |
+| decisions | 717.6 M | 682.1 M | −5.0 % |
+| L2 stores | 730.3 M | 680.4 M | −6.8 % |
+| L2 hits | 204.6 M | 226.7 M | +10.8 % |
+| L2 hit rate | 28.0 % | **33.3 %** | +5.3 pp |
+| count | 132 951 278 067 432 | 132 951 278 067 432 | ✓ identical |
+
+Versus ganak `--maxcache 24000 --td 1` (46.21 min, same instance, same count):
+
+| solver | wall | speedup vs ganak |
+|---|---:|---:|
+| ganak 24 GB | 2772.8 s | — |
+| sharpSAT 2026-05-20 | 2429.5 s | 1.14× |
+| **sharpSAT 2026-05-23 + canonical_key fix** | **2092.2 s** | **1.33× (24.5 % faster)** |
+
+### Independent A/B on t1_049 (same session, 2026-05-23)
+
+Same binary, no other config differences, NOFIX vs WITH-fix on `-rec -sep 5 -cb 3` defaults:
+
+| metric | NOFIX | WITH fix | delta |
+|---|---:|---:|---:|
+| time | 385.7 s | 353.6 s | **−8.3 %** |
+| decisions | 153.8 M | 145.3 M | −5.5 % |
+| L2 stores | 160.8 M | 149.7 M | −7.0 % |
+| L2 hit rate | 20.4 % | 25.4 % | +5.0 pp |
+| count | 8695763196077742 | 8695763196077742 | ✓ |
+
+Same direction as t1_045: fewer duplicate stores, more hits, faster wall. Count cross-confirmed.
+
+### Counts verified across the standard suite
+
+t1_065 (37 778 931 862 957 161 709 568), t1_071 (4 562 956 847 836 …), t1_011 (536 870 912 306), t1_041 (5 516 767 … 943 259 892 051 805 732 864), t1_049 (8 695 763 196 077 742), t1_045 (132 951 278 067 432) — all identical to historical entries, no regressions from the fix.
+

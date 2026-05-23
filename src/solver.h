@@ -239,6 +239,17 @@ public:
 	// manager). Does NOT allocate the guard variable — tests that
 	// need only the canonical-key computation don't need it.
 	void _prepareForKeyComputation(const std::string &file_name);
+	// Test-support: same as above but skips simplePreProcess so free
+	// vars (declared but unused) survive into canonical_key building.
+	void _prepareForKeyComputationNoPP(const std::string &file_name);
+	// Test-support: force a single literal to T_TRI (no BCP). Returns
+	// false if the literal was already assigned.
+	bool _forceLitForTest(int dimacs_lit) {
+		LiteralID lit = (dimacs_lit > 0)
+		    ? LiteralID((unsigned)dimacs_lit, true)
+		    : LiteralID((unsigned)(-dimacs_lit), false);
+		return setLiteralIfFree(lit);
+	}
 
 	SolverConfiguration &config() {
 		return config_;

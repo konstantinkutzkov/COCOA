@@ -87,6 +87,20 @@ target_link_libraries (test_canonical_key_invariance libsharpSAT ${GMP_LIB} ${GM
     ${GKLIB_DIR}/build/libGKlib.a
     ${CMS5_DEPS})
 
+add_executable (test_canonical_key_free_var tests/test_canonical_key_free_var.cpp)
+target_include_directories (test_canonical_key_free_var PRIVATE src)
+target_link_libraries (test_canonical_key_free_var libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
+
+add_executable (test_canonical_key_free_var_midsearch tests/test_canonical_key_free_var_midsearch.cpp)
+target_include_directories (test_canonical_key_free_var_midsearch PRIVATE src)
+target_link_libraries (test_canonical_key_free_var_midsearch libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
+
 add_executable (test_canonical_key_learned tests/test_canonical_key_learned.cpp)
 target_include_directories (test_canonical_key_learned PRIVATE src)
 target_link_libraries (test_canonical_key_learned libsharpSAT ${GMP_LIB} ${GMPXX_LIB}

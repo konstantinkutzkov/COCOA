@@ -956,6 +956,14 @@ void Solver::_prepareForKeyComputation(const std::string &file_name) {
 	comp_manager_.setRemovedClauses(&removed_clauses_);
 }
 
+void Solver::_prepareForKeyComputationNoPP(const std::string &file_name) {
+	createfromFile(file_name);
+	initStack(num_variables());
+	// Intentionally skip simplePreProcess() so free vars survive.
+	comp_manager_.initialize(literals_, literal_pool_, original_lit_pool_size_);
+	comp_manager_.setRemovedClauses(&removed_clauses_);
+}
+
 // Test-support: inject a "learned" long clause. Writes directly into
 // literal_pool_ past original_lit_pool_size_ using the same layout
 // addClause would produce, and registers watches on the first two

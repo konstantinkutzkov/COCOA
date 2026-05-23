@@ -275,11 +275,23 @@ CanonicalKey buildCanonicalKey(
   }
 
   // Sort signatures → assign canonical IDs.
+  //
+  // Exclusions from canonical_id assignment:
+  //   - Singletons (flag & 1): only appear once, hashed as canon=0.
+  //   - Free vars (s_sig[i] == 0): active vars that don't appear in any
+  //     in-scope clause. Their canonical_ids are never read (clauses
+  //     don't reference them), and including them in s_sig_pairs would
+  //     shift the IDs of in-clause vars depending on how many free vars
+  //     happen to be active — breaking canonical_key's invariance over
+  //     free-var counts. (Fix landed 2026-05-22 after diagnosing 18 %
+  //     of stores producing duplicate xors in t1_045 — same in-scope
+  //     clauses but differing nvars produced different canonical_keys,
+  //     making the L2 cache store duplicates instead of merging hits.)
   s_canonical_id.assign(n_vars, 0);
   {
     s_sig_pairs.clear();
     for (unsigned i = 0; i < n_vars; i++)
-      if (!(s_var_flags[i] & 1))
+      if (!(s_var_flags[i] & 1) && s_sig[i] != 0)
         s_sig_pairs.push_back({s_sig[i], i});
 
     std::sort(s_sig_pairs.begin(), s_sig_pairs.end());
@@ -450,7 +462,17 @@ CanonicalKey buildCanonicalKey(
       // ordering as the previous anchored_sorted std::sort). Groups
       // of size > 1 are residual (RESIDUAL_OFFSET + raw_var_id, flag
       // bit 4).
-      const int RESIDUAL_OFFSET = (int)max_var + 1;
+      //
+      // RESIDUAL_OFFSET must be FREE-VAR-INVARIANT: using max_var+1
+      // (the old formula) shifts when a free var with a higher raw ID
+      // is active, so two states with identical in-scope clauses but
+      // differing free-var counts get different residual canonical_ids
+      // → different per-clause hashes → cache miss. We use a fixed
+      // sentinel above any plausible anchor count or raw var ID.
+      // (Fix landed 2026-05-22 — paired with the s_sig_pairs filter
+      // above; both are needed to make canonical_key invariant under
+      // free-var addition.)
+      const int RESIDUAL_OFFSET = 1 << 30;
       unsigned anchor_id = 1;
       size_t k = 0;
       while (k < s_labels_collision.size()) {
