@@ -1072,29 +1072,21 @@ mpz_class Solver::bruteForceCountSubcompWithLearned(Component &sub,
 	}
 
 	// IN-SCOPE LEARNED clauses confined to this sub-component.
-	// Walk the literal pool past original_lit_pool_size_; for each
-	// learned clause: check (a) currently in-scope, (b) all active
-	// vars belong to this sub-component (fully confined), (c) not
-	// satisfied. If yes, project to active lits and add.
+	// Iterate the authoritative list of learned-clause offsets in
+	// `conflict_clauses_`. Hand-walking the literal pool is incorrect
+	// because `original_lit_pool_size_` points to the start of the
+	// FIRST learned clause's HEADER (3 zero-LiteralIDs), and zero ==
+	// SENTINEL_LIT — confusing any "scan-for-sentinel" walk by one lit.
 	unsigned n_learned_added = 0;
-	for (auto it = literal_pool_.begin() + original_lit_pool_size_;
-	     it != literal_pool_.end(); ) {
-		if (*it == SENTINEL_LIT) {
-			if (it + 1 == literal_pool_.end()) break;
-			it += ClauseHeader::overheadInLits() + 1;
-			continue;
-		}
-		ClauseOfs ofs = (ClauseOfs)(it - literal_pool_.begin());
-		// Walk the clause to gather lits.
-		auto end_it = it;
-		while (*end_it != SENTINEL_LIT) end_it++;
-		// Check in-scope.
-		if (!learnedClauseInScope(ofs)) { it = end_it; continue; }
-		// Check confinement and build active lit list.
+	for (ClauseOfs ofs : conflict_clauses_) {
+		if (!learnedClauseInScopeOrSound(ofs, config_.sound_provenance)) continue;
+		unsigned len = getHeaderOf(ofs).length();
+		auto begin_it = literal_pool_.begin() + ofs;
+		auto end_it = begin_it + len;
 		bool satisfied = false;
 		bool confined = true;
 		ClauseLits cl;
-		for (auto lt = it; lt != end_it; lt++) {
+		for (auto lt = begin_it; lt != end_it; lt++) {
 			if (literal_values_[*lt] == T_TRI) { satisfied = true; break; }
 			if (literal_values_[*lt] != X_TRI) continue;     // F_TRI -> drop lit
 			if (!avar_set.count(lt->var())) { confined = false; break; }
@@ -1102,7 +1094,6 @@ mpz_class Solver::bruteForceCountSubcompWithLearned(Component &sub,
 			if (vi == var_to_bit.end()) { confined = false; break; }
 			cl.lits.push_back({vi->second, lt->sign()});
 		}
-		it = end_it;
 		if (satisfied || !confined) continue;
 		if (cl.lits.empty()) return 0;
 		clauses.push_back(std::move(cl));
@@ -1128,6 +1119,259 @@ mpz_class Solver::bruteForceCountSubcompWithLearned(Component &sub,
 }
 
 // Env-gated L2-store-time verifier. See header for the spec.
+void Solver::verifyL2Store(Component &comp,
+                            const CanonicalKey &cached_key,
+                            const mpz_class &result,
+                            int depth) {
+	static const int s_vstore_n = []() {
+		const char *e = std::getenv("SHARPSAT_VERIFY_STORE");
+		return e ? std::atoi(e) : 0;
+	}();
+	static const int s_vlearn_n = []() {
+		const char *e = std::getenv("SHARPSAT_VERIFY_LEARNED");
+		return e ? std::atoi(e) : 0;
+	}();
+	if (s_vstore_n <= 0 && s_vlearn_n <= 0) return;
+
+	static long long s_vstore_dumped = 0;
+	static long long s_vlearn_dumped = 0;
+	if (s_vstore_dumped >= 50 && s_vlearn_dumped >= 50) return;
+
+	// Pre-check: a binary between two F_TRI vars makes F|trail UNSAT,
+	// but neither var is in `avars` so bruteForceCountSubcomp would
+	// silently over-count. At L2 store time BCP has unwound so this
+	// shouldn't happen, but guard defensively.
+	for (auto v_it = comp.varsBegin(); *v_it != varsSENTINEL; ++v_it) {
+		unsigned v = *v_it;
+		for (int s = 0; s <= 1; ++s) {
+			LiteralID lit(v, s == 1);
+			if (literal_values_[lit] != F_TRI) continue;
+			unsigned orig = literals_[lit].original_binary_link_count_;
+			unsigned idx = 0;
+			for (auto bt = literals_[lit].binary_links_.begin();
+			     *bt != SENTINEL_LIT; ++bt, ++idx) {
+				if (idx >= orig) break;
+				if (literal_values_[*bt] == F_TRI) return;
+			}
+		}
+	}
+
+	unsigned na = 0;
+	unsigned n_max = std::max(s_vstore_n, s_vlearn_n);
+	mpz_class brute = bruteForceCountSubcomp(comp, n_max, &na);
+	if (brute < 0) return;
+
+	if (s_vstore_n > 0 && s_vstore_dumped < 50
+	    && na <= (unsigned)s_vstore_n
+	    && brute != result) {
+		std::cerr << "*** STORE_UNSOUND *** key.hash=0x"
+		          << std::hex << cached_key.hash << std::dec
+		          << " hash_hi=0x" << std::hex << cached_key.hash_hi << std::dec
+		          << " num_vars=" << cached_key.num_vars
+		          << " n_in_cl=" << cached_key.n_in_clauses
+		          << " n_active=" << na
+		          << " stored_total=" << result
+		          << " brute_total=" << brute
+		          << " diff=" << (result - brute)
+		          << " depth=" << depth
+		          << "\n";
+		++s_vstore_dumped;
+	}
+
+	if (s_vlearn_n > 0 && s_vlearn_dumped < 50
+	    && na <= (unsigned)s_vlearn_n) {
+		unsigned na2 = 0;
+		unsigned n_learned = 0;
+		mpz_class brute_with_learned =
+		    bruteForceCountSubcompWithLearned(comp, n_max, &na2, &n_learned);
+		if (brute_with_learned >= 0 && brute_with_learned != brute) {
+			std::cerr << "*** LEARNED_UNSOUND *** key.hash=0x"
+			          << std::hex << cached_key.hash << std::dec
+			          << " n_active=" << na
+			          << " brute_orig=" << brute
+			          << " brute_with_learned=" << brute_with_learned
+			          << " diff=" << (brute - brute_with_learned)
+			          << " n_learned_checked=" << n_learned
+			          << " depth=" << depth
+			          << "\n";
+			++s_vlearn_dumped;
+
+			static const int s_du_n = []() {
+				const char *e = std::getenv("SHARPSAT_DUMP_UNSOUND");
+				return e ? std::atoi(e) : 0;
+			}();
+			static long long s_du_done = 0;
+			if (s_du_n > 0 && s_du_done < s_du_n) {
+				dumpUnsoundLearnedClauses(comp);
+				++s_du_done;
+			}
+		}
+	}
+}
+
+// Concrete-example dumper for unsound learned clauses. See header for spec.
+void Solver::dumpUnsoundLearnedClauses(Component &sub) {
+	const unsigned N_MAX = 24;
+
+	std::vector<unsigned> avars;
+	for (auto vt = sub.varsBegin(); *vt != varsSENTINEL; vt++)
+		if (isActive(LiteralID(*vt, true))) avars.push_back(*vt);
+	if (avars.empty() || avars.size() > N_MAX) {
+		std::cerr << "  [dumpUnsoundLearnedClauses: n_active="
+		          << avars.size() << " out of range]\n";
+		return;
+	}
+	std::unordered_map<unsigned, unsigned> var_to_bit;
+	for (unsigned i = 0; i < avars.size(); i++) var_to_bit[avars[i]] = i;
+	std::set<unsigned> avar_set(avars.begin(), avars.end());
+
+	struct CL { std::vector<std::pair<unsigned,bool>> lits; };
+	std::vector<CL> orig_clauses;
+	const auto &cmap = comp_manager_.getAnalyzer().clauseIdToOfs();
+	for (auto it = sub.clsBegin(); *it != clsSENTINEL; it++) {
+		ClauseOfs ofs = cmap[*it];
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+		if (removed_clauses_.count(ofs)) continue;
+		bool satisfied = false;
+		CL cl;
+		for (auto lt = literal_pool_.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
+			if (literal_values_[*lt] == T_TRI) { satisfied = true; break; }
+			if (literal_values_[*lt] != X_TRI) continue;
+			auto vi = var_to_bit.find(lt->var());
+			if (vi == var_to_bit.end()) continue;
+			cl.lits.push_back({vi->second, lt->sign()});
+		}
+		if (satisfied) continue;
+		if (cl.lits.empty()) {
+			std::cerr << "  [dumpUnsoundLearnedClauses: originals already UNSAT at this state]\n";
+			return;
+		}
+		orig_clauses.push_back(std::move(cl));
+	}
+	for (unsigned v : avars) {
+		for (int s = 0; s <= 1; s++) {
+			LiteralID lit(v, s == 1);
+			if (literal_values_[lit] != X_TRI) continue;
+			unsigned orig_count = literals_[lit].original_binary_link_count_;
+			unsigned idx = 0;
+			for (auto bt = literals_[lit].binary_links_.begin();
+			     *bt != SENTINEL_LIT; bt++, idx++) {
+				if (idx >= orig_count) break;
+				unsigned other_v = bt->var();
+				if (other_v <= v) continue;
+				if (literal_values_[*bt] == T_TRI) continue;
+				if (literal_values_[*bt] == F_TRI) continue;
+				auto vi = var_to_bit.find(other_v);
+				if (vi == var_to_bit.end()) continue;
+				CL cl;
+				cl.lits.push_back({var_to_bit[v], lit.sign()});
+				cl.lits.push_back({vi->second, bt->sign()});
+				orig_clauses.push_back(std::move(cl));
+			}
+		}
+	}
+
+	std::vector<unsigned long> orig_models;
+	const unsigned long total = 1UL << avars.size();
+	for (unsigned long m = 0; m < total; m++) {
+		bool sat = true;
+		for (const auto &cl : orig_clauses) {
+			bool csat = false;
+			for (const auto &lp : cl.lits) {
+				bool val = (m >> lp.first) & 1UL;
+				if (val == lp.second) { csat = true; break; }
+			}
+			if (!csat) { sat = false; break; }
+		}
+		if (sat) orig_models.push_back(m);
+	}
+	std::cerr << "  [originals admit " << orig_models.size() << " models on "
+	          << avars.size() << " active vars]\n";
+
+	auto lit_value_str = [&](LiteralID lt) -> const char * {
+		if (literal_values_[lt] == T_TRI) return "T";
+		if (literal_values_[lt] == F_TRI) return "F";
+		if (literal_values_[lt] == X_TRI) return "X";
+		return "?";
+	};
+
+	unsigned culprit_count = 0;
+	for (ClauseOfs ofs : conflict_clauses_) {
+		if (!learnedClauseInScopeOrSound(ofs, config_.sound_provenance)) continue;
+		unsigned len = getHeaderOf(ofs).length();
+		auto begin_it = literal_pool_.begin() + ofs;
+		auto end_it = begin_it + len;
+		bool satisfied = false;
+		bool confined = true;
+		std::vector<std::pair<unsigned,bool>> active_lits;
+		for (auto lt = begin_it; lt != end_it; lt++) {
+			if (literal_values_[*lt] == T_TRI) { satisfied = true; break; }
+			if (literal_values_[*lt] != X_TRI) continue;
+			if (!avar_set.count(lt->var())) { confined = false; break; }
+			auto vi = var_to_bit.find(lt->var());
+			if (vi == var_to_bit.end()) { confined = false; break; }
+			active_lits.push_back({vi->second, lt->sign()});
+		}
+		if (satisfied || !confined) continue;
+
+		std::vector<unsigned long> violating;
+		for (unsigned long m : orig_models) {
+			bool csat = false;
+			for (const auto &lp : active_lits) {
+				bool val = (m >> lp.first) & 1UL;
+				if (val == lp.second) { csat = true; break; }
+			}
+			if (!csat) violating.push_back(m);
+		}
+		if (violating.empty()) continue;
+
+		culprit_count++;
+		std::cerr << "  *** UNSOUND_LEARNED_CLAUSE *** cl_ofs=" << ofs
+		          << " creation_time=" << getHeaderOf(ofs).creation_time()
+		          << " length=" << len
+		          << " excludes_models=" << violating.size() << "/" << orig_models.size() << "\n";
+		std::cerr << "    lits: ";
+		for (auto lt = begin_it; lt != end_it; lt++) {
+			std::cerr << lt->toInt()
+			          << "[" << lit_value_str(*lt) << "] ";
+		}
+		std::cerr << "\n";
+		std::cerr << "    active_lits (var,sign): ";
+		for (const auto &lp : active_lits) {
+			std::cerr << "(" << avars[lp.first] << "," << lp.second << ") ";
+		}
+		std::cerr << "\n";
+		if (!violating.empty()) {
+			std::cerr << "    example_orig_model: ";
+			unsigned long m = violating[0];
+			for (unsigned i = 0; i < avars.size(); i++) {
+				bool val = (m >> i) & 1UL;
+				std::cerr << avars[i] << "=" << (val ? "T" : "F") << " ";
+			}
+			std::cerr << "\n";
+		}
+		auto it_scope = learned_clause_scope_.find(ofs);
+		std::cerr << "    learn_scope: ";
+		if (it_scope == learned_clause_scope_.end()) {
+			std::cerr << "<NO ENTRY (treated as empty scope)>";
+		} else {
+			std::cerr << "{";
+			for (ClauseOfs s : it_scope->second) std::cerr << s << ",";
+			std::cerr << "}";
+		}
+		std::cerr << "\n";
+		std::cerr << "    current_removed: {";
+		for (const auto &p : removed_clauses_) std::cerr << p.first << ",";
+		std::cerr << "}\n";
+
+		if (culprit_count >= 5) {
+			std::cerr << "    [... cap at 5 culprits per dump call]\n";
+			break;
+		}
+	}
+	std::cerr << "  [total culprits found: " << culprit_count << "]\n";
+}
+
 void Solver::verifyPostPreprocessCleanSlate(const char *label) {
 	auto fire = [&](const std::string &msg) {
 		std::cerr << "\n*** CLEAN_SLATE (" << label << "): "

@@ -332,6 +332,14 @@ struct SolverConfiguration {
   // OFF: zero (single bool check at the top of each guard).
   bool check_learn_invariants = false;
 
+  // Provenance-based learned-clause soundness, replacing the conservative
+  // and incomplete scope-subset check. Each learned clause carries the
+  // list of antecedent clauses used in its UIP resolution chain. A
+  // learned clause is sound under the current `removed_clauses_` iff
+  // every original clause in its transitive provenance is still present
+  // (not removed). Default ON.
+  bool sound_provenance = true;
+
   // Periodic SAT-check diagnostic. Every N solveComponentImpl entries
   // (when removed_clauses_ is empty), call CryptoMiniSat with the
   // current literal_stack_ as assumptions and a small conflict budget;

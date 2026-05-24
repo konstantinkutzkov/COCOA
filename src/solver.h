@@ -815,6 +815,30 @@ private:
 	                                             unsigned *out_active_n = nullptr,
 	                                             unsigned *out_n_learned_checked = nullptr);
 
+	// Concrete-example dumper: enumerate originals-only models of `sub`,
+	// then for each confined in-scope learned clause check whether it
+	// EXCLUDES any of those models. Print such "culprit" clauses with
+	// full learn-context (lits + current values + learn-time scope +
+	// current removed_clauses_). Use only on small comps (n_active ≤ ~22).
+	void dumpUnsoundLearnedClauses(class Component &sub);
+
+	// Env-gated L2-store-time verifier (no-op unless SHARPSAT_VERIFY_*
+	// env vars are set):
+	//   SHARPSAT_VERIFY_STORE=N    — brute-force-verify comp's count under
+	//                                originals matches the about-to-be-stored
+	//                                `result`, for comps with n_active ≤ N.
+	//   SHARPSAT_VERIFY_LEARNED=N  — additionally verify that originals-only
+	//                                count and originals+in-scope-learned
+	//                                count agree (INV_S2-style check).
+	//   SHARPSAT_DUMP_UNSOUND=N    — on a LEARNED_UNSOUND fire, dump the
+	//                                first N offending learned clauses with
+	//                                full context.
+	// Each diagnostic caps at 50 fires to keep run time tractable.
+	void verifyL2Store(class Component &comp,
+	                   const struct CanonicalKey &cached_key,
+	                   const mpz_class &result,
+	                   int depth);
+
 
 	// Explicit, one-shot reset of every search-scoped field. Idempotent.
 	// Called from HardWireAndCompact; anything it clears is cheap
@@ -957,7 +981,7 @@ private:
 		if (config_.check_learn_invariants
 		    && ant.isAClause() && ant.asCl() != NOT_A_CLAUSE
 		    && ant.asCl() >= (ClauseOfs)original_lit_pool_size_
-		    && !learnedClauseInScope(ant.asCl())) {
+		    && !learnedClauseInScopeOrSound(ant.asCl(), config_.sound_provenance)) {
 			std::cerr << "\n*** INV_C_ANTECEDENT_OUT_OF_SCOPE_AT_FIRING ***\n"
 			          << "  lit=" << lit.toInt()
 			          << "  ante_cl=" << ant.asCl()
@@ -990,13 +1014,20 @@ private:
 		violated_clause.clear();
 		violated_clause.push_back(litA);
 		violated_clause.push_back(litB);
+		last_violated_clause_ofs_ = NOT_A_CLAUSE;
 	}
 	void setConflictState(ClauseOfs cl_ofs) {
 		getHeaderOf(cl_ofs).increaseScore();
 		violated_clause.clear();
 		for (auto it = beginOf(cl_ofs); *it != SENTINEL_LIT; it++)
 			violated_clause.push_back(*it);
+		last_violated_clause_ofs_ = cl_ofs;
 	}
+
+	// ClauseOfs of the long clause that triggered the most recent
+	// conflict (NOT_A_CLAUSE for binary conflicts). Used by UIP analysis
+	// to seed the provenance chain with the conflict-triggering clause.
+	ClauseOfs last_violated_clause_ofs_ = NOT_A_CLAUSE;
 
 	void initStack(unsigned int resSize) {
 		stack_.clear();
@@ -1037,6 +1068,21 @@ private:
 	// literal
 	void recordLastUIPCauses();
 	void recordAllUIPCauses();
+
+	// Snapshot the most-recent UIP resolution chain into the provenance
+	// map for `learned_ofs`. Assumes last_analysis_chain_ holds the
+	// long-clause antecedents and last_violated_clause_ofs_ holds the
+	// conflict-trigger clause (if long; NOT_A_CLAUSE for binary).
+	// Binary partner antecedents (last_analysis_chain_binaries_) are
+	// skipped — original binaries are unconditionally sound.
+	void recordLearnedClauseProvenance(ClauseOfs learned_ofs) {
+		std::vector<ClauseOfs> prov;
+		prov.reserve(last_analysis_chain_.size() + 1);
+		if (last_violated_clause_ofs_ != NOT_A_CLAUSE)
+			prov.push_back(last_violated_clause_ofs_);
+		for (ClauseOfs c : last_analysis_chain_) prov.push_back(c);
+		learned_clause_provenance_[learned_ofs] = std::move(prov);
+	}
 
 
 	// Diagnostic: record every antecedent clause walked during the

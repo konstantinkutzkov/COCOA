@@ -19,6 +19,7 @@
 #include <iostream>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 class Instance {
 protected:
@@ -459,6 +460,7 @@ protected:
 
   void markClauseRemoved(ClauseOfs cl_ofs) {
     removed_clauses_[cl_ofs]++;
+    removed_clauses_version_++;
   }
 
   void unmarkClauseRemoved(ClauseOfs cl_ofs) {
@@ -467,6 +469,86 @@ protected:
       if (--it->second == 0)
         removed_clauses_.erase(it);
     }
+    removed_clauses_version_++;
+  }
+
+  // Direct (1-hop) provenance of each learned clause: the list of
+  // antecedent ClauseOfs used in its UIP resolution chain, including
+  // the initial conflict-triggering clause. Used by learnedClauseSound
+  // to check whether the derivation is still valid under the current
+  // removed_clauses_ — a learned clause is sound iff no clause in its
+  // transitive provenance is currently removed.
+  std::unordered_map<ClauseOfs, std::vector<ClauseOfs>>
+      learned_clause_provenance_;
+
+  // Bumped on every mark/unmark of removed_clauses_. Used to invalidate
+  // the memoization cache for learnedClauseSound.
+  uint64_t removed_clauses_version_ = 0;
+
+  // Memoized result of learnedClauseSound. Each entry stores the
+  // version at which it was computed and the result. Entries with a
+  // stale version are discarded on next lookup.
+  mutable std::unordered_map<ClauseOfs, std::pair<uint64_t, bool>>
+      sound_provenance_cache_;
+
+  // Transitive-provenance soundness check. A learned clause D is sound
+  // under the current `removed_clauses_` iff no clause in its transitive
+  // antecedent chain is currently removed. Done via BFS over direct
+  // antecedents, memoized per (cl_ofs, removed_clauses_version_).
+  bool learnedClauseSound(ClauseOfs cl_ofs) const {
+    // Originals are always sound (they ARE in the formula or are
+    // removed; the caller should filter ofs < original_lit_pool_size_
+    // by checking removed_clauses_ directly).
+    if (cl_ofs < (ClauseOfs)original_lit_pool_size_)
+      return removed_clauses_.count(cl_ofs) == 0;
+
+    // Memoization fast path.
+    auto cit = sound_provenance_cache_.find(cl_ofs);
+    if (cit != sound_provenance_cache_.end()
+        && cit->second.first == removed_clauses_version_) {
+      return cit->second.second;
+    }
+
+    // BFS over direct antecedents. Stack-based to avoid C++ recursion.
+    // `visited` prevents infinite loops (shouldn't happen on a valid
+    // antecedent DAG, but defensive) and also gives memoization within
+    // a single call.
+    std::unordered_set<ClauseOfs> visited;
+    std::vector<ClauseOfs> stack;
+    stack.push_back(cl_ofs);
+    visited.insert(cl_ofs);
+    bool result = true;
+    while (!stack.empty() && result) {
+      ClauseOfs cur = stack.back();
+      stack.pop_back();
+      auto pit = learned_clause_provenance_.find(cur);
+      if (pit == learned_clause_provenance_.end()) {
+        // No provenance recorded: be conservative — treat as unsound
+        // under any non-empty removed_clauses_. Matches the legacy
+        // semantics for clauses learned at empty scope.
+        if (!removed_clauses_.empty()) result = false;
+        continue;
+      }
+      for (ClauseOfs ant : pit->second) {
+        if (ant < (ClauseOfs)original_lit_pool_size_) {
+          // Original antecedent: unsound iff currently removed.
+          if (removed_clauses_.count(ant) != 0) { result = false; break; }
+        } else {
+          // Learned antecedent: recurse via the stack.
+          if (visited.insert(ant).second) stack.push_back(ant);
+        }
+      }
+    }
+
+    sound_provenance_cache_[cl_ofs] = {removed_clauses_version_, result};
+    return result;
+  }
+
+  // Convenience dispatch: under sound_provenance, use the new check;
+  // under legacy mode, fall through to learnedClauseInScope.
+  bool learnedClauseInScopeOrSound(ClauseOfs cl_ofs, bool use_sound) const {
+    return use_sound ? learnedClauseSound(cl_ofs)
+                     : learnedClauseInScope(cl_ofs);
   }
 
   void decayActivities() {

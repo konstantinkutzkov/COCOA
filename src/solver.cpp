@@ -1019,7 +1019,7 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 			// Mask is empty at root → no filter; populated by SubVarsetGuard
 			// at every solveComponent entry.
 			if (*itcl >= (ClauseOfs)original_lit_pool_size_) {
-				if (!learnedClauseInScope(*itcl)) continue;
+				if (!learnedClauseInScopeOrSound(*itcl, config_.sound_provenance)) continue;
 				if (!learnedClauseInComponent(*itcl, current_sub_varset_)) continue;
 			}
 			auto itL = beginOf(*itcl) + 2;
@@ -1159,7 +1159,7 @@ int Solver::count_active_2clauses() {
 	while (cl_ofs < (ClauseOfs)literal_pool_.size()) {
 		bool in_scope = true;
 		if (cl_ofs >= (ClauseOfs)original_lit_pool_size_
-		    && !learnedClauseInScope(cl_ofs)) {
+		    && !learnedClauseInScopeOrSound(cl_ofs, config_.sound_provenance)) {
 			in_scope = false;
 		}
 		if (isClauseRemoved(cl_ofs)) in_scope = false;
@@ -1292,6 +1292,13 @@ bool Solver::commitFailedLiteral() {
 		if (ante.isAClause())
 			verifyLearnedClauseSound(uip, ante.asCl(),
 			                          "commitFailedLiteral");
+		// Record provenance: the antecedent chain (long-clause
+		// resolutions) plus the conflict-trigger clause. Binary
+		// antecedents (chain_binaries_) are skipped — original
+		// binaries are always sound; padded learned binaries appear
+		// in chain_ via their ClauseOfs.
+		if (ante.isAClause() && config_.sound_provenance)
+			recordLearnedClauseProvenance(ante.asCl());
 	}
 	setLiteralIfFree(uip.front(), ante);
 	return BCP(sz);
@@ -1414,7 +1421,7 @@ void Solver::stage0_cheap_scores(Component &comp,
 		ClauseOfs ofs = comp_manager_.clauseOfsOf(*ct);
 		if (isClauseRemoved(ofs) || isSatisfied(ofs)) continue;
 		if (ofs >= (ClauseOfs)original_lit_pool_size_
-		    && !learnedClauseInScope(ofs)) continue;
+		    && !learnedClauseInScopeOrSound(ofs, config_.sound_provenance)) continue;
 		unsigned active_len = 0;
 		for (auto lt = beginOf(ofs); *lt != SENTINEL_LIT; ++lt) {
 			if (literal_values_[*lt] == X_TRI) active_len++;
@@ -2098,7 +2105,7 @@ void Solver::recordLastUIPCauses() {
 			// antecedent invalid for the current resolution step.
 			if (config_.check_learn_invariants
 			    && ante_cl >= (ClauseOfs)original_lit_pool_size_
-			    && !learnedClauseInScope(ante_cl)) {
+			    && !learnedClauseInScopeOrSound(ante_cl, config_.sound_provenance)) {
 				std::cerr << "\n*** INV_A_ANTECEDENT_OUT_OF_SCOPE_AT_ANALYSIS ***\n"
 				          << "  curr_lit=" << curr_lit.toInt()
 				          << "  ante_cl=" << ante_cl
@@ -2484,7 +2491,7 @@ uint64_t Solver::deriv_cache_component_xor_(Component &comp) {
 			xor_val ^= deriv_cache_clause_content_hash_[ofs];
 		} else {
 			// Learned clause: identity-hash fallback.
-			if (!learnedClauseInScope(ofs)) continue;
+			if (!learnedClauseInScopeOrSound(ofs, config_.sound_provenance)) continue;
 			if (isSatisfied(ofs)) continue;
 			xor_val ^= get_or_make_hash(long_clause_hashes_, ofs);
 		}

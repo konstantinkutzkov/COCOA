@@ -239,6 +239,10 @@ int main(int argc, char *argv[]) {
       theSolver.config().lsp_no_r4 = true;
     } else if (strcmp(argv[i], "-checkLearnInvariants") == 0) {
       theSolver.config().check_learn_invariants = true;
+    } else if (strcmp(argv[i], "-soundProvenance") == 0) {
+      if (argc <= i + 1) { cout << "-soundProvenance needs 0 or 1\n"; return -1; }
+      theSolver.config().sound_provenance = atoi(argv[i + 1]) != 0;
+      i++;
     } else if (strcmp(argv[i], "-satCheckEvery") == 0) {
       if (argc <= i + 1) { cout << "-satCheckEvery needs an integer\n"; return -1; }
       theSolver.config().sat_check_every = (unsigned)atoi(argv[i + 1]);

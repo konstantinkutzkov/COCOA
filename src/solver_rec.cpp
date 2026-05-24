@@ -466,6 +466,9 @@ mpz_class Solver::solveComponent(Component &comp,
 		for (unsigned i = 0; i < free_vars; ++i)
 			mpz_fdiv_q_2exp(structural.get_mpz_t(),
 			                structural.get_mpz_t(), 1);
+		// Env-gated L2-store-time verifier (no-op unless SHARPSAT_VERIFY_*
+		// env vars are set). Implementation lives in solver_diagnostics.cpp.
+		verifyL2Store(comp, cached_key, result, depth);
 		comp_manager_.contentCache().store(cached_key, structural);
 		// Record into the Bloom pre-filter only when XOR was actually
 		// maintained for this comp. Sub-threshold comps skip XOR
@@ -2052,6 +2055,8 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 					verifyLearnedClauseSound(uip_clauses_.back(),
 					                          _learn_ante.asCl(),
 					                          "branchOnLiteral_tail");
+				if (_learn_ante.isAClause() && config_.sound_provenance)
+					recordLearnedClauseProvenance(_learn_ante.asCl());
 			} else {
 				statistics_.num_learned_dedup_dropped_++;
 			}
@@ -2207,7 +2212,7 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 			if (!ant.isAnt() || !ant.isAClause()) continue;
 			ClauseOfs ant_ofs = ant.asCl();
 			if (ant_ofs < (ClauseOfs)original_lit_pool_size_) continue;  // original
-			if (!learnedClauseInScope(ant_ofs)) {
+			if (!learnedClauseInScopeOrSound(ant_ofs, config_.sound_provenance)) {
 				std::cerr << "\n*** INV_T4_TRAIL_LIT_LOST_JUSTIFICATION ***\n"
 				          << "  trail_lit=" << trail_lit.toInt()
 				          << "  forcing_ante_cl=" << ant_ofs << " (learned)\n"
@@ -2231,14 +2236,41 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 	}
 
 	bool conflict = false;
+	// Each ¬lit of C must become the UNIQUE decision at its own decision
+	// level. Standard CDCL UIP analysis assumes one decision per DL —
+	// historically branchOnClause set all ¬lits at one DL, which broke
+	// UIP and produced unsound learned clauses (the asserting-lit's
+	// "decision-negation" encoding silently dropped multi-decision lits).
+	// Fix: push a fresh StackLevel and run BCP between each ¬lit, so each
+	// becomes its own DL. Lits propagated by BCP from a prior ¬lit don't
+	// need their own decision (already set).
+	// See docs/branchonclause_uip_soundness_proof.md for the full proof.
+	unsigned extra_stack_levels = 0;
 	if (negate_literals) {
-		for (auto it = beginOf(cl_ofs); *it != SENTINEL_LIT; it++) {
-			if (isSatisfied(*it)) {
+		for (auto it = beginOf(cl_ofs); *it != SENTINEL_LIT; ++it) {
+			if (isSatisfied(*it)) { conflict = true; break; }
+			if (!isActive(*it)) continue;  // ¬lit already True via earlier BCP
+
+			unsigned inner_save = literal_stack_.size();
+			stack_.push_back(StackLevel(1, inner_save,
+			                            comp_manager_.component_stack_size()));
+			{
+				unsigned active = 0;
+				for (auto vt = comp.varsBegin(); *vt != varsSENTINEL; vt++)
+					if (isActive(LiteralID(*vt, true))) active++;
+				stack_.back().set_active_at_push(active);
+			}
+			++extra_stack_levels;
+
+			if (!setLiteralIfFree(it->neg())) {
+				// Race with intervening BCP — already set. Drop the level.
+				stack_.pop_back();
+				--extra_stack_levels;
+				continue;
+			}
+			if (!BCP(inner_save)) {
 				conflict = true;
 				break;
-			}
-			if (isActive(*it)) {
-				setLiteralIfFree(it->neg());
 			}
 		}
 	}
@@ -2250,15 +2282,15 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 		noteResolved(child_abstract_budget);
 		result = 0;
 	} else {
+		// For negate=false, BCP from lit_save propagates anything newly
+		// reachable due to C's removal (rare; mostly a no-op). For
+		// negate=true, BCP already ran per-lit; this is a safe re-run.
 		bool bcp_ok = BCP(lit_save);
 		if (!bcp_ok) {
 			statistics_.num_conflicts_++;
-			// We deliberately DON'T do clause learning here. Branch 2 of a
-			// clause branch can assign multiple literals (the negations of
-			// the clause's literals), each marked as a "decision literal".
-			// Standard CDCL conflict analysis assumes one decision per
-			// decision level, so it fails on this multi-decision setup.
-			// LEAF event: BCP conflict.
+			// LEAF event: BCP conflict. Learning is not enabled here yet
+			// even though the multi-decision-DL hazard is now gone —
+			// keep this conservative until we explicitly opt in.
 			noteResolved(child_abstract_budget);
 			result = 0;
 		} else {
@@ -2299,6 +2331,9 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 			std::abort();
 		}
 	}
+	// Pop the per-¬lit StackLevels we pushed in the negate path, plus the
+	// outer StackLevel pushed at branchOnClause entry.
+	for (unsigned i = 0; i < extra_stack_levels; ++i) stack_.pop_back();
 	stack_.pop_back();
 	return result;
 }
