@@ -77,6 +77,19 @@ static std::vector<std::pair<uint64_t, unsigned>> s_labels_collision;
 // twice. Each entry is (sig_pair_var_idx, mix64(block_label[idx])).
 static std::vector<std::pair<int, uint64_t>> s_wl_clause_contribs;
 
+// Per-clause scratches for Pass 1a / Pass 1b walk-merge. Same single-
+// threaded restriction as the s_* buffers above.
+// p1a: (var_idx, is_positive_polarity) for each X_TRI literal in the
+//      clause. Lets Pass 1a do ONE walk to detect satisfied / count /
+//      collect, then apply pos/neg counts post-hoc only if the clause
+//      survives the active>=2 + !satisfied filter.
+// p1b: (var_idx, norm_pos) for non-singleton X_TRI literals. Lets
+//      Pass 1b do ONE walk to derive ClauseType AND remember which
+//      vars get which polarity hash, replacing the previous two-pass
+//      (type-compute then sig-accumulate) over literal_pool.
+static std::vector<std::pair<unsigned, bool>> s_p1a_contribs;
+static std::vector<std::pair<unsigned, bool>> s_p1b_contribs;
+
 CanonicalKey buildCanonicalKey(
     Component &comp,
     const std::vector<LiteralID> &literal_pool,
@@ -144,28 +157,31 @@ CanonicalKey buildCanonicalKey(
     }
     if (removed_clauses.count(ofs)) continue;
 
+    // ONE walk: detect satisfied, collect (idx, is_pos) into scratch.
+    // pos/neg counters applied only if the clause survives the
+    // "not satisfied AND active>=2" filter, so the scratch is the
+    // batch-update vehicle.
     bool satisfied = false;
-    unsigned active_count = 0;
+    s_p1a_contribs.clear();
     for (auto lt = literal_pool.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
       if (literal_values[*lt] == T_TRI) { satisfied = true; break; }
-      if (literal_values[*lt] == X_TRI) active_count++;
+      if (literal_values[*lt] == X_TRI) {
+        int idx = s_var_idx[lt->var()];
+        if (idx >= 0)
+          s_p1a_contribs.push_back({(unsigned)idx, lt->toInt() > 0});
+      }
     }
-    if (satisfied || active_count < 2) continue;
+    if (satisfied || s_p1a_contribs.size() < 2) continue;
+
+    for (const auto &c : s_p1a_contribs) {
+      if (c.second) s_pos_count[c.first]++;
+      else s_neg_count[c.first]++;
+    }
 
     ClauseRef ref;
     ref.ofs = ofs;
     ref.is_binary = false;
     s_clause_refs.push_back(ref);
-
-    for (auto lt = literal_pool.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
-      if (literal_values[*lt] == X_TRI) {
-        int idx = s_var_idx[lt->var()];
-        if (idx >= 0) {
-          if (lt->toInt() > 0) s_pos_count[idx]++;
-          else s_neg_count[idx]++;
-        }
-      }
-    }
   }
 
   // Binary clauses — use var_idx >= 0 to check component membership
@@ -218,59 +234,52 @@ CanonicalKey buildCanonicalKey(
     unsigned len = 0, np = 0, nn = 0, ns = 0;
 
     if (!ref.is_binary) {
+      // ONE walk: derive ClauseType (len/np/nn/ns) AND collect
+      // non-singleton (idx, norm_pos) into scratch so the post-walk
+      // hash lookup can be applied without re-walking literal_pool.
+      // Singletons contribute only to `ns` and never to sig.
+      s_p1b_contribs.clear();
       for (auto lt = literal_pool.begin() + ref.ofs; *lt != SENTINEL_LIT; lt++) {
         if (literal_values[*lt] != X_TRI) continue;
         int idx = s_var_idx[lt->var()];
         if (idx < 0) continue;
         len++;
-        if (s_var_flags[idx] & 1) ns++;
-        else {
+        if (s_var_flags[idx] & 1) {
+          ns++;
+        } else {
           bool norm_pos = (lt->toInt() > 0) != bool(s_var_flags[idx] & 2);
           if (norm_pos) np++;
           else nn++;
+          s_p1b_contribs.push_back({(unsigned)idx, norm_pos});
         }
       }
+      ClauseType type = {len, np, nn, ns};
+      auto hashes = g_clause_type_dict.lookup(type);
+      for (const auto &c : s_p1b_contribs)
+        s_sig[c.first] += c.second ? hashes.first : hashes.second;
     } else {
       int ia = s_var_idx[ref.var_a];
       int ib = s_var_idx[ref.var_b];
       len = 2;
-      if (s_var_flags[ia] & 1) ns++;
+      bool norm_pos_a = false, norm_pos_b = false;
+      bool a_sing = s_var_flags[ia] & 1;
+      bool b_sing = s_var_flags[ib] & 1;
+      if (a_sing) ns++;
       else {
-        bool norm_pos = (ref.lit_a > 0) != bool(s_var_flags[ia] & 2);
-        if (norm_pos) np++;
+        norm_pos_a = (ref.lit_a > 0) != bool(s_var_flags[ia] & 2);
+        if (norm_pos_a) np++;
         else nn++;
       }
-      if (s_var_flags[ib] & 1) ns++;
+      if (b_sing) ns++;
       else {
-        bool norm_pos = (ref.lit_b > 0) != bool(s_var_flags[ib] & 2);
-        if (norm_pos) np++;
+        norm_pos_b = (ref.lit_b > 0) != bool(s_var_flags[ib] & 2);
+        if (norm_pos_b) np++;
         else nn++;
       }
-    }
-
-    ClauseType type = {len, np, nn, ns};
-    auto hashes = g_clause_type_dict.lookup(type);
-
-    // Accumulate signatures for non-singleton variables
-    if (!ref.is_binary) {
-      for (auto lt = literal_pool.begin() + ref.ofs; *lt != SENTINEL_LIT; lt++) {
-        if (literal_values[*lt] != X_TRI) continue;
-        int idx = s_var_idx[lt->var()];
-        if (idx < 0 || (s_var_flags[idx] & 1)) continue;
-        bool norm_pos = (lt->toInt() > 0) != bool(s_var_flags[idx] & 2);
-        s_sig[idx] += norm_pos ? hashes.first : hashes.second;
-      }
-    } else {
-      int ia = s_var_idx[ref.var_a];
-      int ib = s_var_idx[ref.var_b];
-      if (!(s_var_flags[ia] & 1)) {
-        bool norm_pos = (ref.lit_a > 0) != bool(s_var_flags[ia] & 2);
-        s_sig[ia] += norm_pos ? hashes.first : hashes.second;
-      }
-      if (!(s_var_flags[ib] & 1)) {
-        bool norm_pos = (ref.lit_b > 0) != bool(s_var_flags[ib] & 2);
-        s_sig[ib] += norm_pos ? hashes.first : hashes.second;
-      }
+      ClauseType type = {len, np, nn, ns};
+      auto hashes = g_clause_type_dict.lookup(type);
+      if (!a_sing) s_sig[ia] += norm_pos_a ? hashes.first : hashes.second;
+      if (!b_sing) s_sig[ib] += norm_pos_b ? hashes.first : hashes.second;
     }
   }
 
@@ -331,7 +340,16 @@ CanonicalKey buildCanonicalKey(
       x ^= x >> 33;
       return x;
     };
-    s_block_label.assign(s_sig.begin(), s_sig.begin() + n_vars);
+    // block_label is stored in MIXED form: block_label[i] = mix64(L_i),
+    // where L_i is the underlying WL label. This avoids per-edge mix64
+    // calls in the inner loop (was O(edges) per WL iter; now O(vars)
+    // per WL iter, paid by the refine step). mix64 is bijective on
+    // uint64 (xorshift + odd-constant multiplies are all invertible),
+    // so collision detection in s_labels_collision is preserved:
+    // block_label[u]==block_label[v] iff L_u==L_v.
+    s_block_label.resize(n_vars);
+    for (unsigned i = 0; i < n_vars; i++)
+      s_block_label[i] = mix64(s_sig[i]);
     auto &block_label = s_block_label;
     bool collision_now = had_any_collision;
     for (int iter = 2; iter <= wl_iterations && collision_now; iter++) {
@@ -350,7 +368,7 @@ CanonicalKey buildCanonicalKey(
             if (literal_values[*lt] != X_TRI) continue;
             int idx = s_var_idx[lt->var()];
             if (idx < 0 || (s_var_flags[idx] & 1)) continue;
-            uint64_t h = mix64(block_label[idx]);
+            uint64_t h = block_label[idx];  // already mixed
             s_wl_clause_contribs.push_back({idx, h});
             clause_h += h;
           }
@@ -359,8 +377,8 @@ CanonicalKey buildCanonicalKey(
         } else {
           int ia = s_var_idx[ref.var_a];
           int ib = s_var_idx[ref.var_b];
-          uint64_t ha = (s_var_flags[ia] & 1) ? 0 : mix64(block_label[ia]);
-          uint64_t hb = (s_var_flags[ib] & 1) ? 0 : mix64(block_label[ib]);
+          uint64_t ha = (s_var_flags[ia] & 1) ? 0 : block_label[ia];
+          uint64_t hb = (s_var_flags[ib] & 1) ? 0 : block_label[ib];
           clause_h = ha + hb;
           if (!(s_var_flags[ia] & 1)) sig_k[ia] += clause_h - ha;
           if (!(s_var_flags[ib] & 1)) sig_k[ib] += clause_h - hb;
