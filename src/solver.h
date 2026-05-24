@@ -306,24 +306,144 @@ private:
 	void sat_check_init_();
 	void sat_check_diagnose_();
 
-	// Derivative-cache probe (Phase 1: diagnostic-only).
-	// long_clause_hashes_[ofs] holds a random uint64_t per long clause,
-	// generated once at solve startup and once per learned long clause.
-	// deriv_cache_xors_seen_ accumulates the clause_xor of every
-	// sub-component stored in the L2 cache. Probe checks whether a
-	// hypothetical var-branch derivative's clause_xor is in the set,
-	// and if so does a full canonical-key lookup to confirm a hit.
-	// See project_derivative_cache_idea memory for the full design.
+	// Derivative-cache probe (Phase 1/2/3). long_clause_hashes_[ofs]
+	// holds a random uint64_t per long clause (lazy, learned-only —
+	// originals use content-aware hashing via Instance::clause_content_hash_).
+	//
+	// deriv_cache_xors_seen_ accumulates the XOR fingerprint of every
+	// sub-component stored in the L2 cache. Phase 1/2 used a
+	// std::unordered_set<uint64_t> — exact but expensive at scale
+	// (~16 B/entry; 730 M L2 stores ⇒ ~12 GB). Phase 3 switches to a
+	// 1 GB Bloom filter (2^33 bits, k=4) — ~10× memory reduction at
+	// peak L2 size with bounded false-positive cost (canonical-key
+	// check at the end catches Bloom FPs; only wasted work is the
+	// canonical-key build itself).
+	class DerivCacheBloom {
+	public:
+		static constexpr size_t kBitsLog2 = 33;            // 2^33 bits = 1 GB
+		static constexpr size_t kBits  = size_t(1) << kBitsLog2;
+		static constexpr size_t kMask  = kBits - 1;
+		static constexpr int    kK     = 4;
+
+		DerivCacheBloom()
+		    : bits_((kBits + 63) / 64, 0ULL), n_inserts_(0) {}
+
+		void insert(uint64_t key) {
+			uint64_t h1 = key * 0x9E3779B97F4A7C15ULL;
+			uint64_t h2 = key * 0xBF58476D1CE4E5B9ULL;
+			for (int k = 0; k < kK; k++) {
+				size_t idx = (h1 + (uint64_t)k * h2) & kMask;
+				bits_[idx >> 6] |= (uint64_t)1 << (idx & 63);
+			}
+			n_inserts_++;
+		}
+
+		bool may_contain(uint64_t key) const {
+			uint64_t h1 = key * 0x9E3779B97F4A7C15ULL;
+			uint64_t h2 = key * 0xBF58476D1CE4E5B9ULL;
+			for (int k = 0; k < kK; k++) {
+				size_t idx = (h1 + (uint64_t)k * h2) & kMask;
+				if (!(bits_[idx >> 6] & ((uint64_t)1 << (idx & 63))))
+					return false;
+			}
+			return true;
+		}
+
+		size_t inserts() const { return n_inserts_; }
+
+	private:
+		std::vector<uint64_t> bits_;
+		size_t                n_inserts_;
+	};
+
 	std::unordered_map<ClauseOfs, uint64_t> long_clause_hashes_;
-	std::unordered_set<uint64_t>      deriv_cache_xors_seen_;
-	unsigned long long                deriv_cache_counter_      = 0;  // throttle
-	unsigned long long                deriv_cache_n_probes_     = 0;
-	unsigned long long                deriv_cache_n_xor_hits_   = 0;
-	unsigned long long                deriv_cache_n_real_hits_  = 0;
+	std::unique_ptr<DerivCacheBloom>  deriv_cache_xors_seen_;
+	unsigned long long                deriv_cache_counter_       = 0;  // throttle
+	unsigned long long                deriv_cache_n_probes_      = 0;
+	// Var-branching: hypothetical F|v=T or F|v=F via setLiteralIfFree + BCP.
+	unsigned long long                deriv_cache_n_xor_hits_    = 0;
+	unsigned long long                deriv_cache_n_real_hits_   = 0;
+	// Clause-branching (removal-only): hypothetical F\{c} via XOR-out of
+	// the clause's content hash. No BCP, no state mutation for the XOR
+	// pre-filter step — only mark/unmark when running the canonical-key
+	// follow-up after a positive pre-filter.
+	unsigned long long                deriv_cache_n_cl_xor_hits_  = 0;
+	unsigned long long                deriv_cache_n_cl_real_hits_ = 0;
+	// Phase 3 bias: counters for hits actually USED to short-circuit a
+	// branch (a subset of real_hits; some real hits are not the chosen
+	// candidate because a higher-priority kind won).
+	unsigned long long                deriv_cache_n_used_var_both_  = 0;
+	unsigned long long                deriv_cache_n_used_cl_ie_     = 0;
+	unsigned long long                deriv_cache_n_used_var_one_   = 0;
+	// Histogram of used CLAUSE_IE by abstract_budget at the time of the
+	// hit. High budget = close to root, big saved sub-tree.
+	//   bucket 0: budget <  10
+	//   bucket 1: 10 ≤ budget < 30
+	//   bucket 2: 30 ≤ budget < 60
+	//   bucket 3: 60 ≤ budget < 80
+	//   bucket 4: budget ≥ 80
+	static constexpr unsigned kDerivCacheBudgetBuckets = 5;
+	unsigned long long deriv_cache_used_cl_ie_budget_hist_[kDerivCacheBudgetBuckets] = {0};
+	// Last time the periodic DERIV_CACHE_BIAS log was emitted (elapsed
+	// wall seconds via stopwatch_). -1 means never. Used to throttle
+	// the periodic bias-stats log to once per 60s on long runs.
+	double deriv_cache_last_log_s_ = -1.0;
+	// Profiling: time (μs) spent in deriv_cache_bias_select_ overall,
+	// in the clause-scan inner loop (XOR checks per candidate, before
+	// the canonical-key build), and in canonical-key builds invoked
+	// from bias (clause-IE path only).
+	double deriv_cache_bias_total_us_      = 0.0;
+	double deriv_cache_bias_scan_us_       = 0.0;
+	double deriv_cache_bias_canonical_us_  = 0.0;
+	double deriv_cache_bias_xorinit_us_    = 0.0;
+	// Connectivity-gate scratch: union-find parent array indexed by var
+	// ID (1-based; entry 0 unused). Resized once at solve start to
+	// (num_variables + 2). Each bias call re-initializes parent[v] = v
+	// for the active vars it visits and leaves other entries untouched
+	// — we only follow find() chains rooted at vars we just initialised.
+	std::vector<unsigned> deriv_cache_bias_dsu_parent_;
+	// Diagnostic: debug map from formula_xor → canonical_key (hash, hash_hi)
+	// for the LAST stored sub-formula with that xor. Populated when
+	// config_.deriv_cache_dump_fp > 0. On a Bloom-positive / L2-miss
+	// (FP), we look up here to get the colliding stored entry's
+	// canonical_key and dump the case to stderr.
+	// (hash, hash_hi, num_vars, n_in_clauses, num_clauses)
+	struct DebugKeyTuple {
+		uint64_t hash, hash_hi;
+		unsigned num_vars, n_in_clauses, num_clauses;
+	};
+	std::unordered_map<uint64_t, DebugKeyTuple>
+	    deriv_cache_debug_xor_to_key_;
+	// Side debug map storing a stringified comp structure for each
+	// xor (limited capacity). Lets collision dumps include BOTH the
+	// prior formula and the current.
+	std::unordered_map<uint64_t, std::string>
+	    deriv_cache_debug_xor_to_struct_;
+	unsigned long long deriv_cache_fp_dumped_ = 0;
 	void deriv_cache_init_();
 	uint64_t deriv_cache_component_xor_(Component &comp);
-	void deriv_cache_record_store_(Component &comp);
+	void deriv_cache_record_store_(Component &comp,
+	                               const CanonicalKey *key_for_debug = nullptr);
 	void deriv_cache_probe_(Component &comp);
+
+	// Phase 3 bias-driven branch selection. Probes top-K var candidates
+	// and active original clauses; if a derivative is cached, returns a
+	// classified choice the caller can short-circuit on. NONE means no
+	// hit — fall through to normal branching. See deriv_cache_bias_select_
+	// in solver.cpp for the priority rule.
+	struct DerivCacheBranchChoice {
+		enum Kind { NONE, VAR_BOTH, VAR_ONE, CLAUSE_IE };
+		Kind kind = NONE;
+		VariableIndex var = 0;
+		bool cached_polarity = false;    // VAR_ONE: which polarity is cached
+		ClauseOfs cl_ofs = 0;            // CLAUSE_IE
+		mpz_class arm0_count;            // VAR_BOTH: T scaled; VAR_ONE: cached scaled; CLAUSE_IE: F\{c} scaled
+		mpz_class arm1_count;            // VAR_BOTH: F scaled; others unused
+	};
+	DerivCacheBranchChoice deriv_cache_bias_select_(
+	    Component &comp,
+	    const std::vector<CutNode> &separator,
+	    double abstract_budget);
 
 	// Periodic PROGRESS line emission for trajectory analysis. Diagnostic:
 	// when last_progress_emit_s_ + PROGRESS_TICK_S seconds have passed,
@@ -676,6 +796,13 @@ private:
 	                                  unsigned n_max,
 	                                  unsigned *out_active_n = nullptr);
 
+	// INV_T5: brute-force-verify a learned clause D is entailed by
+	// F\removed_clauses_ at learn time. Env-gated SHARPSAT_VERIFY_LEARN_N.
+	// Aborts on the first unsoundness found, dumping the offending model.
+	void verifyLearnedClauseSound(const std::vector<LiteralID> &D,
+	                               ClauseOfs cl_ofs,
+	                               const char *call_site = "?");
+
 	// Stricter brute-force: enumerate as above but ALSO require each
 	// model to satisfy every in-scope learned clause confined to this
 	// sub-component (i.e., learned clauses whose vars are all active
@@ -687,6 +814,7 @@ private:
 	                                             unsigned n_max,
 	                                             unsigned *out_active_n = nullptr,
 	                                             unsigned *out_n_learned_checked = nullptr);
+
 
 	// Explicit, one-shot reset of every search-scoped field. Idempotent.
 	// Called from HardWireAndCompact; anything it clears is cheap
@@ -848,6 +976,7 @@ private:
 			getHeaderOf(ant.asCl()).increaseScore();
 		literal_values_[lit] = T_TRI;
 		literal_values_[lit.neg()] = F_TRI;
+		if (deriv_cache_hooks_enabled_) deriv_cache_track_lit_assign_(lit);
 		// Bump the throttle counter for the mid-consumption decompose
 		// gate, but only on BRANCHING DECISIONS (no antecedent).
 		// BCP-forced lits don't bump it — on dense instances BCP can
@@ -908,6 +1037,19 @@ private:
 	// literal
 	void recordLastUIPCauses();
 	void recordAllUIPCauses();
+
+
+	// Diagnostic: record every antecedent clause walked during the
+	// MOST RECENT conflict analysis. Cleared at the start of
+	// recordLastUIPCauses / recordAllUIPCauses; appended each time
+	// the loop reads an antecedent (clause or binary partner-as-clause).
+	// Read by verifyLearnedClauseSound (INV_T5) to print the
+	// resolution chain when an unsound clause is detected.
+	std::vector<ClauseOfs> last_analysis_chain_;
+	std::vector<LiteralID> last_analysis_violated_clause_;
+	// Also track binary antecedents (as the partner literal) — they're
+	// not ClauseOfs so they go in a separate vector.
+	std::vector<LiteralID> last_analysis_chain_binaries_;
 
 	void minimizeAndStoreUIPClause(LiteralID uipLit,
 			vector<LiteralID> & tmp_clause, bool seen[]);

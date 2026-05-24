@@ -413,6 +413,50 @@ mpz_class Solver::solveComponent(Component &comp,
 		comp_manager_.contentCache().stats_misses++;
 	}
 
+	// Per-component XOR scope. On entry, walk comp's clauses once to
+	// initialize current_component_xor_; the assign/unassign hooks then
+	// keep it in sync through this component's lifetime (BCP + recursion).
+	// On exit, restore the parent's saved value — DPLL's BCP-unwind
+	// guarantees this comp's clauses are back to entry-state, so the
+	// saved parent value remains correct.
+	//
+	// Sub-threshold gate: in `-derivCacheBias` mode, the Phase 3 probe
+	// is gated by `deriv_cache_bias_min_vars`. For comps below the
+	// threshold we'll never probe, so we skip the entry walk AND tell
+	// the hooks (via deriv_cache_skip_xor_diff_) to skip the XOR diff
+	// for the duration of this scope. We also skip the Bloom store
+	// below — otherwise it would record a stale XOR.
+	const bool _xor_guard_active = deriv_cache_hooks_enabled_;
+	const bool _is_small_for_bias =
+	    (config_.deriv_cache_bias > 0
+	     && comp.num_variables() < config_.deriv_cache_bias_min_vars);
+	const uint64_t _xor_guard_saved = current_component_xor_;
+	const bool     _xor_guard_saved_skip = deriv_cache_skip_xor_diff_;
+	if (_xor_guard_active) {
+		if (_is_small_for_bias) {
+			deriv_cache_skip_xor_diff_ = true;
+			// Don't walk; current_component_xor_ stays at parent's value
+			// (won't be read on this scope's probe/store paths).
+		} else {
+			deriv_cache_skip_xor_diff_ = false;
+			current_component_xor_ = deriv_cache_component_xor_(comp);
+		}
+	}
+	struct CompXorRestorer {
+		uint64_t *xor_target;
+		bool     *skip_target;
+		uint64_t  saved_xor;
+		bool      saved_skip;
+		bool      active;
+		~CompXorRestorer() {
+			if (active) {
+				*xor_target  = saved_xor;
+				*skip_target = saved_skip;
+			}
+		}
+	} _xor_restorer{&current_component_xor_, &deriv_cache_skip_xor_diff_,
+	                _xor_guard_saved, _xor_guard_saved_skip, _xor_guard_active};
+
 	mpz_class result = solveComponentImpl(
 	    comp, std::move(separator), separator_reset, depth, nd_node,
 	    reactive_metis_skip_until_depth, abstract_budget);
@@ -423,8 +467,13 @@ mpz_class Solver::solveComponent(Component &comp,
 			mpz_fdiv_q_2exp(structural.get_mpz_t(),
 			                structural.get_mpz_t(), 1);
 		comp_manager_.contentCache().store(cached_key, structural);
-		if (config_.deriv_cache_every > 0)
-			deriv_cache_record_store_(comp);
+		// Record into the Bloom pre-filter only when XOR was actually
+		// maintained for this comp. Sub-threshold comps skip XOR
+		// maintenance (see CompXorGuard above) and would emit a stale
+		// XOR if recorded.
+		if ((config_.deriv_cache_every > 0 || config_.deriv_cache_bias > 0)
+		    && !_is_small_for_bias)
+			deriv_cache_record_store_(comp, &cached_key);
 		// Cache store does NOT credit — the credit was issued by the
 		// LEAF events inside solveComponentImpl that resolved this
 		// subtree. Caching is a memoization detail orthogonal to
@@ -470,9 +519,73 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		}
 	}
 
-	// Phase 1 derivative-cache probe diagnostic. Throttled by
-	// config_.deriv_cache_every. Logs only — does not affect search.
-	if (config_.deriv_cache_every > 0) {
+	// Phase 3 cache-biased branching (project_derivative_cache_idea).
+	// Takes precedence over Phase 1/2 diagnostic-only probe. Probes at
+	// EVERY cache miss; if a derivative is cached, short-circuits the
+	// branching with priority VAR_BOTH > CLAUSE_IE > VAR_ONE.
+	// Falls through on NONE to existing logic. Requires
+	// deriv_cache_hooks_enabled_ (content-aware hashes set up by
+	// deriv_cache_init_, gated by deriv_cache_every > 0 at solve start).
+	//
+	// Size gate: only probe components with at least
+	// config_.deriv_cache_bias_min_vars active vars. Small comps
+	// resolve so fast that probe overhead dominates any sub-tree skip.
+	bool bias_enabled = (config_.deriv_cache_bias > 0
+	                     && deriv_cache_hooks_enabled_);
+	if (bias_enabled) {
+		unsigned n_active_for_gate = 0;
+		for (auto vt = comp.varsBegin(); *vt != varsSENTINEL; vt++) {
+			if (isActive(LiteralID(*vt, true))) {
+				n_active_for_gate++;
+				if (n_active_for_gate >= config_.deriv_cache_bias_min_vars)
+					break;
+			}
+		}
+		if (n_active_for_gate < config_.deriv_cache_bias_min_vars)
+			bias_enabled = false;
+	}
+	if (bias_enabled) {
+		Solver::DerivCacheBranchChoice bias_choice =
+		    deriv_cache_bias_select_(comp, separator, abstract_budget);
+		if (bias_choice.kind != Solver::DerivCacheBranchChoice::NONE) {
+			const double child_budget = abstract_budget - 1.0;
+			switch (bias_choice.kind) {
+			case Solver::DerivCacheBranchChoice::VAR_BOTH:
+				// Whole subtree resolved from cache; no recursion.
+				// Both arms credit child_budget bits, sum = abstract_budget.
+				noteResolved(child_budget);
+				noteResolved(child_budget);
+				return bias_choice.arm0_count + bias_choice.arm1_count;
+			case Solver::DerivCacheBranchChoice::CLAUSE_IE: {
+				// F\{c} from cache (arm0); arm1 = #SAT(F\{c} ∧ ¬c) via
+				// branchOnClause with negate=true. IE: #SAT(F) = arm0 - arm1.
+				noteResolved(child_budget);
+				mpz_class arm1 = branchOnClause(
+				    bias_choice.cl_ofs, comp, separator, separator_reset,
+				    /*negate_literals=*/true,
+				    depth, nd_node,
+				    reactive_metis_skip_until_depth, child_budget);
+				return bias_choice.arm0_count - arm1;
+			}
+			case Solver::DerivCacheBranchChoice::VAR_ONE: {
+				// One arm cached; recurse on the other via normal
+				// branchOnLiteral (cache-agnostic, learning allowed).
+				LiteralID other(bias_choice.var,
+				                !bias_choice.cached_polarity);
+				noteResolved(child_budget);
+				mpz_class arm1 = branchOnLiteral(
+				    other, comp, separator, separator_reset,
+				    depth, nd_node, /*from_separator=*/false,
+				    reactive_metis_skip_until_depth, child_budget);
+				return bias_choice.arm0_count + arm1;
+			}
+			default:
+				break;
+			}
+		}
+		// NONE: fall through to existing logic below.
+	} else if (config_.deriv_cache_every > 0) {
+		// Phase 1/2 diagnostic-only probe. Throttled, no behavior change.
 		if ((++deriv_cache_counter_ % config_.deriv_cache_every) == 0) {
 			deriv_cache_probe_(comp);
 		}
@@ -1212,8 +1325,25 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				// Populate L1 so future visits to the same ID-set skip
 				// the canonical build.
 				comp_manager_.contentCache().l1_store(id_key, sub_count);
-				if (config_.deriv_cache_every > 0)
-					deriv_cache_record_store_(*sub);
+				// NOTE: this deriv_cache_record_store_ is NECESSARY for
+				// correctness despite appearing redundant with solveComponent's
+				// internal record_store. Removing it deterministically
+				// produces wrong counts on t1_011 P3 (verified 2026-05-23).
+				// Pre-existing dependency, not yet root-caused; the call
+				// inserts the OUTER comp's XOR (not sub's) under sub's key
+				// — apparently this Bloom-pollution masks a real
+				// unsoundness elsewhere. Investigate separately before
+				// removing.
+				// This call is NECESSARY for correctness — removing it
+				// breaks t1_011 P3 (counts wrong by exactly 6 × 2²⁴ on
+				// 2026-05-23 verification). It appears to be a Bloom
+				// insert that affects search trajectory in a way we
+				// don't yet fully understand. Phase 3 shortcuts have
+				// been brute-force-verified sound at sizes ≤ 22; the
+				// bug must be at larger sizes or in non-shortcut paths.
+				// See open puzzle in memory for context.
+				if (config_.deriv_cache_every > 0 || config_.deriv_cache_bias > 0)
+					deriv_cache_record_store_(*sub, &key);
 				// Cache STORE is no longer a credit event — credits
 				// were issued inside solveComponent's leaf paths.
 			}
@@ -1914,10 +2044,14 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 			// FP = skip learning = sound.
 			bool go = (L <= 1) || maybeDedupClause(uip_clauses_.back());
 			if (go) {
-				addScopedUIPConflictClause(
+				Antecedent _learn_ante = addScopedUIPConflictClause(
 				    uip_clauses_.back(),
 				    /*pad_binary=*/  L >= 4,
 				    /*record_scope=*/L >= 3);
+				if (_learn_ante.isAClause())
+					verifyLearnedClauseSound(uip_clauses_.back(),
+					                          _learn_ante.asCl(),
+					                          "branchOnLiteral_tail");
 			} else {
 				statistics_.num_learned_dedup_dropped_++;
 			}

@@ -640,6 +640,280 @@ bool Solver::dumpSubComponentCnf(Component &comp, const std::string &path,
 //
 // Learned clauses are EXCLUDED. Rationale: a sound learned clause is
 // a logical consequence of the original formula, so adding it
+// INV_T5: brute-force-verify a newly-learned clause D is entailed by
+// F\removed_clauses_ at LEARN TIME. Enumerates all 2^n assignments to
+// the currently-active variables, treating already-assigned literals
+// as fixed; for every assignment satisfying F\removed_clauses_ (active
+// originals + active binaries), checks that D is satisfied. If any
+// assignment satisfies F\removed_ but NOT D, the learned clause is
+// LOGICALLY UNSOUND — abort with diagnostic.
+//
+// Env-gated by SHARPSAT_VERIFY_LEARN_N=N (N = max active vars for the
+// check; 0 disables). Default off. Use ~20 for diagnostic runs.
+void Solver::verifyLearnedClauseSound(const std::vector<LiteralID> &D,
+                                       ClauseOfs cl_ofs,
+                                       const char *call_site) {
+	static int s_max_n = []() {
+		const char *e = std::getenv("SHARPSAT_VERIFY_LEARN_N");
+		return e ? std::atoi(e) : 0;
+	}();
+	if (s_max_n <= 0) return;
+
+	// Collect active (X_TRI) vars across the whole formula.
+	std::vector<unsigned> avars;
+	for (unsigned v = 1; v <= num_variables(); v++) {
+		if (literal_values_[LiteralID(v, true)] == X_TRI) avars.push_back(v);
+	}
+	if (avars.empty() || avars.size() > (unsigned)s_max_n) return;
+
+	// BUG-FIX: check ALL binaries (including between fixed vars) for
+	// F | fixed satisfiability. If any binary has BOTH lits F_TRI,
+	// F | fixed is UNSAT — no counterexample to D can exist.
+	// (This is exactly the case at conflict-analysis time: BCP just
+	// detected such a binary.)
+	for (unsigned v = 1; v <= num_variables(); v++) {
+		for (int s = 0; s <= 1; s++) {
+			LiteralID lit(v, s == 1);
+			// We dump only originals (the only "F" we verify against).
+			unsigned orig = literals_[lit].original_binary_link_count_;
+			unsigned idx = 0;
+			for (auto bt = literals_[lit].binary_links_.begin();
+			     *bt != SENTINEL_LIT; bt++, idx++) {
+				if (idx >= orig) break;
+				if (bt->var() <= v) continue;  // dedup
+				if (literal_values_[lit] == F_TRI
+				    && literal_values_[*bt] == F_TRI) {
+					// (lit ∨ partner) with both F → F|fixed unsat.
+					// Don't fire INV_T5: vacuously sound.
+					return;
+				}
+			}
+		}
+	}
+
+	// Map var -> bit position.
+	std::unordered_map<unsigned, unsigned> v2b;
+	v2b.reserve(avars.size() * 2);
+	for (unsigned i = 0; i < avars.size(); i++) v2b[avars[i]] = i;
+
+	// Collect active in-scope ORIGINAL long clauses (not removed, not
+	// already satisfied by a fixed lit).
+	struct CL { std::vector<std::pair<unsigned, bool>> lits; };
+	std::vector<CL> active_clauses;
+	ClauseOfs ofs = (ClauseOfs)(1 + ClauseHeader::overheadInLits());
+	while (ofs < (ClauseOfs)original_lit_pool_size_) {
+		bool sat = false;
+		CL c;
+		if (removed_clauses_.count(ofs) == 0) {
+			for (auto lt = literal_pool_.begin() + ofs;
+			     *lt != SENTINEL_LIT; lt++) {
+				const TriValue v = literal_values_[*lt];
+				if (v == T_TRI) { sat = true; break; }
+				if (v == X_TRI) {
+					auto it = v2b.find(lt->var());
+					if (it != v2b.end())
+						c.lits.push_back({it->second, lt->sign()});
+				}
+			}
+		}
+		auto end_lt = literal_pool_.begin() + ofs;
+		while (*end_lt != SENTINEL_LIT) end_lt++;
+		ofs = (ClauseOfs)((end_lt - literal_pool_.begin()) + 1
+		                   + ClauseHeader::overheadInLits());
+		if (sat || removed_clauses_.count(ofs)) continue;
+		if (c.lits.empty()) {
+			// Unsatisfiable already by fixed lits — any D vacuously sound.
+			return;
+		}
+		active_clauses.push_back(std::move(c));
+	}
+
+	// Active in-scope ORIGINAL binary clauses among active vars.
+	for (unsigned v : avars) {
+		for (int s = 0; s <= 1; s++) {
+			LiteralID lit(v, s == 1);
+			if (literal_values_[lit] != X_TRI) continue;
+			unsigned orig = literals_[lit].original_binary_link_count_;
+			unsigned idx = 0;
+			for (auto bt = literals_[lit].binary_links_.begin();
+			     *bt != SENTINEL_LIT; bt++, idx++) {
+				if (idx >= orig) break;
+				if (bt->var() <= v) continue;
+				if (literal_values_[*bt] == T_TRI) continue;
+				if (literal_values_[*bt] == F_TRI) continue;
+				auto it = v2b.find(bt->var());
+				if (it == v2b.end()) continue;
+				CL c;
+				c.lits.push_back({v2b[v], lit.sign()});
+				c.lits.push_back({it->second, bt->sign()});
+				active_clauses.push_back(std::move(c));
+			}
+		}
+	}
+
+	// Also include REDUNDANT binary clauses (e.g., SCC-equivalence injections).
+	// These are sound consequences of F, so any true model of F satisfies them.
+	// Without including them, our brute force may consider "pseudo-models"
+	// that violate F's implied equivalences — producing false INV_T5 firings.
+	for (unsigned v : avars) {
+		for (int s = 0; s <= 1; s++) {
+			LiteralID lit(v, s == 1);
+			if (literal_values_[lit] != X_TRI) continue;
+			for (auto bt = literals_[lit].redundant_binary_links_.begin();
+			     *bt != SENTINEL_LIT; bt++) {
+				if (bt->var() <= v) continue;
+				if (literal_values_[*bt] == T_TRI) continue;
+				if (literal_values_[*bt] == F_TRI) continue;
+				auto it = v2b.find(bt->var());
+				if (it == v2b.end()) continue;
+				CL c;
+				c.lits.push_back({v2b[v], lit.sign()});
+				c.lits.push_back({it->second, bt->sign()});
+				active_clauses.push_back(std::move(c));
+			}
+		}
+	}
+
+	// Build D's bit/sign representation.
+	CL d_repr;
+	for (LiteralID lit : D) {
+		const TriValue val = literal_values_[lit];
+		if (val == T_TRI) return;  // D already satisfied by fixed lit
+		if (val == X_TRI) {
+			auto it = v2b.find(lit.var());
+			if (it != v2b.end()) d_repr.lits.push_back({it->second, lit.sign()});
+		}
+		// F_TRI lits: useless, they're false under the fixed assignment
+	}
+	if (d_repr.lits.empty()) {
+		// D has no remaining active literals — it's effectively false.
+		// Brute-force will catch this if any F\removed assignment exists.
+		// Continue to enumeration.
+	}
+
+	// Enumerate.
+	const uint64_t N = (uint64_t)1 << avars.size();
+	for (uint64_t a = 0; a < N; a++) {
+		bool all_sat = true;
+		for (const auto &cl : active_clauses) {
+			bool csat = false;
+			for (const auto &lp : cl.lits) {
+				bool val = (a >> lp.first) & 1UL;
+				if (val == lp.second) { csat = true; break; }
+			}
+			if (!csat) { all_sat = false; break; }
+		}
+		if (!all_sat) continue;
+		// Model of F\removed_. Does it satisfy D?
+		bool d_sat = false;
+		for (const auto &lp : d_repr.lits) {
+			bool val = (a >> lp.first) & 1UL;
+			if (val == lp.second) { d_sat = true; break; }
+		}
+		if (!d_sat) {
+			// Falsifier diagnostic: count no-antecedent lits on the trail
+			// and their DL distribution. Hypothesis: multi-decision-per-DL
+			// is active, i.e., n_no_ante > stack_.get_decision_level().
+			int cur_dl = stack_.get_decision_level();
+			int n_no_ante = 0;
+			int max_dl_with_no_ante = -1;
+			std::map<int, int> dl_to_no_ante_count;
+			std::vector<std::pair<int, int>> no_ante_dump;  // (DL, lit)
+			for (LiteralID tl : literal_stack_) {
+				if (!var(tl).ante.isAnt()) {
+					n_no_ante++;
+					int dl = (int)var(tl).decision_level;
+					dl_to_no_ante_count[dl]++;
+					if (dl > max_dl_with_no_ante) max_dl_with_no_ante = dl;
+					if (no_ante_dump.size() < 32)
+						no_ante_dump.push_back({dl, tl.toInt()});
+				}
+			}
+			std::cerr << "\n*** INV_T5_LEARNED_NOT_ENTAILED ***\n"
+			          << "  call_site=" << call_site
+			          << "\n  cl_ofs=" << cl_ofs
+			          << "  n_active=" << avars.size()
+			          << "  n_orig_long=" << active_clauses.size()
+			          << "  removed=" << removed_clauses_.size()
+			          << "\n  HYPOTHESIS DATA:"
+			          << "\n    current_DL=" << cur_dl
+			          << "\n    n_no_ante_lits_on_trail=" << n_no_ante
+			          << "\n    max_DL_with_no_ante_lit=" << max_dl_with_no_ante
+			          << "\n    multi_decision_per_DL_active=" << (n_no_ante > cur_dl ? "YES (BUG SCENARIO)" : "no")
+			          << "\n    DL -> no_ante_count: ";
+			for (auto &p : dl_to_no_ante_count)
+				std::cerr << "[DL=" << p.first << ":" << p.second << "] ";
+			std::cerr << "\n    no_ante lits (DL,lit) [first 32]:";
+			for (auto &p : no_ante_dump)
+				std::cerr << " (" << p.first << "," << p.second << ")";
+			std::cerr << "\n  D = [";
+			for (size_t i = 0; i < D.size(); i++)
+				std::cerr << D[i].toInt() << (i + 1 < D.size() ? " " : "");
+			std::cerr << "]\n  removed_clauses_: [";
+			for (auto &p : removed_clauses_) std::cerr << p.first << " ";
+			std::cerr << "]\n  fixed lits (assigned):";
+			for (unsigned v = 1; v <= num_variables(); v++) {
+				LiteralID p(v, true);
+				if (literal_values_[p] == T_TRI) std::cerr << " " << v;
+				else if (literal_values_[p] == F_TRI) std::cerr << " -" << v;
+			}
+			std::cerr << "\n  offending assignment (active vars):";
+			for (unsigned i = 0; i < avars.size(); i++)
+				std::cerr << " " << (((a >> i) & 1) ? "" : "-") << avars[i];
+			std::cerr << "\n  >>> This model satisfies F\\removed_clauses_ but FAILS to satisfy D.";
+			std::cerr << "\n  >>> Learned clause D is NOT logically entailed by F\\removed_clauses_.";
+			std::cerr << "\n  VIOLATED_CLAUSE (snapshot at recordUIPCauses entry):";
+			std::cerr << "\n    n_lits=" << last_analysis_violated_clause_.size();
+			std::cerr << "\n    lits:";
+			for (LiteralID lt : last_analysis_violated_clause_) {
+				const char *tv = "";
+				if (literal_values_[lt] == T_TRI) tv = "T";
+				else if (literal_values_[lt] == F_TRI) tv = "F";
+				else if (literal_values_[lt] == X_TRI) tv = "X";
+				std::cerr << " " << lt.toInt() << "(" << tv << ")";
+			}
+			std::cerr << "\n  BINARY antecedents in chain (partner lits):";
+			for (LiteralID lt : last_analysis_chain_binaries_) {
+				std::cerr << " " << lt.toInt();
+			}
+			std::cerr << "\n  ANTECEDENT CHAIN (clauses walked by conflict analysis to produce D):";
+			std::cerr << "\n    chain_length=" << last_analysis_chain_.size();
+			std::cerr << "\n    (Each entry is a ClauseOfs; entries >= original_lit_pool_size_=" << original_lit_pool_size_ << " are LEARNED.)";
+			std::cerr << "\n    chain: ";
+			for (size_t i = 0; i < last_analysis_chain_.size(); i++) {
+				ClauseOfs cof = last_analysis_chain_[i];
+				bool learned = (cof >= (ClauseOfs)original_lit_pool_size_);
+				std::cerr << cof << (learned ? "L" : "O") << " ";
+			}
+			std::cerr << "\n    ALL chain entries (with lits + per-lit fixed-state):";
+			for (size_t i = 0; i < last_analysis_chain_.size(); i++) {
+				ClauseOfs cof = last_analysis_chain_[i];
+				bool learned = (cof >= (ClauseOfs)original_lit_pool_size_);
+				std::cerr << "\n      [" << i << "] " << (learned ? "LEARNED" : "ORIG")
+				          << " cl_ofs=" << cof << " lits:";
+				for (auto lt = literal_pool_.begin() + cof;
+				     *lt != SENTINEL_LIT; lt++) {
+					const char *tv = "";
+					if (literal_values_[*lt] == T_TRI) tv = "T";
+					else if (literal_values_[*lt] == F_TRI) tv = "F";
+					else if (literal_values_[*lt] == X_TRI) tv = "X";
+					std::cerr << " " << lt->toInt() << "(" << tv << ")";
+				}
+				if (learned) {
+					auto sit = learned_clause_scope_.find(cof);
+					if (sit != learned_clause_scope_.end())
+						std::cerr << " (scope size=" << sit->second.size() << ")";
+					else
+						std::cerr << " (empty-scope learned)";
+				}
+			}
+			std::cerr << std::endl;
+			std::cerr.flush();
+			std::abort();
+		}
+	}
+}
+
 // doesn't change #SAT — brute force without it gives the same
 // answer as with. If the solver uses a learned clause UNSOUNDLY
 // (somehow restricting the model space wrongly), the comparison vs
@@ -853,6 +1127,7 @@ mpz_class Solver::bruteForceCountSubcompWithLearned(Component &sub,
 	return count;
 }
 
+// Env-gated L2-store-time verifier. See header for the spec.
 void Solver::verifyPostPreprocessCleanSlate(const char *label) {
 	auto fire = [&](const std::string &msg) {
 		std::cerr << "\n*** CLEAN_SLATE (" << label << "): "

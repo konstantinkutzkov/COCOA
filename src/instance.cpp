@@ -8,10 +8,144 @@
 #include "instance.h"
 
 #include <algorithm>
+#include <climits>
 #include <fstream>
+#include <random>
 #include <sys/stat.h>
+#include <unordered_map>
 
 using namespace std;
+
+// Derivative-cache content-aware hash init (Phase 3, SUM scheme).
+// Generates lit_hashes_, allocates per-clause arrays sized for original
+// clauses only, walks every original long clause and computes initial
+// content_hash = clause_random[C] + SUM of lit_hashes for X_TRI lits.
+// After this returns, deriv_cache_hooks_enabled_ is true and
+// setLiteralIfFree / unSet will keep the invariants. See instance.h.
+void Instance::deriv_cache_track_init_() {
+  // Per-literal random hashes, indexed by LiteralID::raw().
+  // raw() = (var << 1) + sign; max value is (max_var << 1) + 1.
+  // variables_.size() is num_variables+1 (1-indexed, with slot 0 unused).
+  const size_t n_lit_slots = variables_.size() * 2;
+  deriv_cache_lit_hashes_.assign(n_lit_slots, 0);
+  std::mt19937_64 lit_rng(0x9e3779b97f4a7c15ULL);
+  for (size_t i = 0; i < n_lit_slots; ++i) {
+    deriv_cache_lit_hashes_[i] = lit_rng();
+  }
+
+  // Per-clause arrays: sized to original_lit_pool_size_ so we can index
+  // any original clause's offset without bounds checks. Learned clauses
+  // (ofs >= original_lit_pool_size_) are NOT tracked here — Solver falls
+  // back to identity hashing for them.
+  deriv_cache_clause_content_hash_.assign(original_lit_pool_size_, 0);
+  deriv_cache_clause_sat_count_.assign(original_lit_pool_size_, 0);
+
+  // Per-clause clause_random baseline: a uint64 per clause, generated
+  // here and folded into the initial content_hash. Stays constant for
+  // the life of the clause — the hooks only add/sub lit_hashes. Uses a
+  // separate seed so the clause_random sequence is uncorrelated with
+  // lit_hashes_.
+  std::mt19937_64 cr_rng(0xa3b195354a39b70dULL);
+
+  // Walk every original long clause. Iteration mirrors
+  // Solver::deriv_cache_init_'s pool walk: header overhead + clause
+  // body terminated by SENTINEL_LIT. The aggregation INSIDE the clause
+  // is SUM (mod 2^64), not XOR — see instance.h comment for why.
+  ClauseOfs cl_ofs = (ClauseOfs)(1 + ClauseHeader::overheadInLits());
+  while (cl_ofs < (ClauseOfs)original_lit_pool_size_) {
+    uint64_t h = cr_rng();           // per-clause clause_random baseline
+    uint16_t sat_count = 0;
+    auto it = literal_pool_.begin() + cl_ofs;
+    for (; *it != SENTINEL_LIT; ++it) {
+      const TriValue v = literal_values_[*it];
+      if (v == X_TRI) {
+        h += deriv_cache_lit_hashes_[it->raw()];
+      } else if (v == T_TRI) {
+        sat_count++;
+      }
+    }
+    deriv_cache_clause_content_hash_[cl_ofs] = h;
+    deriv_cache_clause_sat_count_[cl_ofs] = sat_count;
+    cl_ofs = (ClauseOfs)((it - literal_pool_.begin()) + 1
+                          + ClauseHeader::overheadInLits());
+  }
+
+  // ---------------------------------------------------------------
+  // Per-original-BINARY-clause init. Binary clauses live in
+  // Literal::binary_links_ (no ClauseOfs), so they need their own
+  // id-space + per-clause storage. Each (lit_a, lit_b) original binary
+  // gets one id; both endpoints store that id in their
+  // binary_link_ids_ array at the same index as the partner in
+  // binary_links_. Convention: lit_a.raw() < lit_b.raw() is the
+  // canonical direction at id-assignment time.
+  // ---------------------------------------------------------------
+  {
+    std::mt19937_64 br_rng(0x7c8f5b9c3a1d4e6fULL);
+    // First pass: count + assign ids. Use a temp map for lookups from
+    // the other endpoint; freed at end-of-scope so it doesn't persist.
+    std::unordered_map<uint64_t, unsigned> pair_to_id;
+    unsigned next_id = 0;
+    for (unsigned raw = 0; raw < literals_.size(); ++raw) {
+      LiteralID A((raw >> 1), (raw & 1));
+      Literal &la = literals_[A];
+      const unsigned orig = la.original_binary_link_count_;
+      for (unsigned i = 0; i < orig; ++i) {
+        LiteralID B = la.binary_links_[i];
+        if (A.raw() >= B.raw()) continue;  // canonical direction only
+        const uint64_t key = ((uint64_t)A.raw() << 32) | (uint64_t)B.raw();
+        pair_to_id[key] = next_id++;
+      }
+    }
+    deriv_cache_binary_clause_content_hash_.assign(next_id, 0);
+    deriv_cache_binary_clause_sat_count_.assign(next_id, 0);
+
+    // Second pass: populate Literal::binary_link_ids_ for every original
+    // entry from both endpoints, AND initialize the per-binary
+    // content_hash + sat_count from the canonical (lit_a < lit_b) side.
+    for (unsigned raw = 0; raw < literals_.size(); ++raw) {
+      LiteralID A((raw >> 1), (raw & 1));
+      Literal &la = literals_[A];
+      const unsigned orig = la.original_binary_link_count_;
+      la.binary_link_ids_.assign(orig, UINT_MAX);
+      for (unsigned i = 0; i < orig; ++i) {
+        LiteralID B = la.binary_links_[i];
+        const uint64_t key = A.raw() < B.raw()
+            ? ((uint64_t)A.raw() << 32) | (uint64_t)B.raw()
+            : ((uint64_t)B.raw() << 32) | (uint64_t)A.raw();
+        auto it = pair_to_id.find(key);
+        if (it != pair_to_id.end()) {
+          la.binary_link_ids_[i] = it->second;
+        }
+      }
+    }
+    // Initialize content_hash + sat_count by walking from the canonical
+    // (A.raw() < B.raw()) direction only — visits each binary exactly once.
+    for (unsigned raw = 0; raw < literals_.size(); ++raw) {
+      LiteralID A((raw >> 1), (raw & 1));
+      Literal &la = literals_[A];
+      const unsigned orig = la.original_binary_link_count_;
+      for (unsigned i = 0; i < orig; ++i) {
+        LiteralID B = la.binary_links_[i];
+        if (A.raw() >= B.raw()) continue;
+        const unsigned id = la.binary_link_ids_[i];
+        uint64_t h = br_rng();           // per-binary clause_random baseline
+        uint16_t sat_count = 0;
+        const TriValue va = literal_values_[A];
+        const TriValue vb = literal_values_[B];
+        if (va == X_TRI) h += deriv_cache_lit_hashes_[A.raw()];
+        else if (va == T_TRI) sat_count++;
+        if (vb == X_TRI) h += deriv_cache_lit_hashes_[B.raw()];
+        else if (vb == T_TRI) sat_count++;
+        deriv_cache_binary_clause_content_hash_[id] = h;
+        deriv_cache_binary_clause_sat_count_[id] = sat_count;
+      }
+    }
+  }
+
+  // Hooks now safe to fire. Any subsequent setLiteralIfFree / unSet
+  // maintains the invariants.
+  deriv_cache_hooks_enabled_ = true;
+}
 
 void Instance::cleanClause(ClauseOfs cl_ofs) {
   bool satisfied = false;

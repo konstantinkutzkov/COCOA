@@ -19,7 +19,6 @@
 #include <iostream>
 #include <set>
 #include <unordered_map>
-#include <unordered_set>
 
 class Instance {
 protected:
@@ -39,6 +38,7 @@ protected:
       std::cerr.flush();
       std::abort();
     }
+    if (deriv_cache_hooks_enabled_) deriv_cache_track_lit_unassign_(lit);
     var(lit).ante = Antecedent(NOT_A_CLAUSE);
     var(lit).decision_level = INVALID_DL;
     literal_values_[lit] = X_TRI;
@@ -155,6 +155,78 @@ protected:
 
   vector<Variable> variables_;
   LiteralIndexedVector<TriValue> literal_values_;
+
+  // ------------------------------------------------------------------
+  // Derivative-cache content-aware hash tracking (Phase 2/3 of
+  // project_derivative_cache_idea). For each ORIGINAL long clause C
+  // (cl_ofs < original_lit_pool_size_) we maintain:
+  //   - deriv_cache_clause_content_hash_[ofs] =
+  //         clause_random[C] + SUM (mod 2^64) of lit_hashes_[l]
+  //         for every active (X_TRI) literal l in C.
+  //     Where clause_random[C] is a per-clause random uint64
+  //     generated once at init time and folded into the initial
+  //     content_hash value. The hooks then maintain the sum part
+  //     via incremental + / - of lit_hashes_ as lits change state.
+  //   - deriv_cache_clause_sat_count_[ofs] = number of T_TRI literals in C.
+  //
+  // Why SUM not XOR inside the clause: XOR of lit_hashes has parity
+  // cancellation — two structurally different formulas with identical
+  // lit-parity vectors collide (Phase 2's 74% empirical FP rate).
+  // Sum's additive carries block parity cancellation, dropping the
+  // collision rate to 2^-64. Outer aggregation across in-scope
+  // clauses stays XOR (formula_xor), which is the cheap pre-filter
+  // operation.
+  //
+  // Updated incrementally at every setLiteralIfFree / unSet via inline
+  // hooks below by walking occurrence_lists_[lit] and
+  // occurrence_lists_[lit.neg()]. lit_hashes_ is uniform-random per
+  // LiteralID (indexed by raw()), generated once at init.
+  //
+  // Why original-clauses-only: occurrence_lists_ tracks only original
+  // clauses. Learned clauses (cl_ofs >= original_lit_pool_size_) fall
+  // back to identity hashing via Solver::long_clause_hashes_, which is
+  // sound but coarser.
+  //
+  // deriv_cache_hooks_enabled_ starts false; flipped to true at the end
+  // of deriv_cache_track_init_(). Hooks no-op until then so parsing /
+  // preprocessing don't touch the (uninitialised) arrays.
+  std::vector<uint64_t> deriv_cache_lit_hashes_;
+  std::vector<uint64_t> deriv_cache_clause_content_hash_;
+  std::vector<uint16_t> deriv_cache_clause_sat_count_;
+  // Per-original-binary-clause analogue. binary_id is assigned in
+  // deriv_cache_track_init_ for each (lit_a, lit_b) with
+  // lit_a.raw() < lit_b.raw(); both Literal::binary_link_ids_ arrays
+  // point to the same id from each endpoint.
+  std::vector<uint64_t> deriv_cache_binary_clause_content_hash_;
+  std::vector<uint16_t> deriv_cache_binary_clause_sat_count_;
+  // Per-component XOR for the CURRENT comp being processed. Set by
+  // Solver::solveComponent's scope guard via a full walk over the
+  // comp's clauses at entry, and incrementally maintained between
+  // probe / store calls by the assign / unassign hooks (which apply
+  // an XOR diff for each clause whose content_hash changes). Saved
+  // and restored across nested solveComponent calls. Only meaningful
+  // when deriv_cache_hooks_enabled_ is true.
+  uint64_t              current_component_xor_ = 0;
+  // Suppress ALL derivative-cache hook work while processing a
+  // component too small to participate in the bias probe (i.e., below
+  // config_.deriv_cache_bias_min_vars when bias is on). This skips
+  // the per-clause content_hash + sat_count writes AND the running
+  // current_component_xor_ update.
+  //
+  // Soundness: BCP within a small comp only touches lits of that
+  // comp's vars (decomposition guarantees disjoint variables across
+  // sibling components). DPLL's unwind cascade restores lit_values
+  // to the pre-small-comp state on return, so the hash arrays
+  // (which never changed during the small comp's lifetime) still
+  // match the actual clause state when we resume the parent.
+  //
+  // Set/unset by Solver::solveComponent's CompXorGuard. Named "diff"
+  // for historical reasons — actually skips all hash maintenance.
+  bool                  deriv_cache_skip_xor_diff_ = false;
+  bool                  deriv_cache_hooks_enabled_ = false;
+  void deriv_cache_track_init_();
+  inline void deriv_cache_track_lit_assign_(LiteralID lit);
+  inline void deriv_cache_track_lit_unassign_(LiteralID lit);
 
   // Guard variable for scope-tracked binary UIP learning.
   //
@@ -675,6 +747,152 @@ bool Instance::addRedundantBinaryEquivalence(unsigned var_x, unsigned var_y,
    }
    return added;
  }
+
+
+// ------------------------------------------------------------------
+// Derivative-cache content-aware XOR hooks (Phase 2). See the member
+// declarations in this header for the data layout and the
+// project_derivative_cache_idea memory for the high-level design.
+//
+// Invariants (always true when deriv_cache_hooks_enabled_):
+//   For every ORIGINAL long clause C (cl_ofs < original_lit_pool_size_):
+//     deriv_cache_clause_content_hash_[ofs] == XOR over l ∈ C with
+//                                               literal_values_[l]==X_TRI
+//                                               of deriv_cache_lit_hashes_[l.raw()]
+//     deriv_cache_clause_sat_count_[ofs]    == #{ l ∈ C : literal_values_[l]==T_TRI }
+//
+// The hooks fire at every setLiteralIfFree / unSet to keep both
+// invariants. Cost per call: O(|occurrence_lists_[lit]| + |occurrence_lists_[lit.neg()]|),
+// same order as the (rejected) 2c counter we wrote — ~1% wall-time.
+// ------------------------------------------------------------------
+
+inline void Instance::deriv_cache_track_lit_assign_(LiteralID lit) {
+  // Called from setLiteralIfFree(lit) when literal_values_[lit] just
+  // transitioned X_TRI -> T_TRI (and lit.neg() X_TRI -> F_TRI).
+  //
+  // For each original clause C containing lit (positive occurrence):
+  //   - lit is no longer X_TRI → SUBTRACT lit_hash[lit] from content_hash
+  //   - lit is now T_TRI       → increment sat_count (clause SATISFIED)
+  // For each original clause C containing lit.neg() (negative occurrence):
+  //   - lit.neg() is no longer X_TRI → SUBTRACT lit_hash[lit.neg()]
+  //   - lit.neg() is F_TRI, not T_TRI → sat_count unchanged (clause SHORTENED)
+  //
+  // For the current_component_xor_, we apply per-clause diffs:
+  //   - newly-satisfied clause (positive occ, sat_count 0→1): XOR-out old hash
+  //   - shortened clause (negative occ, sat_count still 0): XOR-out old hash,
+  //     XOR-in new hash; combined: xor ^= old_hash ^ new_hash
+  // Clauses with sat_count > 0 are out of scope before AND after — no diff.
+  //
+  // The aggregation INSIDE a clause is addition (mod 2^64), not XOR.
+  // The OUTER xor (XOR over in-scope clauses of clause_hash[C]) is XOR;
+  // that's the cheap pre-filter aggregation.
+  // Sub-threshold gate: skip ALL hash maintenance for this assign.
+  // Soundness is established at deriv_cache_skip_xor_diff_'s decl.
+  if (deriv_cache_skip_xor_diff_) return;
+  const uint64_t hp = deriv_cache_lit_hashes_[lit.raw()];
+  const uint64_t hn = deriv_cache_lit_hashes_[lit.neg().raw()];
+  // ---- Long clauses (positive occurrence: lit becomes T_TRI) ----
+  for (ClauseOfs ofs : occurrence_lists_[lit]) {
+    const uint64_t old_hash = deriv_cache_clause_content_hash_[ofs];
+    const uint16_t old_sat  = deriv_cache_clause_sat_count_[ofs];
+    deriv_cache_clause_content_hash_[ofs] = old_hash - hp;
+    deriv_cache_clause_sat_count_[ofs]    = old_sat + 1;
+    if (old_sat == 0) current_component_xor_ ^= old_hash;
+  }
+  // ---- Long clauses (negative occurrence: lit.neg() becomes F_TRI) ----
+  for (ClauseOfs ofs : occurrence_lists_[lit.neg()]) {
+    const uint64_t old_hash = deriv_cache_clause_content_hash_[ofs];
+    const uint64_t new_hash = old_hash - hn;
+    deriv_cache_clause_content_hash_[ofs] = new_hash;
+    if (deriv_cache_clause_sat_count_[ofs] == 0)
+      current_component_xor_ ^= old_hash ^ new_hash;
+  }
+  // ---- Binary clauses (positive occurrence: lit becomes T_TRI) ----
+  {
+    const Literal &lp = literals_[lit];
+    const unsigned norig = lp.original_binary_link_count_;
+    for (unsigned i = 0; i < norig; ++i) {
+      const unsigned id = lp.binary_link_ids_[i];
+      const uint64_t old_hash = deriv_cache_binary_clause_content_hash_[id];
+      const uint16_t old_sat  = deriv_cache_binary_clause_sat_count_[id];
+      deriv_cache_binary_clause_content_hash_[id] = old_hash - hp;
+      deriv_cache_binary_clause_sat_count_[id]    = old_sat + 1;
+      if (old_sat == 0) current_component_xor_ ^= old_hash;
+    }
+  }
+  // ---- Binary clauses (negative occurrence: lit.neg() becomes F_TRI) ----
+  {
+    const Literal &ln = literals_[lit.neg()];
+    const unsigned norig = ln.original_binary_link_count_;
+    for (unsigned i = 0; i < norig; ++i) {
+      const unsigned id = ln.binary_link_ids_[i];
+      const uint64_t old_hash = deriv_cache_binary_clause_content_hash_[id];
+      const uint64_t new_hash = old_hash - hn;
+      deriv_cache_binary_clause_content_hash_[id] = new_hash;
+      if (deriv_cache_binary_clause_sat_count_[id] == 0)
+        current_component_xor_ ^= old_hash ^ new_hash;
+    }
+  }
+}
+
+inline void Instance::deriv_cache_track_lit_unassign_(LiteralID lit) {
+  // Called from unSet(lit) when literal_values_[lit] is about to
+  // transition T_TRI -> X_TRI (and lit.neg() F_TRI -> X_TRI). Symmetric
+  // inverse of _assign_ — ADD instead of SUBTRACT for the per-clause
+  // hash, and reverse the XOR diff for current_component_xor_.
+  // Sub-threshold gate: skip ALL hash maintenance. Same soundness
+  // argument as in _assign_: the small-comp scope is bracketed by
+  // assign/unassign pairs, and skipping BOTH leaves the hash state
+  // unchanged across the scope — which matches the lit_value state
+  // after DPLL's unwind cascade.
+  if (deriv_cache_skip_xor_diff_) return;
+  const uint64_t hp = deriv_cache_lit_hashes_[lit.raw()];
+  const uint64_t hn = deriv_cache_lit_hashes_[lit.neg().raw()];
+  // ---- Long clauses (positive occurrence: lit was T_TRI, becoming X_TRI) ----
+  for (ClauseOfs ofs : occurrence_lists_[lit]) {
+    const uint64_t old_hash = deriv_cache_clause_content_hash_[ofs];
+    const uint64_t new_hash = old_hash + hp;
+    const uint16_t old_sat  = deriv_cache_clause_sat_count_[ofs];
+    deriv_cache_clause_content_hash_[ofs] = new_hash;
+    deriv_cache_clause_sat_count_[ofs]    = old_sat - 1;
+    if (old_sat == 1) current_component_xor_ ^= new_hash;
+  }
+  // ---- Long clauses (negative occurrence: lit.neg() was F_TRI, becoming X_TRI) ----
+  for (ClauseOfs ofs : occurrence_lists_[lit.neg()]) {
+    const uint64_t old_hash = deriv_cache_clause_content_hash_[ofs];
+    const uint64_t new_hash = old_hash + hn;
+    deriv_cache_clause_content_hash_[ofs] = new_hash;
+    if (deriv_cache_clause_sat_count_[ofs] == 0)
+      current_component_xor_ ^= old_hash ^ new_hash;
+  }
+  // ---- Binary clauses (positive occurrence: lit was T_TRI, becoming X_TRI) ----
+  {
+    const Literal &lp = literals_[lit];
+    const unsigned norig = lp.original_binary_link_count_;
+    for (unsigned i = 0; i < norig; ++i) {
+      const unsigned id = lp.binary_link_ids_[i];
+      const uint64_t old_hash = deriv_cache_binary_clause_content_hash_[id];
+      const uint64_t new_hash = old_hash + hp;
+      const uint16_t old_sat  = deriv_cache_binary_clause_sat_count_[id];
+      deriv_cache_binary_clause_content_hash_[id] = new_hash;
+      deriv_cache_binary_clause_sat_count_[id]    = old_sat - 1;
+      if (old_sat == 1) current_component_xor_ ^= new_hash;
+    }
+  }
+  // ---- Binary clauses (negative occurrence: lit.neg() was F_TRI, becoming X_TRI) ----
+  {
+    const Literal &ln = literals_[lit.neg()];
+    const unsigned norig = ln.original_binary_link_count_;
+    for (unsigned i = 0; i < norig; ++i) {
+      const unsigned id = ln.binary_link_ids_[i];
+      const uint64_t old_hash = deriv_cache_binary_clause_content_hash_[id];
+      const uint64_t new_hash = old_hash + hn;
+      deriv_cache_binary_clause_content_hash_[id] = new_hash;
+      if (deriv_cache_binary_clause_sat_count_[id] == 0)
+        current_component_xor_ ^= old_hash ^ new_hash;
+    }
+  }
+}
 
 
 #endif /* INSTANCE_H_ */

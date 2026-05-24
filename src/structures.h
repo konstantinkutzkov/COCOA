@@ -85,6 +85,12 @@ static const LiteralID NOT_A_LIT(0, false);
 class Literal {
 public:
   vector<LiteralID> binary_links_ = vector<LiteralID>(1,SENTINEL_LIT);
+  // Parallel to binary_links_ for the ORIGINAL portion
+  // [0, original_binary_link_count_): stores the global binary-clause id
+  // used by Instance::deriv_cache_binary_clause_content_hash_ and
+  // deriv_cache_binary_clause_sat_count_. Populated by
+  // deriv_cache_track_init_; left empty when derivative-cache flags are off.
+  vector<unsigned> binary_link_ids_;
   // Global-redundant binary lane. Holds binaries that are sound
   // consequences of the *original* CNF (e.g. SCC equivalences extracted
   // by preprocessing). BCP enforces these for propagation, but the

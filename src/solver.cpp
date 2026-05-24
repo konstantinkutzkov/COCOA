@@ -605,10 +605,12 @@ void Solver::solve(const string &file_name) {
 			sat_check_init_();
 		}
 
-		// Phase 1 derivative-cache probe diagnostic: assign random hash
-		// to every existing long clause; learned clauses get a hash
-		// on first access. No startup cost when -derivCacheEvery=0.
-		if (config_.deriv_cache_every > 0) {
+		// Derivative-cache init. Sets up content-aware hash tracking
+		// arrays and enables the per-literal hooks. Required by both
+		// the Phase 1/2 diagnostic probe (-derivCacheEvery > 0) and
+		// the Phase 3 bias path (-derivCacheBias > 0). No startup
+		// cost when both flags are 0.
+		if (config_.deriv_cache_every > 0 || config_.deriv_cache_bias > 0) {
 			deriv_cache_init_();
 		}
 
@@ -735,6 +737,24 @@ void Solver::solve(const string &file_name) {
 		          << " l1_misses=" << cc.stats_l1_misses
 		          << " total_lookups=" << (cc.stats_l1_hits + cc.stats_l1_misses)
 		          << " total_hits=" << (cc.stats_hits + cc.stats_l1_hits)
+		          << std::endl;
+	}
+
+	// Final Phase 3 stats (one-shot, regardless of 60s cadence).
+	if (config_.deriv_cache_bias > 0 || config_.deriv_cache_every > 0) {
+		std::cerr << "DERIV_CACHE_FINAL"
+		          << " probes="        << deriv_cache_n_probes_
+		          << " var_xor="       << deriv_cache_n_xor_hits_
+		          << " var_real="      << deriv_cache_n_real_hits_
+		          << " cl_xor="        << deriv_cache_n_cl_xor_hits_
+		          << " cl_real="       << deriv_cache_n_cl_real_hits_
+		          << " used_var_both=" << deriv_cache_n_used_var_both_
+		          << " used_var_one="  << deriv_cache_n_used_var_one_
+		          << " used_cl_ie="    << deriv_cache_n_used_cl_ie_
+		          << " cache_size="    << (deriv_cache_xors_seen_
+		                                   ? deriv_cache_xors_seen_->inserts() : 0)
+		          << " bias_ms="       << (uint64_t)(deriv_cache_bias_total_us_/1000)
+		          << " canonical_ms="  << (uint64_t)(deriv_cache_bias_canonical_us_/1000)
 		          << std::endl;
 	}
 
@@ -1267,6 +1287,11 @@ bool Solver::commitFailedLiteral() {
 		    uip,
 		    /*pad_binary=*/  L >= 4,
 		    /*record_scope=*/L >= 3);
+		// INV_T5: verify the learned clause is entailed by F\removed_clauses_.
+		// Env-gated. No-op when env var unset.
+		if (ante.isAClause())
+			verifyLearnedClauseSound(uip, ante.asCl(),
+			                          "commitFailedLiteral");
 	}
 	setLiteralIfFree(uip.front(), ante);
 	return BCP(sz);
@@ -2017,6 +2042,11 @@ void Solver::recordLastUIPCauses() {
 	static vector<LiteralID> tmp_clause;
 	tmp_clause.clear();
 
+	// Reset the antecedent-chain trace for INV_T5 diagnostics.
+	last_analysis_chain_.clear();
+	last_analysis_chain_binaries_.clear();
+	last_analysis_violated_clause_ = violated_clause;  // snapshot
+
 	assertion_level_ = 0;
 	uip_clauses_.clear();
 
@@ -2059,6 +2089,7 @@ void Solver::recordLastUIPCauses() {
 		//cout << "{" << curr_lit.toInt() << "}";
 		if (getAntecedent(curr_lit).isAClause()) {
 			ClauseOfs ante_cl = getAntecedent(curr_lit).asCl();
+			last_analysis_chain_.push_back(ante_cl);
 			// Invariant A (gated): if the antecedent is a learned clause,
 			// it must be in scope under the CURRENT removed_clauses_.
 			// At firing time the BCP scope check ensured in-scope; this
@@ -2110,6 +2141,7 @@ void Solver::recordLastUIPCauses() {
 			}
 		} else {
 			LiteralID alit = getAntecedent(curr_lit).asLit();
+			last_analysis_chain_binaries_.push_back(alit);
 			// Invariant B (binary case): the falsified partner literal
 			// must be F_TRI right now.
 			if (config_.check_learn_invariants
@@ -2149,6 +2181,9 @@ void Solver::recordAllUIPCauses() {
 
 	static vector<LiteralID> tmp_clause;
 	tmp_clause.clear();
+
+	// Reset the antecedent-chain trace for INV_T5 diagnostics.
+	last_analysis_chain_.clear();
 
 	assertion_level_ = 0;
 	uip_clauses_.clear();
@@ -2193,6 +2228,7 @@ void Solver::recordAllUIPCauses() {
 		assert(hasAntecedent(curr_lit));
 
 		if (getAntecedent(curr_lit).isAClause()) {
+			last_analysis_chain_.push_back(getAntecedent(curr_lit).asCl());
 			updateActivities(getAntecedent(curr_lit).asCl());
 			assert(curr_lit == *beginOf(getAntecedent(curr_lit).asCl()));
 
@@ -2368,46 +2404,55 @@ void Solver::sat_check_diagnose_() {
 }
 
 // ============================================================================
-// Derivative-cache probe (Phase 1: diagnostic-only). See
-// project_derivative_cache_idea memory entry for the full design.
+// Derivative-cache probe (Phase 2: content-aware XOR pre-filter). See
+// project_derivative_cache_idea memory for the full design.
 //
-// Idea: at each L2 cache miss, hypothetically fix each of the top-K active
-// vars to T and F, run BCP, compute the resulting clause-XOR fingerprint,
-// check against the set of all stored sub-components' clause-XORs (cheap
-// pre-filter), and only if the XOR matches do a full canonical-key lookup.
-// Log how often a hit *would* have occurred.
+// Phase 2 vs Phase 1: the XOR fingerprint now combines a per-original-clause
+// CONTENT hash (XOR of lit_hashes_[l] for every active literal l in the
+// clause) instead of a per-clause IDENTITY hash. Maintained incrementally
+// by Instance::deriv_cache_track_lit_{assign,unassign}_ at every
+// setLiteralIfFree / unSet. Two components with identical clause IDs but
+// different sub-assignments now have DIFFERENT fingerprints, dramatically
+// reducing the false-positive rate Phase 1 saw on dense instances like
+// t1_059.
 //
-// SOUNDNESS: Phase 1 does NOT modify search behavior — counts, branching,
-// caching are unchanged. We setLiteralIfFree + BCP + canonical_key + unSet
-// the cascade; state is fully restored before the search continues. The
-// only side effect is the stat counters and a log line.
+// Learned clauses stay on identity hashing via long_clause_hashes_ —
+// they're not in occurrence_lists_ so the hook can't update them
+// incrementally. This is a recall limitation, not a correctness issue
+// (false negative: a true cache hit on learned-clause content may be
+// missed). Most components are dominated by original clauses, so the
+// learned-clause fallback is acceptable for Phase 2.
+//
+// SOUNDNESS: Phase 2 still does NOT modify search behavior. The probe
+// runs hypothetical assignments via setLiteralIfFree + BCP + canonical_key
+// + unSet, fully restoring state. The incremental hooks fire on every
+// setLiteralIfFree / unSet (always — that's how the invariant is
+// preserved), but they touch only the deriv_cache_* arrays which never
+// feed back into the search.
 // ============================================================================
 
 void Solver::deriv_cache_init_() {
 	long_clause_hashes_.clear();
-	deriv_cache_xors_seen_.clear();
+	// Allocate the Bloom filter on demand (1 GB; allocating eagerly at
+	// solver construction would penalize runs where bias is off).
+	deriv_cache_xors_seen_.reset(new DerivCacheBloom());
 	deriv_cache_counter_     = 0;
 	deriv_cache_n_probes_    = 0;
 	deriv_cache_n_xor_hits_  = 0;
 	deriv_cache_n_real_hits_ = 0;
-
-	// Generate a deterministic random hash per long clause currently in
-	// literal_pool_. Learned clauses get their hash on first lookup
-	// (lazy). Deterministic seed so multi-run comparisons are stable.
-	std::mt19937_64 rng(0x9e3779b97f4a7c15ULL);
-	ClauseOfs cl_ofs = (ClauseOfs)(1 + ClauseHeader::overheadInLits());
-	while (cl_ofs < (ClauseOfs)literal_pool_.size()) {
-		long_clause_hashes_[cl_ofs] = rng();
-		auto it = literal_pool_.begin() + cl_ofs;
-		while (*it != SENTINEL_LIT) ++it;
-		cl_ofs = (ClauseOfs)((it - literal_pool_.begin()) + 1
-		                      + ClauseHeader::overheadInLits());
-	}
+	// Build the content-aware tracking arrays from the current
+	// post-preprocess literal_values_, then enable the incremental
+	// hooks. After this returns, every setLiteralIfFree / unSet
+	// keeps deriv_cache_clause_content_hash_ and
+	// deriv_cache_clause_sat_count_ in sync.
+	deriv_cache_track_init_();
 }
 
-// Lazy clause-hash assignment for clauses added after deriv_cache_init_
-// (i.e. learned clauses). Same deterministic seed family — separate RNG
-// from init so subsequent learn-time hashes don't shift earlier ones.
+// Lazy clause-hash assignment for LEARNED clauses (cl_ofs >=
+// original_lit_pool_size_). Learned clauses are not in occurrence_lists_,
+// so the content-aware incremental hooks can't update them; they fall
+// back to identity hashing. Deterministic seed so multi-run comparisons
+// are stable.
 namespace {
 std::mt19937_64 g_deriv_cache_learn_rng(0xbf58476d1ce4e5b9ULL);
 }
@@ -2421,31 +2466,150 @@ static inline uint64_t get_or_make_hash(
 	return h;
 }
 
-// Helper: compute XOR of long-clause hashes for clauses currently in
-// scope (not removed, not satisfied, in learned-scope if learned).
+// XOR fingerprint of a sub-component's in-scope long clauses.
+//   - Original (ofs < original_lit_pool_size_): use the content hash
+//     maintained by Instance hooks. clause_sat_count_>0 ⇔ satisfied.
+//   - Learned: identity hash via long_clause_hashes_ + isSatisfied
+//     walk (the content hooks don't touch learned clauses).
+// In-scope filter: removed clauses skipped via isClauseRemoved;
+// learned clauses additionally require learnedClauseInScope.
 uint64_t Solver::deriv_cache_component_xor_(Component &comp) {
 	uint64_t xor_val = 0;
 	for (auto cl_it = comp.clsBegin(); *cl_it != clsSENTINEL; ++cl_it) {
 		ClauseOfs ofs = comp_manager_.clauseOfsOf(*cl_it);
-		if (isClauseRemoved(ofs))  continue;
-		if (isSatisfied(ofs))      continue;
-		if (ofs >= (ClauseOfs)original_lit_pool_size_
-		    && !learnedClauseInScope(ofs)) continue;
-		xor_val ^= get_or_make_hash(long_clause_hashes_, ofs);
+		if (isClauseRemoved(ofs)) continue;
+		if (ofs < (ClauseOfs)original_lit_pool_size_) {
+			// Original clause: content-aware path.
+			if (deriv_cache_clause_sat_count_[ofs] > 0) continue;
+			xor_val ^= deriv_cache_clause_content_hash_[ofs];
+		} else {
+			// Learned clause: identity-hash fallback.
+			if (!learnedClauseInScope(ofs)) continue;
+			if (isSatisfied(ofs)) continue;
+			xor_val ^= get_or_make_hash(long_clause_hashes_, ofs);
+		}
+	}
+	// Original BINARY clauses. Treated uniformly with long clauses:
+	// per-binary clause_random baseline + lit_hash contributions,
+	// maintained incrementally by the assign/unassign hooks.
+	// Dedup by lit.raw() < partner.raw(); partner being X_TRI is
+	// equivalent to "binary in-scope, unsatisfied" since both endpoints
+	// X_TRI ⇒ sat_count[id] = 0. The component analyzer's connectivity
+	// invariant guarantees both endpoints share the component.
+	for (auto var_it = comp.varsBegin(); *var_it != varsSENTINEL; ++var_it) {
+		const unsigned v = *var_it;
+		if (literal_values_[LiteralID(v, true)] != X_TRI) continue;
+		for (int pol = 0; pol < 2; ++pol) {
+			LiteralID lit(v, pol == 0);
+			const Literal &li = literals_[lit];
+			const unsigned norig = li.original_binary_link_count_;
+			for (unsigned i = 0; i < norig; ++i) {
+				LiteralID partner = li.binary_links_[i];
+				if (lit.raw() >= partner.raw()) continue;
+				if (literal_values_[partner] != X_TRI) continue;
+				xor_val ^= deriv_cache_binary_clause_content_hash_[
+				             li.binary_link_ids_[i]];
+			}
+		}
 	}
 	return xor_val;
 }
 
-void Solver::deriv_cache_record_store_(Component &comp) {
-	deriv_cache_xors_seen_.insert(deriv_cache_component_xor_(comp));
+void Solver::deriv_cache_record_store_(Component &comp,
+                                        const CanonicalKey *key_for_debug) {
+	// Use the incrementally-maintained current_component_xor_. The
+	// CompXorGuard in solveComponent ensures this matches comp's XOR
+	// when this function is called from the store path (right after
+	// solveComponentImpl returns; BCP fully unwound).
+	const uint64_t xor_val = current_component_xor_;
+	deriv_cache_xors_seen_->insert(xor_val);
+	if (config_.deriv_cache_dump_fp > 0 && key_for_debug != nullptr) {
+		// Build a structure string for THIS comp's in-scope original clauses.
+		std::string structure;
+		structure.reserve(256);
+		{
+			char buf[64];
+			structure += "[";
+			bool first_clause = true;
+			for (auto cl_it = comp.clsBegin(); *cl_it != clsSENTINEL; ++cl_it) {
+				ClauseOfs ofs = comp_manager_.clauseOfsOf(*cl_it);
+				if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+				if (isClauseRemoved(ofs)) continue;
+				if (deriv_cache_clause_sat_count_[ofs] > 0) continue;
+				if (!first_clause) structure += ",";
+				first_clause = false;
+				snprintf(buf, sizeof(buf), "%u:(", ofs);
+				structure += buf;
+				bool first_lit = true;
+				for (auto lt = literal_pool_.begin() + ofs;
+				     *lt != SENTINEL_LIT; ++lt) {
+					if (!isActive(*lt)) continue;
+					if (!first_lit) structure += " ";
+					first_lit = false;
+					snprintf(buf, sizeof(buf), "%d", lt->toInt());
+					structure += buf;
+				}
+				snprintf(buf, sizeof(buf), "):0x%lx", (unsigned long)deriv_cache_clause_content_hash_[ofs]);
+				structure += buf;
+			}
+			structure += "]";
+		}
+
+		auto it = deriv_cache_debug_xor_to_key_.find(xor_val);
+		if (it == deriv_cache_debug_xor_to_key_.end()) {
+			deriv_cache_debug_xor_to_key_[xor_val] = DebugKeyTuple{
+			    key_for_debug->hash, key_for_debug->hash_hi,
+			    key_for_debug->num_vars, key_for_debug->n_in_clauses,
+			    key_for_debug->num_clauses};
+			if (deriv_cache_debug_xor_to_struct_.size() < 200000) {
+				deriv_cache_debug_xor_to_struct_[xor_val] = structure;
+			}
+		} else if (it->second.hash != key_for_debug->hash
+		           || it->second.hash_hi != key_for_debug->hash_hi) {
+			static unsigned long long store_collisions = 0;
+			store_collisions++;
+			if (store_collisions <= config_.deriv_cache_dump_fp) {
+				auto sit = deriv_cache_debug_xor_to_struct_.find(xor_val);
+				const std::string &prior_struct =
+				    (sit != deriv_cache_debug_xor_to_struct_.end()) ? sit->second
+				                                                    : std::string("<not_captured>");
+				std::cerr << "DERIV_CACHE_STORE_COLLISION #" << store_collisions
+				          << " xor=0x" << std::hex << xor_val << std::dec
+				          << " prior=(h=" << it->second.hash
+				          << ",hi=" << it->second.hash_hi
+				          << ",nvars=" << it->second.num_vars
+				          << ",n_in_cl=" << it->second.n_in_clauses
+				          << ",ncl=" << it->second.num_clauses << ")"
+				          << " curr=(h=" << key_for_debug->hash
+				          << ",hi=" << key_for_debug->hash_hi
+				          << ",nvars=" << key_for_debug->num_vars
+				          << ",n_in_cl=" << key_for_debug->n_in_clauses
+				          << ",ncl=" << key_for_debug->num_clauses << ")"
+				          << "\n  prior_in_scope=" << prior_struct
+				          << "\n  curr_in_scope=" << structure
+				          << std::endl;
+			}
+		}
+	}
 }
 
 void Solver::deriv_cache_probe_(Component &comp) {
 	deriv_cache_n_probes_++;
 
+	// Snapshot the current component xor once. Reused by the clause-removal
+	// probes below: F\{c}'s xor equals current_xor XOR-out the clause's
+	// content hash (which is its sole contribution to the xor).
+	// Uses the incrementally-maintained value — no walk needed.
+	const uint64_t current_xor = current_component_xor_;
+
+	// ============================================================
+	// VARIABLE-BRANCHING probes: for each of the top-K active vars,
+	// hypothetically assert F|v=T and F|v=F via setLiteralIfFree+BCP
+	// and check the resulting xor.
+	// ============================================================
 	// Pick top-K active vars from `comp`. Simplest stable selection:
 	// the first K active vars in component-iteration order. This is NOT
-	// the picker's score order; it's deterministic and cheap. Phase 2
+	// the picker's score order; it's deterministic and cheap. Phase 3
 	// can integrate with the picker's actual top-K once we have hit-rate
 	// data.
 	std::vector<unsigned> candidates;
@@ -2469,10 +2633,11 @@ void Solver::deriv_cache_probe_(Component &comp) {
 			bool ok = BCP(sz);
 
 			if (ok) {
-				// Compute clause_xor on the post-BCP state.
-				uint64_t deriv_xor = deriv_cache_component_xor_(comp);
+				// Post-BCP component_xor — incremental hooks already
+				// updated current_component_xor_ via setLit + BCP.
+				uint64_t deriv_xor = current_component_xor_;
 
-				if (deriv_cache_xors_seen_.count(deriv_xor) > 0) {
+				if (deriv_cache_xors_seen_->may_contain(deriv_xor)) {
 					deriv_cache_n_xor_hits_++;
 
 					// Pre-filter says maybe — do the full canonical-key check.
@@ -2497,12 +2662,524 @@ void Solver::deriv_cache_probe_(Component &comp) {
 		}
 	}
 
-	// Periodic summary log — every 1000 probes.
+	// ============================================================
+	// CLAUSE-BRANCHING (removal-only) probes: for each of the top-K
+	// active ORIGINAL clauses in `comp`, the F\{c} derivative xor is
+	//   current_xor ^ deriv_cache_clause_content_hash_[c]
+	// because the clause's only contribution to the component xor is
+	// its content hash. No BCP, no temp state mutation needed for the
+	// pre-filter step. On a positive pre-filter, mark the clause
+	// removed (refcounted, reversible), compute the full canonical
+	// key, peek the cache, then unmark.
+	//
+	// Restrictions:
+	//   - Original clauses only (cl_ofs < original_lit_pool_size_).
+	//     Learned clauses fall back to per-identity hashing, not
+	//     content-aware — and removing a learned clause shouldn't
+	//     change #SAT anyway (they're sound consequences of originals).
+	//   - Already-removed clauses skipped (`isClauseRemoved`).
+	//   - Satisfied clauses skipped (`sat_count_ > 0`): their xor
+	//     contribution is already 0, so the F\{c} xor equals current_xor
+	//     which is by construction not in xors_seen (this comp hasn't
+	//     been stored yet — we're inside a cache miss).
+	// ============================================================
+	std::vector<ClauseOfs> cl_candidates;
+	cl_candidates.reserve(config_.deriv_cache_top_k);
+	for (auto cl_it = comp.clsBegin();
+	     *cl_it != clsSENTINEL && cl_candidates.size() < config_.deriv_cache_top_k;
+	     ++cl_it) {
+		ClauseOfs ofs = comp_manager_.clauseOfsOf(*cl_it);
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;  // learned
+		if (isClauseRemoved(ofs)) continue;
+		if (deriv_cache_clause_sat_count_[ofs] > 0) continue;     // satisfied
+		cl_candidates.push_back(ofs);
+	}
+
+	for (ClauseOfs ofs : cl_candidates) {
+		const uint64_t hyp_xor =
+		    current_xor ^ deriv_cache_clause_content_hash_[ofs];
+		if (deriv_cache_xors_seen_->may_contain(hyp_xor)) {
+			deriv_cache_n_cl_xor_hits_++;
+
+			// Temporary mark — keeps the same refcount semantics that
+			// branchOnClause uses, so the canonical key path sees the
+			// formula exactly as it would during a real F\{c} branch.
+			markClauseRemoved(ofs);
+			CanonicalKey k = buildCanonicalKey(
+			    comp, literal_pool_, literals_, literal_values_,
+			    comp_manager_.getAnalyzer().clauseIdToOfs(),
+			    removed_clauses_, original_lit_pool_size_,
+			    config_.wl_iterations,
+			    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+			mpz_class out;
+			if (comp_manager_.contentCache().peek(k, out)) {
+				deriv_cache_n_cl_real_hits_++;
+			}
+			unmarkClauseRemoved(ofs);
+		}
+	}
+
+	// Periodic summary log — every 1000 probes. Reports the var and
+	// clause arms separately so we can see whether clause-removal
+	// probes pull their weight.
 	if (deriv_cache_n_probes_ % 1000 == 0) {
 		std::cerr << "DERIV_CACHE_PROBE probes=" << deriv_cache_n_probes_
-		          << " xor_hits=" << deriv_cache_n_xor_hits_
-		          << " real_hits=" << deriv_cache_n_real_hits_
-		          << " cache_size=" << deriv_cache_xors_seen_.size()
+		          << " var_xor=" << deriv_cache_n_xor_hits_
+		          << " var_real=" << deriv_cache_n_real_hits_
+		          << " cl_xor=" << deriv_cache_n_cl_xor_hits_
+		          << " cl_real=" << deriv_cache_n_cl_real_hits_
+		          << " cache_size=" << deriv_cache_xors_seen_->inserts()
 		          << std::endl;
 	}
+}
+
+// ============================================================================
+// Phase 3: cache-biased branch selection. Probes top-K var candidates and
+// active original clauses; returns a classified hit the caller can act on.
+//
+// Priority (matches project_derivative_cache_idea):
+//   1. VAR_BOTH  — both arms of some var are cached, the entire component
+//                  resolves to (cached_T + cached_F) with no recursion.
+//   2. CLAUSE_IE — F\{c} is cached for some clause c; IE gives us
+//                  cached − #SAT(F\{c} ∧ ¬c), the recurse arm forces ≥2 lits.
+//   3. VAR_ONE   — one arm of some var is cached; branch on v with the
+//                  cached arm free, recurse on the other (1 forced lit).
+//   4. NONE      — no hit; caller falls through to normal picker.
+//
+// Among multiple CLAUSE_IE hits, prefer the clause with the largest active
+// literal count (biggest BCP juice on the ¬c recurse arm).
+// ============================================================================
+
+Solver::DerivCacheBranchChoice Solver::deriv_cache_bias_select_(
+    Component &comp,
+    const std::vector<CutNode> &separator,
+    double abstract_budget) {
+	// RAII timer accumulator for total time in this function across all
+	// return paths. Caller-side: deriv_cache_bias_total_us_.
+	struct TotalGuard {
+		double &accum;
+		std::chrono::steady_clock::time_point t0;
+		TotalGuard(double &a)
+		    : accum(a), t0(std::chrono::steady_clock::now()) {}
+		~TotalGuard() {
+			auto t1 = std::chrono::steady_clock::now();
+			accum += std::chrono::duration<double, std::micro>(t1 - t0).count();
+		}
+	} _tt(deriv_cache_bias_total_us_);
+
+	DerivCacheBranchChoice choice;  // kind = NONE by default
+
+	// Cache-warmup gate. Early in the search the cache is empty;
+	// probing yields no hits and is pure overhead. Bias the technique
+	// at the search PHASE where neighbor lookups become productive.
+	if (deriv_cache_xors_seen_->inserts() < config_.deriv_cache_bias_min_cache)
+		return choice;
+
+	// Connectivity gate. `comp` at solveComponentImpl entry is whatever
+	// the analyzer identified at the PARENT level; BCP since then may
+	// have severed it into multiple sub-components. Bias on a joint
+	// state is unsound work — the per-sub-component cache entries
+	// don't match a joint xor.
+	//
+	// Union-find on active vars directly indexed by var ID (using the
+	// member scratch deriv_cache_bias_dsu_parent_, sized once at solve
+	// start). For each active var v we set parent[v] = v before any
+	// find() touches it, so stale entries from earlier calls are
+	// invisible. Skip bias if > 1 root is found.
+	{
+		auto &par = deriv_cache_bias_dsu_parent_;
+		if (par.size() < variables_.size() + 1)
+			par.assign(variables_.size() + 2, 0);
+		// Initialize parent[v]=v for each active var in comp. We also
+		// pick `start_v` as the first active var — find() chains will
+		// only originate from active vars we've initialized this call,
+		// so stale entries can't reach untouched memory.
+		unsigned start_v = 0;
+		unsigned n_active = 0;
+		for (auto v_it = comp.varsBegin(); *v_it != varsSENTINEL; ++v_it) {
+			unsigned v = *v_it;
+			if (!isActive(LiteralID(v, true))) continue;
+			par[v] = v;
+			n_active++;
+			if (start_v == 0) start_v = v;
+		}
+		if (n_active <= 1) return choice;
+		auto find = [&](unsigned x) -> unsigned {
+			while (par[x] != x) { par[x] = par[par[x]]; x = par[x]; }
+			return x;
+		};
+		auto unite = [&](unsigned x, unsigned y) {
+			unsigned rx = find(x), ry = find(y);
+			if (rx != ry) par[rx] = ry;
+		};
+		// Long clauses (only the active ones in comp).
+		for (auto cl_it = comp.clsBegin(); *cl_it != clsSENTINEL; ++cl_it) {
+			ClauseOfs ofs = comp_manager_.clauseOfsOf(*cl_it);
+			if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+			if (isClauseRemoved(ofs))                       continue;
+			if (deriv_cache_clause_sat_count_[ofs] > 0)     continue;
+			unsigned first = 0;
+			for (auto lt = literal_pool_.begin() + ofs; *lt != SENTINEL_LIT; ++lt) {
+				if (!isActive(*lt)) continue;
+				unsigned v = lt->var();
+				if (par[v] != v && find(v) != v && par[v] == 0) continue;  // not initialised
+				if (first == 0) first = v;
+				else            unite(first, v);
+			}
+		}
+		// Binary clauses: walk binary_links_ for each active var.
+		for (auto v_it = comp.varsBegin(); *v_it != varsSENTINEL; ++v_it) {
+			unsigned v = *v_it;
+			if (!isActive(LiteralID(v, true))) continue;
+			for (int pol = 0; pol < 2; ++pol) {
+				LiteralID lit(v, pol == 1);
+				for (auto other : literal(lit).binary_links_) {
+					if (other == SENTINEL_LIT) continue;
+					if (literal_values_[other.neg()] == T_TRI) continue;
+					unsigned ov = other.var();
+					if (!isActive(LiteralID(ov, true))) continue;
+					unite(v, ov);
+				}
+			}
+		}
+		// Count: are all initialised vars in the same root?
+		unsigned root0 = find(start_v);
+		for (auto v_it = comp.varsBegin(); *v_it != varsSENTINEL; ++v_it) {
+			unsigned v = *v_it;
+			if (!isActive(LiteralID(v, true))) continue;
+			if (find(v) != root0) return choice;  // multi-component
+		}
+	}
+
+	deriv_cache_n_probes_++;
+
+	// Read the incrementally-maintained component XOR. With the
+	// CompXorGuard + assign/unassign hook diffs in place, this is O(1)
+	// (was previously a full-comp walk per probe call; landed
+	// 2026-05-23 along with the dirty-clause incremental scheme).
+	const uint64_t current_xor = current_component_xor_;
+	(void)deriv_cache_bias_xorinit_us_;  // retained for counter compat; no-op
+
+	// ============================================================
+	// VAR probes: top-K active vars by picker score (scoreOf), plus
+	// any VAR elements of the current separator. Skipped entirely
+	// when -derivCacheBiasVar 0 (clause-only mode).
+	// ============================================================
+	struct VarHit {
+		VariableIndex var = 0;
+		unsigned mask = 0;          // bit 0 = T cached, bit 1 = F cached
+		mpz_class scaled_t;
+		mpz_class scaled_f;
+	};
+	std::vector<VarHit> var_hits;
+	std::vector<unsigned> var_candidates;
+	if (config_.deriv_cache_bias_var) {
+		// Score-rank all active vars in comp, take top-K.
+		std::vector<std::pair<float, unsigned>> scored;
+		scored.reserve(64);
+		for (auto v_it = comp.varsBegin(); *v_it != varsSENTINEL; ++v_it) {
+			if (!isActive(LiteralID(*v_it, true))) continue;
+			scored.emplace_back(scoreOf(*v_it), *v_it);
+		}
+		const unsigned k_target = config_.deriv_cache_top_k;
+		if (scored.size() > k_target) {
+			std::partial_sort(scored.begin(), scored.begin() + k_target,
+			                  scored.end(),
+			                  [](const std::pair<float, unsigned> &a,
+			                     const std::pair<float, unsigned> &b) {
+				                  return a.first > b.first;
+			                  });
+			scored.resize(k_target);
+		}
+		var_candidates.reserve(k_target + separator.size());
+		for (const auto &p : scored) var_candidates.push_back(p.second);
+		// Union with separator VAR elements (dedup).
+		for (const auto &nd : separator) {
+			if (nd.kind != CutNode::VAR) continue;
+			unsigned sv = nd.id;
+			if (!isActive(LiteralID(sv, true))) continue;
+			bool already = false;
+			for (unsigned u : var_candidates) {
+				if (u == sv) { already = true; break; }
+			}
+			if (!already) var_candidates.push_back(sv);
+		}
+	}
+
+	for (unsigned v : var_candidates) {
+		if (!isActive(LiteralID(v, true))) continue;
+		VarHit vh; vh.var = v;
+		for (int pol_int = 0; pol_int < 2; ++pol_int) {
+			LiteralID lit(v, pol_int == 1);
+			unsigned sz = literal_stack_.size();
+			if (!setLiteralIfFree(lit)) continue;
+			bool ok = BCP(sz);
+			if (ok) {
+				// Post-BCP comp xor — hooks already updated current_component_xor_.
+				uint64_t deriv_xor = current_component_xor_;
+				if (deriv_cache_xors_seen_->may_contain(deriv_xor)) {
+					deriv_cache_n_xor_hits_++;
+					const auto ck_t0 = std::chrono::steady_clock::now();
+					CanonicalKey k = buildCanonicalKey(
+					    comp, literal_pool_, literals_, literal_values_,
+					    comp_manager_.getAnalyzer().clauseIdToOfs(),
+					    removed_clauses_, original_lit_pool_size_,
+					    config_.wl_iterations,
+					    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+					deriv_cache_bias_canonical_us_ +=
+					    std::chrono::duration<double, std::micro>(
+					        std::chrono::steady_clock::now() - ck_t0).count();
+					mpz_class out;
+					if (comp_manager_.contentCache().peek(k, out)) {
+						deriv_cache_n_real_hits_++;
+						// Scale by 2^free_vars (same convention as the
+						// L2 cache wrapper in solveComponent).
+						unsigned hyp_free_vars = (k.num_vars > k.n_in_clauses)
+						    ? (k.num_vars - k.n_in_clauses) : 0;
+						mpz_class scaled = out;
+						for (unsigned i = 0; i < hyp_free_vars; ++i) scaled *= 2;
+
+						// Brute-force verify the var shortcut. Current
+						// state (post-setLit + BCP) represents F|v=POL.
+						// SHARPSAT_BIAS_BRUTE=N gates this.
+						{
+							static int s_brute_n = []() {
+								const char *e = std::getenv("SHARPSAT_BIAS_BRUTE");
+								return e ? std::atoi(e) : 0;
+							}();
+							static long long s_dumped_var = 0;
+							if (s_brute_n > 0 && s_dumped_var < 50) {
+								unsigned n_active = 0;
+								mpz_class brute = bruteForceCountSubcomp(
+								    comp, (unsigned)s_brute_n, &n_active);
+								if (brute >= 0 && scaled != brute) {
+									std::cerr << "*** PHASE3_VAR_UNSOUND ***"
+									          << " var=" << v
+									          << " pol=" << pol_int
+									          << " n_active=" << n_active
+									          << " cached=" << scaled
+									          << " brute="  << brute
+									          << " diff="   << (scaled - brute)
+									          << " key.num_vars=" << k.num_vars
+									          << " key.n_in_cl=" << k.n_in_clauses
+									          << " hyp_fv=" << hyp_free_vars
+									          << "\n";
+									s_dumped_var++;
+								}
+							}
+						}
+
+						if (pol_int == 1) {
+							vh.mask |= 1; vh.scaled_t = std::move(scaled);
+						} else {
+							vh.mask |= 2; vh.scaled_f = std::move(scaled);
+						}
+					}
+				}
+			}
+			// Rollback BCP cascade for the next probe / fall-through.
+			while (literal_stack_.size() > sz) {
+				unSet(literal_stack_.back());
+				literal_stack_.pop_back();
+			}
+		}
+		if (vh.mask != 0) var_hits.push_back(std::move(vh));
+	}
+
+	// Priority 1: VAR_BOTH — return first one found.
+	for (auto &vh : var_hits) {
+		if (vh.mask == 3) {
+			choice.kind = DerivCacheBranchChoice::VAR_BOTH;
+			choice.var  = vh.var;
+			choice.arm0_count = std::move(vh.scaled_t);
+			choice.arm1_count = std::move(vh.scaled_f);
+			deriv_cache_n_used_var_both_++;
+			return choice;
+		}
+	}
+
+	// ============================================================
+	// CLAUSE probes: collect candidates (active originals), sort by
+	// static length descending so the LONGEST clauses are tried first
+	// (longer ⇒ more lits forced on ¬c arm ⇒ bigger BCP cascade), and
+	// BREAK on the first canonical-key-confirmed hit. Avoids paying
+	// the canonical-key cost N times to find a "best" candidate; we
+	// trust the length-descending order to surface the best one first.
+	// ============================================================
+	struct ClauseCand {
+		ClauseOfs ofs;
+		unsigned  length;       // static, from ClauseHeader
+	};
+	std::vector<ClauseCand> cl_candidates;
+	cl_candidates.reserve(32);
+	for (auto cl_it = comp.clsBegin(); *cl_it != clsSENTINEL; ++cl_it) {
+		ClauseOfs ofs = comp_manager_.clauseOfsOf(*cl_it);
+		if (ofs >= (ClauseOfs)original_lit_pool_size_) continue;
+		if (isClauseRemoved(ofs)) continue;
+		if (deriv_cache_clause_sat_count_[ofs] > 0) continue;
+		cl_candidates.push_back({ofs, getHeaderOf(ofs).length()});
+	}
+	std::sort(cl_candidates.begin(), cl_candidates.end(),
+	          [](const ClauseCand &a, const ClauseCand &b) {
+		          return a.length > b.length;
+	          });
+
+	ClauseOfs hit_cl_ofs = 0;
+	mpz_class hit_cl_scaled;
+	for (const auto &cand : cl_candidates) {
+		const ClauseOfs ofs = cand.ofs;
+		const uint64_t hyp_xor =
+		    current_xor ^ deriv_cache_clause_content_hash_[ofs];
+		if (!deriv_cache_xors_seen_->may_contain(hyp_xor)) continue;
+		deriv_cache_n_cl_xor_hits_++;
+
+		markClauseRemoved(ofs);
+		const auto ck_t0 = std::chrono::steady_clock::now();
+		CanonicalKey k = buildCanonicalKey(
+		    comp, literal_pool_, literals_, literal_values_,
+		    comp_manager_.getAnalyzer().clauseIdToOfs(),
+		    removed_clauses_, original_lit_pool_size_,
+		    config_.wl_iterations,
+		    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+		deriv_cache_bias_canonical_us_ +=
+		    std::chrono::duration<double, std::micro>(
+		        std::chrono::steady_clock::now() - ck_t0).count();
+		mpz_class out;
+		bool peek_hit = comp_manager_.contentCache().peek(k, out);
+
+		// Brute-force verification of the CLAUSE_IE shortcut.
+		// Env-gated: SHARPSAT_BIAS_BRUTE=N enables, N=max active vars.
+		// While clause `ofs` is STILL marked removed, brute-force-count
+		// the current sub-component (which is F\{ofs}) and compare to
+		// the scaled cached value we're about to use. Any mismatch
+		// indicates the shortcut is unsound for THIS context.
+		if (peek_hit) {
+			static int s_brute_n = []() {
+				const char *e = std::getenv("SHARPSAT_BIAS_BRUTE");
+				return e ? std::atoi(e) : 0;
+			}();
+			static long long s_dumped = 0;
+			if (s_brute_n > 0 && s_dumped < 50) {
+				unsigned n_active = 0;
+				mpz_class brute = bruteForceCountSubcomp(
+				    comp, (unsigned)s_brute_n, &n_active);
+				if (brute >= 0) {
+					unsigned hyp_fv = (k.num_vars > k.n_in_clauses)
+					    ? (k.num_vars - k.n_in_clauses) : 0;
+					mpz_class cached_scaled = out;
+					for (unsigned i = 0; i < hyp_fv; ++i)
+						cached_scaled *= 2;
+					if (cached_scaled != brute) {
+						std::cerr << "*** PHASE3_CLAUSE_IE_UNSOUND ***"
+						          << " cl_ofs=" << ofs
+						          << " n_active=" << n_active
+						          << " cached=" << cached_scaled
+						          << " brute="  << brute
+						          << " diff="   << (cached_scaled - brute)
+						          << " key.num_vars=" << k.num_vars
+						          << " key.n_in_cl=" << k.n_in_clauses
+						          << " hyp_fv=" << hyp_fv
+						          << "\n";
+						s_dumped++;
+					}
+				}
+			}
+		}
+
+		unmarkClauseRemoved(ofs);
+
+		if (!peek_hit) {
+			// FP: hyp_xor matched in Bloom but canonical_key not in cache.
+			// Dump a few examples for diagnosis.
+			if (config_.deriv_cache_dump_fp > 0
+			    && deriv_cache_fp_dumped_ < config_.deriv_cache_dump_fp) {
+				auto it = deriv_cache_debug_xor_to_key_.find(hyp_xor);
+				if (it != deriv_cache_debug_xor_to_key_.end()) {
+					std::cerr << "DERIV_CACHE_FP "
+					          << "hyp_xor=0x" << std::hex << hyp_xor << std::dec
+					          << " query_key=(" << k.hash << "," << k.hash_hi << ")"
+					          << " stored_key=(" << it->second.hash
+					          << "," << it->second.hash_hi << ")"
+					          << " query_num_vars=" << k.num_vars
+					          << " query_n_in_clauses=" << k.n_in_clauses
+					          << " stored_num_vars=" << it->second.num_vars
+					          << " stored_n_in_clauses=" << it->second.n_in_clauses
+					          << " cl_ofs=" << ofs
+					          << std::endl;
+					deriv_cache_fp_dumped_++;
+				}
+			}
+			continue;
+		}
+		deriv_cache_n_cl_real_hits_++;
+
+		hit_cl_ofs = ofs;
+		unsigned hyp_free_vars = (k.num_vars > k.n_in_clauses)
+		    ? (k.num_vars - k.n_in_clauses) : 0;
+		hit_cl_scaled = out;
+		for (unsigned i = 0; i < hyp_free_vars; ++i) hit_cl_scaled *= 2;
+		break;  // First confirmed hit wins (length-descending order).
+	}
+
+	// Priority 2: CLAUSE_IE — first (longest) confirmed clause hit.
+	if (hit_cl_ofs != 0) {
+		choice.kind = DerivCacheBranchChoice::CLAUSE_IE;
+		choice.cl_ofs = hit_cl_ofs;
+		choice.arm0_count = std::move(hit_cl_scaled);
+		deriv_cache_n_used_cl_ie_++;
+		// Bucket the hit by abstract_budget so we can see whether
+		// shortcuts happen near the root (big sub-tree skipped) or
+		// deep (tiny sub-tree skipped).
+		unsigned bucket;
+		if      (abstract_budget < 10)  bucket = 0;
+		else if (abstract_budget < 30)  bucket = 1;
+		else if (abstract_budget < 60)  bucket = 2;
+		else if (abstract_budget < 80)  bucket = 3;
+		else                            bucket = 4;
+		deriv_cache_used_cl_ie_budget_hist_[bucket]++;
+		return choice;
+	}
+
+	// Priority 3: VAR_ONE — any var with one arm cached. Pick the
+	// first (= highest priority in candidate iteration order).
+	for (auto &vh : var_hits) {
+		if (vh.mask == 1 || vh.mask == 2) {
+			choice.kind = DerivCacheBranchChoice::VAR_ONE;
+			choice.var  = vh.var;
+			choice.cached_polarity = (vh.mask == 1);
+			choice.arm0_count = (vh.mask == 1)
+			    ? std::move(vh.scaled_t)
+			    : std::move(vh.scaled_f);
+			deriv_cache_n_used_var_one_++;
+			return choice;
+		}
+	}
+
+	// Priority 4: NONE. Caller falls through.
+	// Periodic summary, throttled to once per 60s on long runs.
+	const double now_s = stopwatch_.getElapsedSeconds();
+	if (deriv_cache_last_log_s_ < 0.0 || now_s - deriv_cache_last_log_s_ >= 60.0) {
+		deriv_cache_last_log_s_ = now_s;
+		std::cerr << "DERIV_CACHE_BIAS t=" << now_s
+		          << " probes=" << deriv_cache_n_probes_
+		          << " cl_xor="        << deriv_cache_n_cl_xor_hits_
+		          << " cl_real="       << deriv_cache_n_cl_real_hits_
+		          << " used_cl_ie="    << deriv_cache_n_used_cl_ie_
+		          << " cl_ie_bkt=["
+		          << deriv_cache_used_cl_ie_budget_hist_[0] << ","
+		          << deriv_cache_used_cl_ie_budget_hist_[1] << ","
+		          << deriv_cache_used_cl_ie_budget_hist_[2] << ","
+		          << deriv_cache_used_cl_ie_budget_hist_[3] << ","
+		          << deriv_cache_used_cl_ie_budget_hist_[4] << "]"
+		          << " var_xor="       << deriv_cache_n_xor_hits_
+		          << " var_real="      << deriv_cache_n_real_hits_
+		          << " used_var_both=" << deriv_cache_n_used_var_both_
+		          << " used_var_one="  << deriv_cache_n_used_var_one_
+		          << " cache_size="    << deriv_cache_xors_seen_->inserts()
+		          << " bias_us="       << (uint64_t)deriv_cache_bias_total_us_
+		          << " xorinit_us="    << (uint64_t)deriv_cache_bias_xorinit_us_
+		          << " canonical_us="  << (uint64_t)deriv_cache_bias_canonical_us_
+		          << std::endl;
+	}
+	return choice;
 }

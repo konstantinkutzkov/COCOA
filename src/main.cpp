@@ -255,6 +255,26 @@ int main(int argc, char *argv[]) {
       if (argc <= i + 1) { cout << "-derivCacheTopK needs an integer\n"; return -1; }
       theSolver.config().deriv_cache_top_k = (unsigned)atoi(argv[i + 1]);
       i++;
+    } else if (strcmp(argv[i], "-derivCacheBias") == 0) {
+      if (argc <= i + 1) { cout << "-derivCacheBias needs 0 or 1\n"; return -1; }
+      theSolver.config().deriv_cache_bias = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-derivCacheBiasMinVars") == 0) {
+      if (argc <= i + 1) { cout << "-derivCacheBiasMinVars needs an integer\n"; return -1; }
+      theSolver.config().deriv_cache_bias_min_vars = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-derivCacheBiasMinCache") == 0) {
+      if (argc <= i + 1) { cout << "-derivCacheBiasMinCache needs an integer\n"; return -1; }
+      theSolver.config().deriv_cache_bias_min_cache = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-derivCacheBiasVar") == 0) {
+      if (argc <= i + 1) { cout << "-derivCacheBiasVar needs 0 or 1\n"; return -1; }
+      theSolver.config().deriv_cache_bias_var = (unsigned)atoi(argv[i + 1]);
+      i++;
+    } else if (strcmp(argv[i], "-derivCacheDumpFP") == 0) {
+      if (argc <= i + 1) { cout << "-derivCacheDumpFP needs an integer\n"; return -1; }
+      theSolver.config().deriv_cache_dump_fp = (unsigned)atoi(argv[i + 1]);
+      i++;
     } else if (strcmp(argv[i], "-bruteForceCacheCheck") == 0) {
       if (argc <= i + 1) { cout << "-bruteForceCacheCheck needs N\n"; return -1; }
       theSolver.config().brute_force_cache_check_n = (unsigned)atoi(argv[i + 1]); i++;

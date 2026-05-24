@@ -355,9 +355,50 @@ struct SolverConfiguration {
   // Default 0 = off. CLI: -derivCacheEvery N. See
   // project_derivative_cache_idea memory for the full design.
   unsigned deriv_cache_every = 0;
-  // Number of top picker candidates to probe per probe-site. CLI:
-  // -derivCacheTopK K.
-  unsigned deriv_cache_top_k = 5;
+  // Number of top picker-scored candidates to probe per probe-site.
+  // For the Phase 3 bias path the candidates are ranked by scoreOf()
+  // (freq+activity+sep+cascade — the same score the picker uses),
+  // not by iteration order. CLI: -derivCacheTopK K.
+  unsigned deriv_cache_top_k = 3;
+
+  // Cache-biased branching (Phase 3 of project_derivative_cache_idea).
+  // At every solveComponentImpl L2 cache miss, probe top-K var
+  // candidates and all active original clauses; if a derivative is
+  // cached, use the cached count for that arm and recurse only on the
+  // other. Priority: VAR_BOTH (no recursion) > CLAUSE_IE (≥2 forced
+  // lits via ¬c) > VAR_ONE (1 forced lit) > normal picker.
+  //
+  // 0 = off (diagnostic-only Phase 1/2 behavior). 1 = on.
+  // Requires deriv_cache_every > 0 to be useful — the content-aware
+  // hash tracking must be initialized.
+  unsigned deriv_cache_bias = 0;
+
+  // Minimum active-var threshold for bias to fire. Components with
+  // fewer active vars resolve so fast that the probe overhead exceeds
+  // any sub-tree skip. CLI: -derivCacheBiasMinVars N (default 8).
+  unsigned deriv_cache_bias_min_vars = 8;
+
+  // Minimum cache size (xors_seen entries) for bias to fire. Early
+  // in the search the cache is empty and probing yields no hits; the
+  // probe is pure overhead. Once cache has accumulated this many
+  // entries, neighbor lookups become productive. CLI:
+  // -derivCacheBiasMinCache N (default 1000).
+  unsigned deriv_cache_bias_min_cache = 1000;
+
+  // Whether the bias path probes var derivatives. Var probes cost
+  // K × 2 BCP cascades per probe site; clause-removal probes are
+  // ~O(1) per candidate. Set to 0 to test clause-only bias (cheapest
+  // possible probe). CLI: -derivCacheBiasVar 0/1 (default 1).
+  unsigned deriv_cache_bias_var = 1;
+
+  // Diagnostic: dump the first N false-positive cases (xor matches in
+  // Bloom but canonical-key mismatch in L2). Each dumped line shows
+  // the query's hyp_xor, query's canonical_key (hash, hash_hi), and
+  // the colliding stored entry's canonical_key. Requires the parallel
+  // debug_xor_to_key_ map alongside Bloom (memory cost: same scale
+  // as the unordered_set we replaced). 0 = off. CLI:
+  // -derivCacheDumpFP N (default 0).
+  unsigned deriv_cache_dump_fp = 0;
 
   // Brute-force cache check: at every cache store and cache hit, if the
   // sub-component has <= N active variables, brute-force enumerate
