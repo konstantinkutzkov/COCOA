@@ -4,6 +4,81 @@ Chronological record of solver timing measurements. Every run recorded
 here includes: commit hash, compiler flags, solver CLI flags, input
 instance, measured wall time, and any environmental notes.
 
+## 2026-05-24 — branchOnClause UIP soundness fix on t1_045: +7.9% wall-time at same trajectory
+
+After landing today's per-decision-DL fix in `branchOnClause` negate arm
+(commit `2beffd8`) + provenance-based learned-clause-soundness check
+(default ON), re-ran t1_045 with the documented winning config to gauge
+overhead vs the 2026-05-23 baseline.
+
+### Invocation
+
+```
+SHARPSAT_PROGRESS=1 SHARPSAT_PROGRESS_INTERVAL=60 \
+  /usr/bin/time -l ./sharpsat-separator/build/sharpSAT \
+    -rec -sep 5 -cb 3 -adaptive -wlIter 2 -t 2700 \
+    temp_cnf/mc2025_track1_045.cnf
+```
+
+### Result
+
+| metric | 2026-05-23 baseline (`c0b2e73`) | **2026-05-24 (`2beffd8`)** | delta |
+|---|---:|---:|---:|
+| **wall time** | 2092.2 s (34.87 min) | **2257.48 s (37.62 min)** | **+7.9% / +2.75 min** |
+| decisions | 682.1 M | 682.14 M | ≈0% |
+| L2 stores | 680.4 M | 680.4 M | ≈0% |
+| L2 hits | 226.7 M | 226.7 M | ≈0% |
+| L2 hit rate | 33.3% | 33.3% | 0 |
+| conflicts | (not recorded) | 26 591 | — |
+| learned clauses | (not recorded) | 22 412 (4 244 dedup-dropped) | — |
+| avg comp at entry | (not recorded) | 14.08 | — |
+| avg / max L2 hit size | (not recorded) | 6.96 / 39 | — |
+| peak RSS | (not recorded) | 14.02 GB | — |
+| count | 132 951 278 067 432 | 132 951 278 067 432 | ✓ identical |
+
+vs ganak (`--maxcache 24000` ≈ 24 GB): **1.23× faster** (ganak 46.2 min).
+
+### Environment
+
+- Commit: `2beffd8 branchOnClause: per-decision-DL fix for UIP soundness + provenance check`
+- Build: `-O3 -DNDEBUG` (Release), CMake `BUILD_TYPE=Release`
+- Input md5: `cb381ada22ec6d20d39504e7ccb7bebb` (`mc2025_track1_045.cnf`)
+- Hardware: Apple Silicon, 10 P-cores + 4 E-cores
+- Load avg at start: 1.78 / 1.79 / 1.81
+- Background: VS Code at ~15-30% CPU (fluctuating), no other heavy contender
+- `/usr/bin/time -l` user-time: 2272.40 s; sys: 6.90 s
+
+### Interpretation
+
+Decisions / L2 stores / L2 hits / hit rate are all **identical to the 2026-05-23
+baseline within rounding**. The search tree is structurally unchanged — same
+trajectory through the same set of cached sub-components. The 7.9% wall-time
+slowdown is purely **per-operation overhead** from the fix:
+
+- The per-decision-DL StackLevel pushes/pops + per-`¬lit` BCP runs in the
+  negate arm of `branchOnClause` (mechanical cost).
+- The provenance-based `learnedClauseSound` check via memoized BFS at each
+  in-scope BCP filter call (mechanical cost).
+
+Neither alters search trajectory or cache topology on this instance. Counts
+match. See `docs/branchonclause_uip_soundness_proof.md` for the soundness
+argument behind the fix.
+
+A documented overhead reduction path exists: in the negate arm, the loop
+currently pushes a `StackLevel` for every active `¬lit` it can set. For
+`¬lit`s that BCP propagates from a prior decision, no new `StackLevel` is
+needed since the lit is already on the trail with a clause antecedent. The
+`if (!isActive(*it)) continue;` check already skips those at the loop, so
+the only excess overhead is the marginal `StackLevel` push for the rare
+`setLiteralIfFree` returning false (race). That's already minimal; the
+bulk of the 7.9% is the per-decision-DL BCP-recall structure being
+inherently more expensive than the old "set-all-then-BCP-once". Larger
+overhead-reduction work (e.g., batching multiple ¬lit decisions while
+giving each its own logical DL for UIP attribution) is possible but
+non-trivial and deferred.
+
+
+
 ## Conventions
 
 - **Time**: wall-clock seconds reported by the solver's own `time:`
