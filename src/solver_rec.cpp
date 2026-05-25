@@ -2236,43 +2236,48 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 	}
 
 	bool conflict = false;
-	// Each ¬lit of C must become the UNIQUE decision at its own decision
-	// level. Standard CDCL UIP analysis assumes one decision per DL —
-	// historically branchOnClause set all ¬lits at one DL, which broke
-	// UIP and produced unsound learned clauses (the asserting-lit's
-	// "decision-negation" encoding silently dropped multi-decision lits).
-	// Fix: push a fresh StackLevel and run BCP between each ¬lit, so each
-	// becomes its own DL. Lits propagated by BCP from a prior ¬lit don't
-	// need their own decision (already set).
-	// See docs/branchonclause_uip_soundness_proof.md for the full proof.
-	unsigned extra_stack_levels = 0;
+	// Negate-arm setup: ¬l_1 is a regular decision (at the outer
+	// StackLevel's DL), ¬l_2..¬l_k are "branch-constraint" assignments
+	// at the same DL — see docs/branchonclause_branch_constraint_plan.md.
+	//
+	// Why no per-decision DL push, no per-lit BCP: branch-constraint
+	// vars carry a flag that the UIP loop (recordLastUIPCauses /
+	// recordAllUIPCauses) dispatches on, adding their negation directly
+	// to the learned clause without trying to resolve through a real
+	// antecedent. This sidesteps the multi-decision-DL UIP bug that
+	// would otherwise occur, AND restores the pre-2beffd8 cost profile
+	// (one StackLevel push, one BCP, one unwind per branchOnClause).
+	//
+	// Soundness: see docs/branchonclause_uip_soundness_proof.md for the
+	// underlying lemma (still applicable — each ¬l_i is the "asserting"
+	// lit for its constraint, just encoded via the flag instead of via
+	// per-DL pushes).
 	if (negate_literals) {
+		bool first_decision_set = false;
 		for (auto it = beginOf(cl_ofs); *it != SENTINEL_LIT; ++it) {
 			if (isSatisfied(*it)) { conflict = true; break; }
 			if (!isActive(*it)) continue;  // ¬lit already True via earlier BCP
 
-			unsigned inner_save = literal_stack_.size();
-			stack_.push_back(StackLevel(1, inner_save,
-			                            comp_manager_.component_stack_size()));
-			{
-				unsigned active = 0;
-				for (auto vt = comp.varsBegin(); *vt != varsSENTINEL; vt++)
-					if (isActive(LiteralID(*vt, true))) active++;
-				stack_.back().set_active_at_push(active);
-			}
-			++extra_stack_levels;
-
-			if (!setLiteralIfFree(it->neg())) {
-				// Race with intervening BCP — already set. Drop the level.
-				stack_.pop_back();
-				--extra_stack_levels;
-				continue;
-			}
-			if (!BCP(inner_save)) {
-				conflict = true;
-				break;
+			if (!first_decision_set) {
+				// ¬l_1: regular decision at the outer StackLevel's DL.
+				if (setLiteralIfFree(it->neg()))
+					first_decision_set = true;
+				// If already set (rare race), fall through to the
+				// branch-constraint path for subsequent lits.
+			} else {
+				// ¬l_2..¬l_k: branch-constraint assignment at the same DL.
+				setLiteralAsBranchConstraint(it->neg());
+				// Returns false if already set — no action needed; the
+				// constraint is structurally satisfied by the existing
+				// trail state.
 			}
 		}
+		// Single BCP after all assignments. Branch-constraint vars and
+		// the regular ¬l_1 decision all live at the same DL, so any
+		// propagated lits get that same DL (preserving the standard
+		// "BCP saturates per-DL" invariant the UIP analysis relies on).
+		if (!conflict && !BCP(lit_save))
+			conflict = true;
 	}
 
 	mpz_class result;
@@ -2284,13 +2289,17 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 	} else {
 		// For negate=false, BCP from lit_save propagates anything newly
 		// reachable due to C's removal (rare; mostly a no-op). For
-		// negate=true, BCP already ran per-lit; this is a safe re-run.
+		// negate=true, BCP already ran inside the negate-arm setup; this
+		// is a safe re-run and a no-op when there's nothing new to
+		// propagate.
 		bool bcp_ok = BCP(lit_save);
 		if (!bcp_ok) {
 			statistics_.num_conflicts_++;
 			// LEAF event: BCP conflict. Learning is not enabled here yet
-			// even though the multi-decision-DL hazard is now gone —
-			// keep this conservative until we explicitly opt in.
+			// even though the multi-decision-DL hazard is gone and the
+			// branch-constraint dispatch is in place — keep this
+			// conservative until we explicitly opt in. (See commit 5 of
+			// docs/branchonclause_branch_constraint_plan.md.)
 			noteResolved(child_abstract_budget);
 			result = 0;
 		} else {
@@ -2331,9 +2340,9 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 			std::abort();
 		}
 	}
-	// Pop the per-¬lit StackLevels we pushed in the negate path, plus the
-	// outer StackLevel pushed at branchOnClause entry.
-	for (unsigned i = 0; i < extra_stack_levels; ++i) stack_.pop_back();
+	// Pop the outer StackLevel pushed at branchOnClause entry. The
+	// negate arm no longer pushes per-¬lit StackLevels (branch-constraint
+	// vars share the outer DL).
 	stack_.pop_back();
 	return result;
 }
