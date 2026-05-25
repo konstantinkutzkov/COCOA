@@ -144,11 +144,6 @@ public:
 		OP_L2_PEEK,      // ContentCache::peek
 		OP_PICK,         // pickBranchVariable
 		OP_BCP,          // Solver::BCP
-		OP_L1_STORE,     // ContentCache::l1_store
-		OP_L2_STORE,     // ContentCache::store (L2)
-		OP_BRANCH_LIT,   // branchOnLiteral whole-call (one polarity)
-		OP_BRANCH_CL,    // branchOnClause whole-call (one arm)
-		OP_SUB_VARSET,   // SubVarsetGuard ctor+dtor (one decompose-loop iter)
 		OP_COUNT
 	};
 	mutable uint64_t op_count_[OP_COUNT] = {0};
@@ -173,8 +168,7 @@ public:
 	// emission AND from final stats line.
 	void printOpStats(const char *tag) const {
 		static const char *names[OP_COUNT] = {
-			"ANALYZE", "CANONICAL", "L1_PEEK", "L2_PEEK", "PICK", "BCP",
-			"L1_STORE", "L2_STORE", "BRANCH_LIT", "BRANCH_CL", "SUB_VARSET"
+			"ANALYZE", "CANONICAL", "L1_PEEK", "L2_PEEK", "PICK", "BCP"
 		};
 		std::cerr << "OP_STATS " << tag;
 		for (int i = 0; i < OP_COUNT; i++) {

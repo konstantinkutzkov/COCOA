@@ -500,10 +500,7 @@ mpz_class Solver::solveComponent(Component &comp,
 		// Env-gated L2-store-time verifier (no-op unless SHARPSAT_VERIFY_*
 		// env vars are set). Implementation lives in solver_diagnostics.cpp.
 		verifyL2Store(comp, cached_key, result, depth);
-		{
-			OpTimer _t(this, OP_L2_STORE);
-			comp_manager_.contentCache().store(cached_key, structural);
-		}
+		comp_manager_.contentCache().store(cached_key, structural);
 		// Record into the Bloom pre-filter only when XOR was actually
 		// maintained for this comp. Sub-threshold comps skip XOR
 		// maintenance (see CompXorGuard above) and would emit a stale
@@ -1229,7 +1226,6 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				}
 				comp_manager_.contentCache().stats_hits++;
 				if (sub->num_variables() >= 3) {
-					OpTimer _t(this, OP_L1_STORE);
 					comp_manager_.contentCache().l1_store(id_key, sub_count);
 				}
 				// LEAF event: L2 hit resolves this sub-comp without
@@ -1257,7 +1253,6 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				bool active;
 				SubVarsetGuard(Solver &s, Component &c, bool a) : slv(s), active(a) {
 					if (!active) return;
-					Solver::OpTimer _t(&slv, Solver::OP_SUB_VARSET);
 					if (s.current_sub_varset_.empty()) {
 						was_empty = true;
 						s.current_sub_varset_.assign(s.num_variables() + 2, 0);
@@ -1285,7 +1280,6 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				}
 				~SubVarsetGuard() {
 					if (!active) return;
-					Solver::OpTimer _t(&slv, Solver::OP_SUB_VARSET);
 					auto pi = saved_parent_list.begin(), pe = saved_parent_list.end();
 					auto ci = slv.current_sub_var_list_.begin(),
 					     ce = slv.current_sub_var_list_.end();
@@ -1401,10 +1395,7 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				// (under "Complication 3: subtle store semantics").
 				// Populate L1 so future visits to the same ID-set skip
 				// the canonical build.
-				{
-					OpTimer _t(this, OP_L1_STORE);
-					comp_manager_.contentCache().l1_store(id_key, sub_count);
-				}
+				comp_manager_.contentCache().l1_store(id_key, sub_count);
 				// NOTE: this deriv_cache_record_store_ is NECESSARY for
 				// correctness despite appearing redundant with solveComponent's
 				// internal record_store. Removing it deterministically
@@ -1983,7 +1974,6 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
                                    bool from_separator,
                                    int reactive_metis_skip_until_depth,
                                    double child_abstract_budget) {
-	OpTimer _t_bl(this, OP_BRANCH_LIT);
 	unsigned lit_save = literal_stack_.size();
 	// Invariants T1+T2 (gated): snapshot trail state for restore-check.
 	std::size_t snap_removed_size = 0;
@@ -2238,7 +2228,6 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
                                   bool negate_literals, int depth, int nd_node,
                                   int reactive_metis_skip_until_depth,
                                   double child_abstract_budget) {
-	OpTimer _t_bc(this, OP_BRANCH_CL);
 	unsigned lit_save = literal_stack_.size();
 	std::size_t snap_removed_size = 0;
 	std::size_t snap_lscope_size  = 0;
