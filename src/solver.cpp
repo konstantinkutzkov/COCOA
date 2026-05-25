@@ -980,23 +980,31 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 		// components in the cache-key sense. Same membership filter as
 		// above: never propagate when the other endpoint is outside the
 		// current sub-component AND active.
-		for (auto bt = literal(unLit).redundant_binary_links_.begin();
-				*bt != SENTINEL_LIT; bt++) {
-			if (!current_sub_varset_.empty()) {
-				unsigned v = bt->var();
-				bool in_mask = (v < current_sub_varset_.size()
-				                && current_sub_varset_[v]);
-				if (!in_mask
-				    && literal_values_[LiteralID(v, true)] == X_TRI) {
-					statistics_.num_learned_binary_filtered_++;
-					continue;
+		//
+		// Gate on any_redundant_binaries_present_: when -arjun_light is
+		// off (the common case) no equivalences are ever injected, the
+		// lanes are globally empty, and the loop would do nothing useful
+		// while still paying a `literal(unLit).redundant_binary_links_`
+		// cache-line touch + .begin()/deref/compare on EVERY propagation.
+		if (any_redundant_binaries_present_) {
+			for (auto bt = literal(unLit).redundant_binary_links_.begin();
+					*bt != SENTINEL_LIT; bt++) {
+				if (!current_sub_varset_.empty()) {
+					unsigned v = bt->var();
+					bool in_mask = (v < current_sub_varset_.size()
+					                && current_sub_varset_[v]);
+					if (!in_mask
+					    && literal_values_[LiteralID(v, true)] == X_TRI) {
+						statistics_.num_learned_binary_filtered_++;
+						continue;
+					}
 				}
+				if (isResolved(*bt)) {
+					setConflictState(unLit, *bt);
+					return false;
+				}
+				setLiteralIfFree(*bt, Antecedent(unLit));
 			}
-			if (isResolved(*bt)) {
-				setConflictState(unLit, *bt);
-				return false;
-			}
-			setLiteralIfFree(*bt, Antecedent(unLit));
 		}
 		//END Propagate Redundant Binaries
 		for (auto itcl = literal(unLit).watch_list_.rbegin();

@@ -163,6 +163,14 @@ protected:
   std::vector<unsigned> current_sub_var_list_;
 
   vector<Variable> variables_;
+  // True iff at least one entry has been added to ANY literal's
+  // redundant_binary_links_ lane via addRedundantBinaryEquivalence.
+  // BCP uses this to skip the entire redundant-lane walk loop when the
+  // lane is globally empty — without this gate, BCP pays a ~5 ns
+  // empty-walk + extra cache-line touch per propagation step even when
+  // -arjun_light is OFF (the common case). Set to true at injection
+  // time in Instance::addRedundantBinaryEquivalence.
+  bool any_redundant_binaries_present_ = false;
   // Parallel to variables_: bit per variable, set when branchOnClause's
   // negate arm imposes ¬l_i as a branch-constraint (not a regular
   // decision, not a real BCP propagation). Kept SEPARATE from Variable
@@ -847,6 +855,7 @@ bool Instance::addRedundantBinaryEquivalence(unsigned var_x, unsigned var_y,
      add_one(x_neg, y_neg);  add_one(y_neg, x_neg);
      add_one(x_pos, y_pos);  add_one(y_pos, x_pos);
    }
+   if (added) any_redundant_binaries_present_ = true;
    return added;
  }
 
