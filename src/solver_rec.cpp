@@ -1989,7 +1989,8 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		}
 		// Literal already T_TRI: no decision made, pass budget
 		// through unchanged.
-		return solveComponent(comp, separator, separator_reset, depth, nd_node,
+		return solveComponent(comp, std::move(separator), separator_reset,
+		                      depth, nd_node,
 		                      reactive_metis_skip_until_depth,
 		                      child_abstract_budget);
 	}
@@ -2130,7 +2131,8 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		noteResolved(child_abstract_budget);
 		result = 0;
 	} else {
-		result = solveComponent(comp, separator, separator_reset, depth, nd_node,
+		result = solveComponent(comp, std::move(separator), separator_reset,
+		                        depth, nd_node,
 		                        reactive_metis_skip_until_depth,
 		                        child_abstract_budget);
 	}
@@ -2366,7 +2368,8 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 			noteResolved(child_abstract_budget);
 			result = 0;
 		} else {
-			result = solveComponent(comp, separator, separator_reset, depth, nd_node,
+			result = solveComponent(comp, std::move(separator), separator_reset,
+			                        depth, nd_node,
 			                        reactive_metis_skip_until_depth,
 			                        child_abstract_budget);
 		}
