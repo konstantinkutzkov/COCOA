@@ -211,6 +211,14 @@ public:
 struct Variable {
   Antecedent ante;
   int decision_level = INVALID_DL;
+  // True iff this var was set by branchOnClause's negate arm as a
+  // structural constraint (one of ¬l_2..¬l_k for the clause C being
+  // negated) — NOT a regular decision, NOT a regular BCP propagation.
+  // hasAntecedent() returns true for these so UIP doesn't take the
+  // decision-break path; UIP dispatch sees the flag and adds the
+  // literal's negation to the learned clause without resolving
+  // through any antecedent. See docs/branchonclause_branch_constraint_plan.md.
+  bool is_branch_constraint = false;
 };
 
 // for now Clause Header is just a dummy
