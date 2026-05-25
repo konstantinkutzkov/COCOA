@@ -1867,6 +1867,10 @@ void Solver::minimizeAndStoreUIPClause(LiteralID uipLit,
 	// in_clause state? lit must have an antecedent (else can't drop).
 	auto ante_all_in_clause = [&](LiteralID lit) -> bool {
 		if (!hasAntecedent(lit)) return false;
+		// Branch-constraint vars are never droppable — they represent
+		// structural ¬C-branch literals that MUST appear in the
+		// learned clause to keep it sound for F.
+		if (var(lit).is_branch_constraint) return false;
 		if (getAntecedent(lit).isAClause()) {
 			for (auto it = beginOf(getAntecedent(lit).asCl()) + 1;
 					*it != SENTINEL_CL; it++) {
@@ -2092,6 +2096,19 @@ void Solver::recordLastUIPCauses() {
 			}
 		}
 
+		// Branch-constraint dispatch: the variable was set by
+		// branchOnClause's negate arm as a structural ¬C-conjunct
+		// (not a regular decision, not a regular propagation). Don't
+		// resolve through any antecedent — preserve curr_lit's negation
+		// in the learned clause so the learned clause captures the
+		// branching constraint and is sound for F. See
+		// docs/branchonclause_branch_constraint_plan.md.
+		if (var(curr_lit).is_branch_constraint) {
+			tmp_clause.push_back(curr_lit.neg());
+			curr_lit = NOT_A_LIT;
+			continue;
+		}
+
 		assert(hasAntecedent(curr_lit));
 
 		//cout << "{" << curr_lit.toInt() << "}";
@@ -2231,6 +2248,13 @@ void Solver::recordAllUIPCauses() {
 			}
 			// perform UIP stuff
 			minimizeAndStoreUIPClause(curr_lit.neg(), tmp_clause, seen);
+		}
+
+		// Branch-constraint dispatch: see recordLastUIPCauses above
+		// and docs/branchonclause_branch_constraint_plan.md.
+		if (var(curr_lit).is_branch_constraint) {
+			tmp_clause.push_back(curr_lit.neg());
+			continue;
 		}
 
 		assert(hasAntecedent(curr_lit));
