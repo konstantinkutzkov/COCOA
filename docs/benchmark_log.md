@@ -4,6 +4,78 @@ Chronological record of solver timing measurements. Every run recorded
 here includes: commit hash, compiler flags, solver CLI flags, input
 instance, measured wall time, and any environmental notes.
 
+## 2026-05-26 — precomputed canonical_key for decompose-loop recursion: t1_049 332.24 s (−5.4 %)
+
+Commit `cf60d14` adds optional `const CanonicalKey *precomputed_key`
+parameter to `Solver::solveComponent`. The decompose-loop recursion at
+`solver_rec.cpp:1305` passes the already-built key (computed at
+`solver_rec.cpp:1162`) so the recursion's entry skips a redundant
+`buildCanonicalKey` + L2-peek.
+
+Safety verified analytically (six invariants) in
+`docs/precomputed_key_safety_analysis.md`; soundness verified on
+t1_011 + the original multi-decision-DL UIP-bug reproducer.
+
+### Invocation
+
+```
+./sharpSAT -rec -sep 5 -cb 3 -sepMode metis temp_cnf/mc2025_track1_049.cnf
+```
+
+### Result
+
+| metric | `c0c460c` (pre) | **`cf60d14`** | delta |
+|---|---:|---:|---:|
+| **wall time** | 351.0 s | **332.24 s** | **−5.4 % / −18.8 s** |
+| decisions | 145 297 070 | 145 297 070 | 0 |
+| L2 stores | 149 652 951 | 149 652 951 | 0 |
+| L2 hits | 37 935 877 | 37 935 877 | 0 |
+| count | 8 695 763 196 077 742 | 8 695 763 196 077 742 | ✓ |
+
+Trajectory bit-identical (correctness invariant of the change).
+
+### Gap to historical baseline `834f33a` (282.82 s)
+
+| | wall | gap | gap recovered |
+|---|---:|---:|---:|
+| historical (834f33a, 2026-04-26) | 282.82 s | 0 | — |
+| `c0c460c` (pre-change, 2026-05-25) | 351.0 s | +24.1 % | 0 |
+| **`cf60d14` (precomputed_key)** | **332.24 s** | **+17.5 %** | **~28 % of gap** |
+
+### Per-operation breakdown (60s window)
+
+| operation | c0c460c | cf60d14 | delta |
+|---|---:|---:|---:|
+| canonical_key calls in 60 s | 35.25 M | 32.32 M | −8 % |
+| canonical_key time | 25.5 s | 24.0 s | −1.5 s |
+| L2_PEEK calls | 35.25 M | 32.32 M | −8 % |
+| canonical+peek per decision | 2.31 μs | 1.93 μs | −0.38 μs/dec |
+| decisions completed in 60 s | 12.22 M | 13.90 M | +14 % |
+
+### Interpretation
+
+The fix targets only ONE of five `solveComponent` call sites (the post-
+consumption decompose loop). The other four (branchOnLiteral,
+branchOnClause, etc.) still rebuild canonical_key at recursion entry —
+legitimately, because BCP changed state between caller and recursion,
+so the key COULD differ.
+
+The 2.93 M canonical_key builds saved in the 60s window are exactly
+the decompose-loop duplicates. Most canonical builds are NOT
+duplicates; they're from branching-after-BCP recursions where the
+precomputed-key trick doesn't apply.
+
+Net effect on t1_049: 19 s saved, ~28 % of the historical gap
+recovered. Real, measurable win from an analytically-verified change,
+just smaller than my over-optimistic projection.
+
+The remaining ~50 s gap to historical is still distributed across the
+unmeasured "OTHER" bucket (cache_store, branchOnLiteral lifecycle,
+mpz_class arithmetic, SubVarsetGuard, derivative-cache hooks). Open
+investigation; needs further instrumentation.
+
+---
+
 ## 2026-05-25 — branch-constraint replaces per-decision-DL on t1_049: only ~1% recovery
 
 Replaced the per-decision-DL fix in `branchOnClause` (commit `2beffd8`)
