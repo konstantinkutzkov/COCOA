@@ -4,6 +4,80 @@ Chronological record of solver timing measurements. Every run recorded
 here includes: commit hash, compiler flags, solver CLI flags, input
 instance, measured wall time, and any environmental notes.
 
+## 2026-05-26 — `distinct_keys` diagnostic gated + cache density wins: t1_045 35.17 min, post-fix regression closed
+
+Today's four wall-time-relevant commits (51f85ac cache density, c4a6efe
+redundant-lane gate, cf8082a L1/L2_STORE instrumentation, 877a570
+distinct_keys gate) together close the post-branchOnClause-UIP-fix
+regression on t1_045 to within 0.9 % of the unsound-build baseline.
+
+The biggest single contributor was the `distinct_keys` gate
+(commit `877a570`): a `static std::unordered_set<std::pair<uint64_t,uint64_t>>`
+diagnostic that grew monotonically across the entire solve and ran
+unconditionally on every CANONICAL build. Identified by a sub-agent
+code review on 2026-05-25 after two days of OpTimer instrumentation
+failed to localize the cost (the diagnostic was inside the timed
+CANONICAL window, attributed there with the build itself).
+
+### Invocation (the documented winning t1_045 configuration)
+
+```
+SHARPSAT_PROGRESS=1 SHARPSAT_PROGRESS_INTERVAL=60 \
+./sharpSAT -rec -sep 5 -cb 3 -adaptive -wlIter 2 -t 2700 \
+    temp_cnf/mc2025_track1_045.cnf
+```
+
+### Result
+
+| run | wall | per-decision | count |
+|---|---:|---:|---:|
+| 34.87 min unsound build (2026-05-23, branchOnClause UIP bug) | 2092.2 s | 3.07 μs | 132 951 278 067 432 |
+| post-fix regression (2026-05-25, after branch-constraint antecedent) | 2267.85 s (37.80 min) | 3.32 μs | 132 951 278 067 432 |
+| **today (2026-05-26, all today's commits)** | **2110.22 s (35.17 min)** | **3.09 μs** | **132 951 278 067 432** |
+
+Δ vs yesterday's post-fix: **−157.6 s / −6.95 %**. Δ vs unsound build: **+18 s / +0.9 %** (essentially parity, while remaining sound — the canary `t1_011 + -derivCacheBias 1` regression test passes).
+
+Decision count `683,874,584` is bit-identical to the 2026-05-25 run, so
+trajectory is unchanged; the entire improvement is per-decision
+throughput (3.32 → 3.09 μs/dec). The improvement is consistent with
+the 60 s window measurement showing +6.3 % decision throughput from
+the `distinct_keys` gate alone.
+
+### Per-minute pct_lin trajectory (today vs yesterday)
+
+| t (min) | yesterday pct_lin | today pct_lin | Δ |
+|---:|---:|---:|---:|
+| 5 | 5.33 | 5.65 | +0.32 |
+| 10 | 23.94 | **34.40** | **+10.46** |
+| 15 | 62.78 | **78.13** | **+15.35** |
+| 20 | 81.45 | 81.53 | +0.08 (both stalled in hard cluster) |
+| 25 | 83.48 | 84.98 | +1.50 |
+| 30 | 86.34 | **88.15** | +1.81 |
+| 34 | 90.67 | **96.92** | **+6.25** |
+| 35 | 91.69 | 98.86 | +7.17 |
+| finish | 37.80 | **35.17** | **−2.63 min** |
+
+Both runs traverse the same hard cluster around t=18–23 (closed_bits
+nearly flat at 89.7), then today escapes it ahead of yesterday and
+maintains the lead through to the deep-tail collapse phase.
+
+### What this leaves open
+
+Direction 1 from `docs/precomputed_key_extension_plan.md` (plumb
+`precomputed_key` through the 3 remaining candidate recursive
+`solveComponent` call sites at 1827, 1851, 2015) is still on the
+table. The current 2.1× canonical_key-call-rate-per-decision inversion
+vs historical 834f33a is the suspected source of any remaining gap on
+other instances.
+
+Counts verified across the standard suite: t1_065 (37 778 931 862 957 161 709 568),
+t1_011 (536 870 912 306), t1_011 + `-derivCacheBias 1`
+(536 870 912 306), t1_049 (8 695 763 196 077 742, full run today at
+321.59 s — recorded separately), t1_045 (132 951 278 067 432). All
+match historical entries; no count regressions.
+
+---
+
 ## 2026-05-25 — is_branch_constraint to parallel std::vector<bool>: t1_049 329.35 s (−6 %); t1_045 37.80 min (still +8.4 % vs historical)
 
 The `branch-constraint antecedent` work (2026-05-25) widened the
