@@ -344,7 +344,8 @@ mpz_class Solver::solveComponent(Component &comp,
                                   int depth,
                                   int nd_node,
                                   int reactive_metis_skip_until_depth,
-                                  double abstract_budget) {
+                                  double abstract_budget,
+                                  const CanonicalKey *precomputed_key) {
 	if (stopwatch_.timeBoundBroken()) {
 		// Capture chain (outer levels) if not already captured.
 		// NOTE: timeout is an abort, not a leaf event — closed_log_sum_
@@ -369,6 +370,27 @@ mpz_class Solver::solveComponent(Component &comp,
 	unsigned free_vars = 0;
 	bool key_built = false;
 	if (can_cache) {
+		if (precomputed_key != nullptr) {
+			// Caller (solveComponentImpl's decompose loop at line ~1162)
+			// already built the canonical_key and L2-peeked. Re-using
+			// their result avoids a redundant buildCanonicalKey + peek
+			// (~780 ns saved per case). Safety verified in
+			// docs/precomputed_key_safety_analysis.md.
+			cached_key = *precomputed_key;
+			key_built = true;
+			free_vars = (cached_key.num_vars > cached_key.n_in_clauses)
+			    ? (cached_key.num_vars - cached_key.n_in_clauses) : 0;
+			// Caller's peek established miss; we don't re-peek. Bump the
+			// miss counter here (caller did not — it doesn't touch
+			// stats_hits/stats_misses on its own peek path).
+			comp_manager_.contentCache().stats_misses++;
+			// NOTE: skip CANON_DIAG (distinct_keys + total_calls) here.
+			// The diagnostic tracks unique canonical_keys observed at
+			// solveComponent entries via the rebuild path; the
+			// precomputed-key path is structurally different and would
+			// undercount neither side cleanly. Diagnostic remains
+			// meaningful as a ratio over the rebuild-path entries.
+		} else {
 		const auto &rm = removed_clauses_;
 		{
 			OpTimer _t(this, OP_CANONICAL);
@@ -419,6 +441,7 @@ mpz_class Solver::solveComponent(Component &comp,
 			return scaled;
 		}
 		comp_manager_.contentCache().stats_misses++;
+		}  // close: else branch of precomputed_key check
 	}
 
 	// Per-component XOR scope. On entry, walk comp's clauses once to
@@ -1279,9 +1302,14 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				}
 			} sub_filter(*this, *sub, decomposed);
 			int sub_nd = config_.picker_root_sep_only ? -1 : child_nd_node;
+			// Pass &key as precomputed_key: we already built the canonical
+			// key and L2-peeked above (line ~1162, ~1184). Avoids redundant
+			// build + peek at recursion entry. Safety analysis in
+			// docs/precomputed_key_safety_analysis.md.
 			sub_count = solveComponent(*sub, {}, true, depth + 1, sub_nd,
 			                           reactive_metis_skip_until_depth,
-			                           sub_budget);
+			                           sub_budget,
+			                           &key);
 
 
 			// Brute-force cache check at STORE time. If sub-component is

@@ -688,13 +688,23 @@ private:
 	// propagated verbatim through separator consumption and into child
 	// sub-components. Only a failed reactive call inside the current
 	// subtree raises it.
+	// `precomputed_key` (optional): the caller already built the canonical
+	// key for `comp` and L2-peeked the cache with a confirmed MISS. When
+	// non-null, solveComponent's entry skips the redundant buildCanonicalKey
+	// + L2 peek and uses *precomputed_key directly. Caller is responsible
+	// for ensuring (a) the value is bit-identical to what buildCanonicalKey
+	// would produce here, (b) the cache state hasn't changed since the
+	// caller's peek (single-threaded), and (c) the L2 peek genuinely missed.
+	// Currently used only at solveComponentImpl's post-consumption decompose
+	// loop. See docs/precomputed_key_safety_analysis.md for the verification.
 	mpz_class solveComponent(Component &comp,
 	                         std::vector<CutNode> separator,
 	                         bool separator_reset,
 	                         int depth = 0,
 	                         int nd_node = -1,  // hierarchy node, -1 = use root
 	                         int reactive_metis_skip_until_depth = 0,
-	                         double abstract_budget = 0.0);
+	                         double abstract_budget = 0.0,
+	                         const CanonicalKey *precomputed_key = nullptr);
 
 	// The body of solveComponent. The public solveComponent wraps this
 	// with function-boundary memoization (canonical-key lookup at
