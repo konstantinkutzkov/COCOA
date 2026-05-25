@@ -662,6 +662,8 @@ void Solver::solve(const string &file_name) {
 	if (!config_.quiet)
 		statistics_.printShort();
 
+	printOpStats("FINAL");
+
 	// OPEN_WORK: per-variant progress metric for probe_flags / portfolio
 	// routing. On finish, n_open_comps=0 and progress_bits=n_root.
 	// On timeout, n_open_comps>0 and progress_bits = n_root - log2(Σ 2^n_i)
@@ -927,6 +929,7 @@ void Solver::captureOpenWorkSnapshot() {
 
 
 bool Solver::BCP(unsigned start_at_stack_ofs) {
+	OpTimer _t_bcp(this, OP_BCP);
 	for (unsigned int i = start_at_stack_ofs; i < literal_stack_.size(); i++) {
 		LiteralID unLit = literal_stack_[i].neg();
 		//BEGIN Propagate Bin Clauses

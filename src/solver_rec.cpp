@@ -370,11 +370,14 @@ mpz_class Solver::solveComponent(Component &comp,
 	bool key_built = false;
 	if (can_cache) {
 		const auto &rm = removed_clauses_;
-		cached_key = buildCanonicalKey(
-		    comp, literal_pool_, literals_, literal_values_,
-		    comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
-		    original_lit_pool_size_, config_.wl_iterations,
-		    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+		{
+			OpTimer _t(this, OP_CANONICAL);
+			cached_key = buildCanonicalKey(
+			    comp, literal_pool_, literals_, literal_values_,
+			    comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
+			    original_lit_pool_size_, config_.wl_iterations,
+			    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+		}
 		key_built = true;
 		free_vars = (cached_key.num_vars > cached_key.n_in_clauses)
 		    ? (cached_key.num_vars - cached_key.n_in_clauses) : 0;
@@ -396,7 +399,12 @@ mpz_class Solver::solveComponent(Component &comp,
 			          << "\n";
 		}
 		mpz_class hit;
-		if (comp_manager_.contentCache().peek(cached_key, hit)) {
+		bool l2_hit;
+		{
+			OpTimer _t(this, OP_L2_PEEK);
+			l2_hit = comp_manager_.contentCache().peek(cached_key, hit);
+		}
+		if (l2_hit) {
 			auto &cc = comp_manager_.contentCache();
 			cc.stats_hits++;
 			cc.stats_hit_vars_sum += cached_key.num_vars;
@@ -670,6 +678,8 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		     << " hits=" << comp_manager_.contentCache().stats_hits
 		     << " l1_hits=" << comp_manager_.contentCache().stats_l1_hits
 		     << endl;
+		std::string tag = "calls=" + std::to_string(call_count);
+		printOpStats(tag.c_str());
 	}
 
 	// Per-component BCP filter mask is updated only when decomposition
@@ -712,7 +722,11 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		mid_sep_decomp_attempts_++;
 		decisions_since_connectivity_check_ = 0;
 		mpz_class trivial_factor = 1;
-		vector<Component*> subcomps = discoverComponentsOf(comp, trivial_factor);
+		vector<Component*> subcomps;
+		{
+			OpTimer _t(this, OP_ANALYZE);
+			subcomps = discoverComponentsOf(comp, trivial_factor);
+		}
 		// Real split = ≥ 2 connected components. Peeled-only (1 sub +
 		// trivial_factor > 1) defers to the existing post-consumption
 		// decompose-block; the same canonical residual will be
@@ -898,7 +912,11 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		// re-accumulate from 0.
 		decisions_since_connectivity_check_ = 0;
 		mpz_class trivial_factor = 1;
-		vector<Component*> subcomps = discoverComponentsOf(comp, trivial_factor);
+		vector<Component*> subcomps;
+		{
+			OpTimer _t(this, OP_ANALYZE);
+			subcomps = discoverComponentsOf(comp, trivial_factor);
+		}
 		// Diagnostic: count decomposition events by outcome.
 		static long long g_decomp_calls = 0, g_decomp_split = 0;
 		static long long g_decomp_trivial = 0;
@@ -1098,7 +1116,12 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			    && sub->hasL1Hash()) {
 				id_key.hash_lo = sub->l1HashLo();
 				id_key.hash_hi = sub->l1HashHi();
-				if (comp_manager_.contentCache().l1_lookup(id_key, sub_count)) {
+				bool l1_hit;
+				{
+					OpTimer _t(this, OP_L1_PEEK);
+					l1_hit = comp_manager_.contentCache().l1_lookup(id_key, sub_count);
+				}
+				if (l1_hit) {
 					// Brute-force check at L1-hit time.
 					if (config_.brute_force_cache_check_n > 0) {
 						unsigned n_active = 0;
@@ -1133,14 +1156,22 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				}
 			}
 
-			CanonicalKey key = buildCanonicalKey(
-				*sub, literal_pool_, literals_, literal_values_,
-				comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
-				original_lit_pool_size_, config_.wl_iterations,
-				static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
-			bool hit = (config_.perform_component_caching &&
-			            sub->num_variables() >= 3 &&
-			            comp_manager_.contentCache().peek(key, sub_count));
+			CanonicalKey key;
+			{
+				OpTimer _t(this, OP_CANONICAL);
+				key = buildCanonicalKey(
+					*sub, literal_pool_, literals_, literal_values_,
+					comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
+					original_lit_pool_size_, config_.wl_iterations,
+					static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+			}
+			bool hit;
+			{
+				OpTimer _t(this, OP_L2_PEEK);
+				hit = (config_.perform_component_caching &&
+				       sub->num_variables() >= 3 &&
+				       comp_manager_.contentCache().peek(key, sub_count));
+			}
 			if (hit) {
 				// L2 hit: canonicalized form matches a previously-cached
 				// sub-component. Populate L1 so future visits with this
@@ -1865,13 +1896,17 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 
 	if (config_.perform_adaptive_branching) {
 		bool comp_unsat = false;
-		v = pickBranchVariableAdaptive(comp, comp_unsat);
+		{
+			OpTimer _t(this, OP_PICK);
+			v = pickBranchVariableAdaptive(comp, comp_unsat);
+		}
 		if (comp_unsat) {
 			// LEAF event: adaptive picker proved this subtree UNSAT.
 			noteResolved(abstract_budget);
 			return 0;
 		}
 	} else {
+		OpTimer _t(this, OP_PICK);
 		v = pickBranchVariable(comp);
 	}
 	if (v == 0) {

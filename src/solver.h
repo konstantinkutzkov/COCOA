@@ -20,6 +20,7 @@
 #include "solver_config.h"
 
 #include <sys/time.h>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -130,6 +131,56 @@ class Solver: public Instance {
 public:
 	Solver() {
 		stopwatch_.setTimeBound(config_.time_bound_seconds);
+	}
+
+	// =====================================================================
+	// Per-operation timing for cost breakdown investigation (2026-05-25).
+	// Uses std::chrono::steady_clock for portable nanosecond timing.
+	// =====================================================================
+	enum OpKind {
+		OP_ANALYZE,      // discoverComponentsOf call
+		OP_CANONICAL,    // buildCanonicalKey call
+		OP_L1_PEEK,      // ContentCache::l1_lookup
+		OP_L2_PEEK,      // ContentCache::peek (cache hit/miss check)
+		OP_PICK,         // pickBranchVariable
+		OP_BCP,          // Solver::BCP
+		OP_COUNT
+	};
+	mutable uint64_t op_count_[OP_COUNT] = {0};
+	mutable uint64_t op_time_ns_[OP_COUNT] = {0};
+
+	// RAII timer. Bracket an operation with: { OpTimer _t(this, OP_X); ... }
+	struct OpTimer {
+		const Solver *s;
+		OpKind k;
+		std::chrono::steady_clock::time_point t0;
+		OpTimer(const Solver *sv, OpKind kind)
+		    : s(sv), k(kind), t0(std::chrono::steady_clock::now()) {}
+		~OpTimer() {
+			auto dt = std::chrono::steady_clock::now() - t0;
+			s->op_time_ns_[k] +=
+			    std::chrono::duration_cast<std::chrono::nanoseconds>(dt).count();
+			s->op_count_[k]++;
+		}
+	};
+
+	// Print current op_stats to stderr. Called from periodic progress
+	// emission AND from final stats line.
+	void printOpStats(const char *tag) const {
+		static const char *names[OP_COUNT] = {
+			"ANALYZE", "CANONICAL", "L1_PEEK", "L2_PEEK", "PICK", "BCP"
+		};
+		std::cerr << "OP_STATS " << tag;
+		for (int i = 0; i < OP_COUNT; i++) {
+			uint64_t c = op_count_[i];
+			uint64_t t_ns = op_time_ns_[i];
+			double avg_ns = c > 0 ? double(t_ns) / c : 0;
+			std::cerr << " " << names[i]
+			          << ":c=" << c
+			          << ":ms=" << (t_ns / 1000000.0)
+			          << ":avg=" << avg_ns << "ns";
+		}
+		std::cerr << "\n";
 	}
 
 	void solve(const string & file_name);
