@@ -4,6 +4,63 @@ Chronological record of solver timing measurements. Every run recorded
 here includes: commit hash, compiler flags, solver CLI flags, input
 instance, measured wall time, and any environmental notes.
 
+## 2026-05-25 — branch-constraint replaces per-decision-DL on t1_049: only ~1% recovery
+
+Replaced the per-decision-DL fix in `branchOnClause` (commit `2beffd8`)
+with branch-constraint antecedent encoding (commits `409180d`,
+`dfcee98`, `a13c09f`, `c0c460c`). The negate arm now uses one
+StackLevel + one BCP call (vs. k+1 of each pre-replacement).
+
+### Invocation
+
+```
+./sharpSAT -rec -sep 5 -cb 3 -sepMode metis temp_cnf/mc2025_track1_049.cnf
+```
+
+### Result
+
+| metric | `2beffd8` (per-decision-DL fix) | **branch-constraint (`c0c460c`)** | delta |
+|---|---:|---:|---:|
+| **wall time** | 354.64 s | **350.998 s** | **−1.0%** |
+| decisions | 145 297 070 | 145 297 070 | 0 |
+| L2 stores | 149 652 951 | 149 652 951 | 0 |
+| L2 hits | 37 935 877 | 37 935 877 | 0 |
+| L1 hits | 51 146 054 | 51 146 054 | 0 |
+| total lookups | 97 199 139 | 97 199 139 | 0 |
+| count | 8 695 763 196 077 742 | 8 695 763 196 077 742 | ✓ |
+
+Trajectory is **bit-identical** — confirming the two soundness fixes
+are functionally equivalent for cache topology; the only difference is
+per-call cost.
+
+### Soundness verification
+
+Ran the configuration that originally exposed the multi-decision-DL UIP
+bug: `t1_011 + -derivCacheBias 1 -rec -sep 5 -cb 3 -sepMode metis`.
+Count: `536 870 912 306` (correct). Verified ALL of t1_065, t1_071,
+t1_011 (default and +bias) before launching t1_049.
+
+### Honest finding
+
+The +25% t1_049 slowdown previously attributed to "the per-decision-DL
+fix" is mis-attributed: the per-DL pushes contribute only ~1% to the
+total cost. The remaining ~24% (354 s vs historical `892a4ea` 282 s)
+likely comes from other changes between those commits — primarily the
+provenance-based `learnedClauseSound` BFS check (default ON in
+2beffd8), which fires at every learned-clause-in-scope filter during
+BCP. With 97 M cache lookups, that path is hot enough that the BFS
+walk dominates the wall-time differential. Future investigation:
+profile the provenance check, look at memoization gaps or DAG sizes.
+
+### Environment
+
+- Commit: `c0c460c branch-constraint: rewrite branchOnClause negate arm`
+- Build: `-O3 -DNDEBUG` (Release), CMake `BUILD_TYPE=Release`
+- Input md5: `05173bb86a04414d86c661007d00accd` (`mc2025_track1_049.cnf`)
+- Hardware: Apple Silicon, on AC
+
+---
+
 ## 2026-05-24 — branchOnClause UIP soundness fix on t1_045: +7.9% wall-time at same trajectory
 
 After landing today's per-decision-DL fix in `branchOnClause` negate arm
