@@ -42,7 +42,7 @@ protected:
     if (deriv_cache_hooks_enabled_) deriv_cache_track_lit_unassign_(lit);
     var(lit).ante = Antecedent(NOT_A_CLAUSE);
     var(lit).decision_level = INVALID_DL;
-    var(lit).is_branch_constraint = false;
+    is_branch_constraint_[lit.var()] = false;
     literal_values_[lit] = X_TRI;
     literal_values_[lit.neg()] = X_TRI;
     // Invariant R7: unSet must clear the antecedent so the variable
@@ -51,10 +51,10 @@ protected:
     // per unSet — cheap). Also: clear is_branch_constraint so the var
     // doesn't look branch-constrained on re-set.
     if (variables_[lit.var()].ante.isAnt()
-        || variables_[lit.var()].is_branch_constraint) {
+        || is_branch_constraint_[lit.var()]) {
       std::cerr << "\n*** INV_R7_UNSET_DID_NOT_CLEAR_ANTE ***\n"
                 << "  lit=" << lit.toInt()
-                << " is_branch_constraint=" << variables_[lit.var()].is_branch_constraint
+                << " is_branch_constraint=" << (bool)is_branch_constraint_[lit.var()]
                 << "\n";
       std::cerr.flush();
       std::abort();
@@ -67,13 +67,13 @@ protected:
 
   bool hasAntecedent(LiteralID lit) {
     return variables_[lit.var()].ante.isAnt()
-        || variables_[lit.var()].is_branch_constraint;
+        || is_branch_constraint_[lit.var()];
   }
 
   bool isAntecedentOf(ClauseOfs ante_cl, LiteralID lit) {
     return var(lit).ante.isAClause()
         && (var(lit).ante.asCl() == ante_cl)
-        && !var(lit).is_branch_constraint;
+        && !is_branch_constraint_[lit.var()];
   }
 
   bool isolated(VariableIndex v) {
@@ -163,6 +163,16 @@ protected:
   std::vector<unsigned> current_sub_var_list_;
 
   vector<Variable> variables_;
+  // Parallel to variables_: bit per variable, set when branchOnClause's
+  // negate arm imposes ¬l_i as a branch-constraint (not a regular
+  // decision, not a real BCP propagation). Kept SEPARATE from Variable
+  // so the Variable struct stays at 8 bytes — better cache density on
+  // the hot `variables_[v]` access path. vector<bool> (not uint8_t):
+  // measured 2026-05-25 on t1_049, uint8_t was 4.9 % SLOWER end-to-end
+  // (uniform ~5 % bump across all hot ops); compiler optimizes the
+  // bit-packed proxy well, byte-array adds 8× memory traffic for no
+  // visible read-path win.
+  std::vector<bool> is_branch_constraint_;
   LiteralIndexedVector<TriValue> literal_values_;
 
   // ------------------------------------------------------------------
@@ -367,6 +377,7 @@ protected:
     assert(guard_var_ == 0 && "guard variable already allocated");
     guard_var_ = variables_.size();  // new 1-based index = current size
     variables_.push_back(Variable{});
+    is_branch_constraint_.resize(variables_.size(), false);
     literals_.resize(variables_.size());
     literal_values_.resize(variables_.size(), X_TRI);
     occurrence_lists_.resize(variables_.size());
@@ -375,7 +386,7 @@ protected:
     literal_values_[d_pos.neg()] = F_TRI;
     variables_[guard_var_].ante = Antecedent(NOT_A_CLAUSE);
     variables_[guard_var_].decision_level = 0;
-    variables_[guard_var_].is_branch_constraint = false;
+    is_branch_constraint_[guard_var_] = false;
     // Guard 1: position invariant — guard_var_ must equal num_variables()
     // so padded clauses use the correct index and future allocations
     // (if any) would corrupt the invariant.

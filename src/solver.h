@@ -1074,7 +1074,7 @@ private:
 	// Set `lit` as a "branch-constraint" assignment at the current
 	// decision level. Used by branchOnClause's negate arm for ¬l_2..¬l_k
 	// (¬l_1 stays a regular decision via setLiteralIfFree). The
-	// var.is_branch_constraint flag tells UIP to NOT treat this as a
+	// is_branch_constraint_[v] flag tells UIP to NOT treat this as a
 	// decision (would re-create the multi-decision-DL UIP bug) and to
 	// NOT try to resolve through any antecedent clause (none exists);
 	// instead UIP adds the literal's negation to the learned clause
@@ -1090,7 +1090,7 @@ private:
 		       && "polarity invariant: opposite must be X_TRI");
 		var(lit).decision_level = stack_.get_decision_level();
 		var(lit).ante = Antecedent(NOT_A_CLAUSE);
-		var(lit).is_branch_constraint = true;
+		is_branch_constraint_[lit.var()] = true;
 		literal_stack_.push_back(lit);
 		literal_values_[lit] = T_TRI;
 		literal_values_[lit.neg()] = F_TRI;

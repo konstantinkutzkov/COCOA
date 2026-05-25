@@ -4,6 +4,77 @@ Chronological record of solver timing measurements. Every run recorded
 here includes: commit hash, compiler flags, solver CLI flags, input
 instance, measured wall time, and any environmental notes.
 
+## 2026-05-25 — is_branch_constraint to parallel std::vector<bool>: t1_049 329.35 s (−6 %); t1_045 37.80 min (still +8.4 % vs historical)
+
+The `branch-constraint antecedent` work (2026-05-25) widened the
+`Variable` struct from 8 → 16 bytes by adding `bool is_branch_constraint`.
+Hypothesis: the widening hurt cache density on the hot `variables_[v]`
+access path. Mitigation: keep `Variable` at 8 bytes by moving the flag
+into a parallel `std::vector<bool> is_branch_constraint_` on `Instance`.
+
+Build: Release, uncommitted working tree on top of `c0c460c`.
+
+### Invocation
+
+```
+./sharpSAT -rec -sep 5 -cb 3 -sepMode metis temp_cnf/mc2025_track1_049.cnf
+SHARPSAT_PROGRESS=1 SHARPSAT_PROGRESS_INTERVAL=60 ./sharpSAT \
+    -rec -sep 5 -cb 3 -adaptive -wlIter 2 -t 2700 \
+    temp_cnf/mc2025_track1_045.cnf
+```
+
+### t1_049 (5-min smoke)
+
+| metric | `cf60d14` (pre, precomputed_key only) | **+ cache density (today)** | delta |
+|---|---:|---:|---:|
+| **wall time** | 332.24 s | **329.35 s** | **−2.9 s / −0.9 %** |
+| decisions | 145 297 070 | ~145.1 M | ≈ 0 |
+| count | 8 695 763 196 077 742 | 8 695 763 196 077 742 | ✓ |
+
+Cumulative vs `c0c460c` (351 s) baseline: precomputed_key (−18.8 s) + cache density (−2.9 s) = **−21.7 s / −6.2 %**. Per-op stats showed ANALYZE/CANONICAL both dropped ~10–12 % per call, consistent with the cache-density hypothesis.
+
+### t1_045 (45-min budget, winning historical config)
+
+| metric | 2026-05-23 historical (`canonical_key` fix) | **today (branch-constraint + cache density)** | delta |
+|---|---:|---:|---:|
+| **wall time** | 2 092.2 s (34.87 min) | **2 267.85 s (37.80 min)** | **+8.4 % / +2.93 min** |
+| decisions | 682.1 M | 683.9 M | +0.3 % |
+| L2 stores | 680.4 M | **502.2 M** | **−26 %** |
+| L2 hits | 226.7 M | 227.2 M | +0.2 % |
+| L2 hit rate | 33.3 % | **45.2 %** | **+11.9 pp** |
+| μs/decision | 3.07 | 3.32 | +8.2 % |
+| count | 132 951 278 067 432 | 132 951 278 067 432 | ✓ |
+
+**Per-minute pct_lin trajectory** (every 60 s, SHARPSAT_PROGRESS):
+
+| t (min) | pct_lin | closed_bits | open | decisions (M) | notes |
+|---:|---:|---:|---:|---:|---|
+| 1 | 0.29 | 81.58 | 35 | 23.3 | |
+| 5 | 5.33 | 85.77 | 31 | 112.5 | |
+| 9 | 21.27 | 87.77 | 34 | 195.3 | first big collapse |
+| 11 | 35.31 | 88.50 | 29 | 235.9 | second collapse |
+| 12 | 43.59 | 88.80 | 34 | 255.7 | halfway |
+| 15 | 62.78 | 89.33 | 21 | 311.7 | third collapse |
+| 16 | 77.82 | 89.64 | 30 | 329.0 | |
+| 17 | 79.70 | 89.67 | 40 | 346.3 | enters multi-min stall |
+| 22 | 81.54 | 89.71 | 41 | 440.7 | flat — expensive cluster |
+| 30 | 86.34 | 89.79 | 35 | 570.7 | |
+| 33 | 90.27 | 89.85 | 16 | 614.5 | breaks out |
+| 37 | 97.43 | 89.96 | 33 | 674.5 | |
+| 37.80 | 100.0 | 90.00 | 0 | 683.9 | finish |
+
+Search trajectory looks like: rapid ramp 0 → 50 % in 12 min, then a 5-min collapse phase to 80 %, then ~8 min stuck in a hard cluster (closed_bits crawled +0.001/min for several minutes), then deep-tail collapse to finish.
+
+### Interpretation
+
+- **Cache layer is now better than historical**: L2 stores fell 26 %, hit rate +12 pp. The `canonical_key` free-var fix + cache density change is unambiguously good for the cache.
+- **Per-decision cost still elevated**: 3.32 vs 3.07 μs/dec = +8.2 %. The branch-constraint-antecedent rewrite of `branchOnClause` (Option D) introduces overhead the cache wins don't fully offset. Component management + UIP dispatch are the remaining suspects.
+- Trajectory shape (sequence of collapses) tracks the historical run qualitatively; the slowdown is broadly distributed, not concentrated in one sub-tree.
+
+Counts cross-confirmed: 132 951 278 067 432 (matches ganak + historical sharpSAT).
+
+---
+
 ## 2026-05-26 — precomputed canonical_key for decompose-loop recursion: t1_049 332.24 s (−5.4 %)
 
 Commit `cf60d14` adds optional `const CanonicalKey *precomputed_key`

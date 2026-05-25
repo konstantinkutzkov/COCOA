@@ -228,10 +228,10 @@ std::vector<std::vector<int>> Solver::extractFormulaAsDimacs() {
 // ---------------------------------------------------------------
 void Solver::rebuildFromPreprocessedCNF(const PreprocessorResult &pre_out) {
 	// 1. Reset per-variable state (antecedent, DL, value).
+	is_branch_constraint_.assign(variables_.size(), false);
 	for (unsigned v = 0; v < variables_.size(); v++) {
 		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
 		variables_[v].decision_level = INVALID_DL;
-		variables_[v].is_branch_constraint = false;
 	}
 	literal_values_.clear();
 	literal_values_.resize(literals_.end_lit().raw(), X_TRI);
@@ -1873,7 +1873,7 @@ void Solver::minimizeAndStoreUIPClause(LiteralID uipLit,
 		// Branch-constraint vars are never droppable — they represent
 		// structural ¬C-branch literals that MUST appear in the
 		// learned clause to keep it sound for F.
-		if (var(lit).is_branch_constraint) return false;
+		if (is_branch_constraint_[lit.var()]) return false;
 		if (getAntecedent(lit).isAClause()) {
 			for (auto it = beginOf(getAntecedent(lit).asCl()) + 1;
 					*it != SENTINEL_CL; it++) {
@@ -2106,7 +2106,7 @@ void Solver::recordLastUIPCauses() {
 		// in the learned clause so the learned clause captures the
 		// branching constraint and is sound for F. See
 		// docs/branchonclause_branch_constraint_plan.md.
-		if (var(curr_lit).is_branch_constraint) {
+		if (is_branch_constraint_[curr_lit.var()]) {
 			tmp_clause.push_back(curr_lit.neg());
 			curr_lit = NOT_A_LIT;
 			continue;
@@ -2255,7 +2255,7 @@ void Solver::recordAllUIPCauses() {
 
 		// Branch-constraint dispatch: see recordLastUIPCauses above
 		// and docs/branchonclause_branch_constraint_plan.md.
-		if (var(curr_lit).is_branch_constraint) {
+		if (is_branch_constraint_[curr_lit.var()]) {
 			tmp_clause.push_back(curr_lit.neg());
 			continue;
 		}
@@ -2324,10 +2324,10 @@ void Solver::resetPostPreprocessScratch() {
 	// Variable (ante = Antecedent(), decision_level = INVALID_DL) so
 	// this is defensive: belt-and-suspenders in case a future refactor
 	// changes that.
+	is_branch_constraint_.assign(variables_.size(), false);
 	for (unsigned v = 1; v < variables_.size(); v++) {
 		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
 		variables_[v].decision_level = INVALID_DL;
-		variables_[v].is_branch_constraint = false;
 	}
 }
 
