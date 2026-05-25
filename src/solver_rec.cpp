@@ -404,21 +404,28 @@ mpz_class Solver::solveComponent(Component &comp,
 		free_vars = (cached_key.num_vars > cached_key.n_in_clauses)
 		    ? (cached_key.num_vars - cached_key.n_in_clauses) : 0;
 		// Diagnostic: track distinct canonical keys (full 128-bit) vs total calls.
-		static long long total_calls = 0;
-		struct PairHash {
-			size_t operator()(const std::pair<uint64_t,uint64_t>& p) const {
-				return p.first ^ (p.second << 1);
+		// Gated entirely behind config_.log_branches — the static unordered_set
+		// grows monotonically across the whole solve and was eating ~284 ns
+		// per CANONICAL call on every run (~0.5 M/s on t1_049), regardless of
+		// whether the periodic print at 2000-call intervals was ever shown.
+		// See 2026-05-25 sub-agent regression analysis.
+		if (config_.log_branches) {
+			static long long total_calls = 0;
+			struct PairHash {
+				size_t operator()(const std::pair<uint64_t,uint64_t>& p) const {
+					return p.first ^ (p.second << 1);
+				}
+			};
+			static std::unordered_set<std::pair<uint64_t,uint64_t>, PairHash> distinct_keys;
+			total_calls++;
+			distinct_keys.insert({cached_key.hash, cached_key.hash_hi});
+			if (total_calls % 2000 == 0) {
+				std::cerr << "CANON_DIAG calls=" << total_calls
+				          << " distinct_keys=" << distinct_keys.size()
+				          << " duplicate_ratio="
+				          << (1.0 - (double)distinct_keys.size() / (double)total_calls)
+				          << "\n";
 			}
-		};
-		static std::unordered_set<std::pair<uint64_t,uint64_t>, PairHash> distinct_keys;
-		total_calls++;
-		distinct_keys.insert({cached_key.hash, cached_key.hash_hi});
-		if (config_.log_branches && total_calls % 2000 == 0) {
-			std::cerr << "CANON_DIAG calls=" << total_calls
-			          << " distinct_keys=" << distinct_keys.size()
-			          << " duplicate_ratio="
-			          << (1.0 - (double)distinct_keys.size() / (double)total_calls)
-			          << "\n";
 		}
 		mpz_class hit;
 		bool l2_hit;
