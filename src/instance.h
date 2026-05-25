@@ -42,15 +42,20 @@ protected:
     if (deriv_cache_hooks_enabled_) deriv_cache_track_lit_unassign_(lit);
     var(lit).ante = Antecedent(NOT_A_CLAUSE);
     var(lit).decision_level = INVALID_DL;
+    var(lit).is_branch_constraint = false;
     literal_values_[lit] = X_TRI;
     literal_values_[lit.neg()] = X_TRI;
     // Invariant R7: unSet must clear the antecedent so the variable
     // looks "decision-like" (no antecedent) on subsequent re-set.
     // hasAntecedent must now report false. Always-on (one bool check
-    // per unSet — cheap).
-    if (variables_[lit.var()].ante.isAnt()) {
+    // per unSet — cheap). Also: clear is_branch_constraint so the var
+    // doesn't look branch-constrained on re-set.
+    if (variables_[lit.var()].ante.isAnt()
+        || variables_[lit.var()].is_branch_constraint) {
       std::cerr << "\n*** INV_R7_UNSET_DID_NOT_CLEAR_ANTE ***\n"
-                << "  lit=" << lit.toInt() << "\n";
+                << "  lit=" << lit.toInt()
+                << " is_branch_constraint=" << variables_[lit.var()].is_branch_constraint
+                << "\n";
       std::cerr.flush();
       std::abort();
     }
@@ -61,11 +66,14 @@ protected:
   }
 
   bool hasAntecedent(LiteralID lit) {
-    return variables_[lit.var()].ante.isAnt();
+    return variables_[lit.var()].ante.isAnt()
+        || variables_[lit.var()].is_branch_constraint;
   }
 
   bool isAntecedentOf(ClauseOfs ante_cl, LiteralID lit) {
-    return var(lit).ante.isAClause() && (var(lit).ante.asCl() == ante_cl);
+    return var(lit).ante.isAClause()
+        && (var(lit).ante.asCl() == ante_cl)
+        && !var(lit).is_branch_constraint;
   }
 
   bool isolated(VariableIndex v) {
@@ -367,6 +375,7 @@ protected:
     literal_values_[d_pos.neg()] = F_TRI;
     variables_[guard_var_].ante = Antecedent(NOT_A_CLAUSE);
     variables_[guard_var_].decision_level = 0;
+    variables_[guard_var_].is_branch_constraint = false;
     // Guard 1: position invariant — guard_var_ must equal num_variables()
     // so padded clauses use the correct index and future allocations
     // (if any) would corrupt the invariant.

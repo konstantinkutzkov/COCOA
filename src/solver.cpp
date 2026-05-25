@@ -231,6 +231,7 @@ void Solver::rebuildFromPreprocessedCNF(const PreprocessorResult &pre_out) {
 	for (unsigned v = 0; v < variables_.size(); v++) {
 		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
 		variables_[v].decision_level = INVALID_DL;
+		variables_[v].is_branch_constraint = false;
 	}
 	literal_values_.clear();
 	literal_values_.resize(literals_.end_lit().raw(), X_TRI);
@@ -2299,6 +2300,7 @@ void Solver::resetPostPreprocessScratch() {
 	for (unsigned v = 1; v < variables_.size(); v++) {
 		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
 		variables_[v].decision_level = INVALID_DL;
+		variables_[v].is_branch_constraint = false;
 	}
 }
 

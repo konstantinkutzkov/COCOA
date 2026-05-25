@@ -1010,6 +1010,33 @@ private:
 		return true;
 	}
 
+	// Set `lit` as a "branch-constraint" assignment at the current
+	// decision level. Used by branchOnClause's negate arm for ¬l_2..¬l_k
+	// (¬l_1 stays a regular decision via setLiteralIfFree). The
+	// var.is_branch_constraint flag tells UIP to NOT treat this as a
+	// decision (would re-create the multi-decision-DL UIP bug) and to
+	// NOT try to resolve through any antecedent clause (none exists);
+	// instead UIP adds the literal's negation to the learned clause
+	// directly, capturing the structural ¬C constraint.
+	//
+	// NB: does NOT increment num_implications_ (not a real implication)
+	// or decisions_since_connectivity_check_ (not a real decision); both
+	// metrics treat branch-constraint as a third category.
+	bool setLiteralAsBranchConstraint(LiteralID lit) {
+		if (literal_values_[lit] != X_TRI)
+			return false;
+		assert(literal_values_[lit.neg()] == X_TRI
+		       && "polarity invariant: opposite must be X_TRI");
+		var(lit).decision_level = stack_.get_decision_level();
+		var(lit).ante = Antecedent(NOT_A_CLAUSE);
+		var(lit).is_branch_constraint = true;
+		literal_stack_.push_back(lit);
+		literal_values_[lit] = T_TRI;
+		literal_values_[lit.neg()] = F_TRI;
+		if (deriv_cache_hooks_enabled_) deriv_cache_track_lit_assign_(lit);
+		return true;
+	}
+
 	void setConflictState(LiteralID litA, LiteralID litB) {
 		violated_clause.clear();
 		violated_clause.push_back(litA);
