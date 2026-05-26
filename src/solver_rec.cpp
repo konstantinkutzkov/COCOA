@@ -392,11 +392,29 @@ mpz_class Solver::solveComponent(Component &comp,
 			// removed_size / lscope_size give the same property for
 			// removed_clauses_ and learned_clause_scope_. Size (not
 			// version_) is used so balanced mark+unmark is tolerated.
-			assert(literal_stack_.size() == precomputed_snap->trail_size
-			    && removed_clauses_.size() == precomputed_snap->removed_size
-			    && learned_clause_scope_.size() == precomputed_snap->lscope_size
-			    && "stale precomputed_snap: state mutated and not restored "
-			       "between caller's key build and solveComponent entry");
+			//
+			// NOT assert(): Release builds compile assert out via NDEBUG.
+			// This safeguard must fire in production. Cost: three uint
+			// loads + three compares per precomputed-snap use site
+			// (~5-10 ns); negligible vs the ~975 ns saved per use.
+			if (literal_stack_.size() != precomputed_snap->trail_size
+			    || removed_clauses_.size() != precomputed_snap->removed_size
+			    || learned_clause_scope_.size() != precomputed_snap->lscope_size) {
+				std::cerr << "\n*** PRECOMPUTED_SNAP_STATE_DIVERGED ***\n"
+				          << "  trail_size:    snap=" << precomputed_snap->trail_size
+				          << " now=" << literal_stack_.size() << "\n"
+				          << "  removed_size:  snap=" << precomputed_snap->removed_size
+				          << " now=" << removed_clauses_.size() << "\n"
+				          << "  lscope_size:   snap=" << precomputed_snap->lscope_size
+				          << " now=" << learned_clause_scope_.size() << "\n"
+				          << "  depth=" << depth << " comp.num_vars="
+				          << comp.num_variables() << "\n"
+				          << "  state mutated between caller's key build and "
+				          << "solveComponent entry — passing the precomputed key "
+				          << "could cause silent cache corruption.\n";
+				std::cerr.flush();
+				std::abort();
+			}
 
 			// Env-gated shadow verifier: rebuild the key here and compare
 			// structurally. Catches mismatches the size-based snapshot
