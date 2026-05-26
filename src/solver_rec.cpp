@@ -1945,9 +1945,15 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 		} else {
 			// Clause element
 			if (isClauseRemoved(el.id) || isSatisfied(el.id)) {
+				// Same comp, rest of separator. Pass entry_snap for the
+				// same reasoning as the var-consumed-by-BCP path above:
+				// state is restored by DPLL pop-on-return, so the
+				// entry-built key is still valid. Snapshot assertion at
+				// the recursion's entry aborts loudly if not.
 				return solveComponent(comp, rest, false, depth, nd_node,
 				                      reactive_metis_skip_until_depth,
-				                      abstract_budget);
+				                      abstract_budget,
+				                      entry_snap);
 			}
 			// Count active literals; if the separator clause has been
 			// shortened by BCP to length ≤ 2, a clause-branch loses
