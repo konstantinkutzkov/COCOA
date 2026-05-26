@@ -780,7 +780,8 @@ private:
 	                           int nd_node = -1,
 	                           bool from_separator = false,
 	                           int reactive_metis_skip_until_depth = 0,
-	                           double child_abstract_budget = 0.0);
+	                           double child_abstract_budget = 0.0,
+	                           const PrecomputedKeySnapshot *parent_snap = nullptr);
 	// Branch on a clause (removed vs removed+negated).
 	mpz_class branchOnClause(ClauseOfs cl_ofs,
 	                          Component &comp,
