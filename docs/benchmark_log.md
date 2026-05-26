@@ -4,7 +4,81 @@ Chronological record of solver timing measurements. Every run recorded
 here includes: commit hash, compiler flags, solver CLI flags, input
 instance, measured wall time, and any environmental notes.
 
-## 2026-05-26 — `distinct_keys` diagnostic gated + cache density wins: t1_045 35.17 min, post-fix regression closed
+## 2026-05-26 — Clean-CPU re-measurement: t1_045 sound best is 34.41 min; new plumbing reverted
+
+Tracked down a stray sharpSAT process (PID 83908) that had been running
+at 99 % CPU for ~8 hours, leftover from a SHARPSAT_PROGRESS smoke test
+earlier in the session that used `SHARPSAT_PROGRESS_INTERVAL=0.05` and
+ground itself to a halt on t1_011. This contaminated every measurement
+made since the stray started — including the 35.17 min t1_045 number
+recorded earlier today (2026-05-26).
+
+After killing the stray, re-measurements on a clean CPU:
+
+| binary | wall on clean CPU | per-decision |
+|---|---:|---:|
+| `877a570` (post-`distinct_keys` gate, no precomputed_key plumbing) | **2064.70 s (34.41 min)** | **3.020 μs** |
+| HEAD with all 5 precomputed_key plumbing commits | 2072.33 s (34.54 min) | 3.030 μs |
+
+Both runs produced count `132 951 278 067 432` and decision count
+`683 874 584` — bit-identical trajectory; the difference is purely
+per-decision throughput.
+
+The 877a570 binary is checkpointed at `binaries/sharpSAT.877a570` with
+a sidecar `.md` documenting the build provenance.
+
+### Conclusion: revert the precomputed_key plumbing for the 3 new sites
+
+The new sites (1827, 1851, 2015 — separator-rest-continuation and
+`branchOnLiteral` lit-already-T_TRI) don't fire often enough on
+t1_045 / t1_049 to amortize the per-`solveComponent` snapshot
+construction + parameter-passing overhead. Net effect:
+
+- t1_045: plumbing cost +7.6 s / +0.37 % (2064.70 → 2072.33 s)
+- t1_049: plumbing cost +3.2 s / +1.0 %  (321.59 → 324.79 s)
+
+Both small but in the same direction across two independent
+instances. Reverted commits 838a621 (site 2015 + branchOnLiteral
+signature), 7b4b9b5 (site 1851), and 4977ce5 (site 1827 +
+solveComponentImpl signature).
+
+### What is kept
+
+The supporting **infrastructure** is preserved:
+
+- `b7b089c` PrecomputedKeySnapshot struct + shadow verifier
+  (`SHARPSAT_VERIFY_PRECOMPUTED_KEY=1`). Cost is ~zero unless a
+  site actually passes a snap.
+- The existing site 1320 (post-consumption decompose loop, the only
+  site that ever benefited from precomputed_key) continues to use the
+  snapshot mechanism with the always-on size assertion.
+- `61d2583` Release-safety fix for the assertion.
+- `binaries/sharpSAT.877a570` checkpoint binary + sidecar `.md`.
+
+If a future instance is found where the rest-continuation paths fire
+often (instrumentable cheaply via a counter at each site), the
+plumbings can be re-introduced one site at a time using the existing
+infrastructure. The plan and per-site safety reasoning remain in
+`docs/precomputed_key_extension_plan.md`.
+
+### New sound best on t1_045
+
+**34.41 min** (clean CPU, 877a570 binary equivalent). Beats the
+2026-05-23 unsound build (34.87 min) by 27 s while remaining sound.
+The previously-recorded 35.17 min was contaminated; supersede it.
+
+### Lesson
+
+Before any A/B perf measurement, **explicitly check for stray
+sharpSAT processes** with `ps aux | grep "[s]harpSAT"`. Any
+unexpected hit invalidates the comparison. See
+`memory/feedback_check_cpu_before_measuring.md`.
+
+---
+
+## 2026-05-26 — `distinct_keys` diagnostic gated + cache density wins: t1_045 35.17 min (SUPERSEDED — see clean-CPU re-measurement above)
+
+**SUPERSEDED**: the 35.17 min figure below was measured under stray-process CPU contention. Clean-CPU figure for the same binary (`877a570`) is **34.41 min** — see the entry above.
 
 Today's four wall-time-relevant commits (51f85ac cache density, c4a6efe
 redundant-lane gate, cf8082a L1/L2_STORE instrumentation, 877a570
