@@ -691,15 +691,40 @@ private:
 	// propagated verbatim through separator consumption and into child
 	// sub-components. Only a failed reactive call inside the current
 	// subtree raises it.
-	// `precomputed_key` (optional): the caller already built the canonical
+	// Snapshot bundling a precomputed canonical_key with the solver state
+	// fingerprints required to verify the key is still valid at the use
+	// site. canonical_key is a pure function of (comp, literal_values_,
+	// removed_clauses_, learned_clause_scope_, …); a key built at point A
+	// and used at point B is valid iff none of those inputs changed
+	// between A and B without being restored.
+	//
+	// trail_size catches literal_values_ mutations: every setLiteralIfFree
+	// pushes onto literal_stack_, every unSet pops. If trail_size at A
+	// equals trail_size at B, every literal pushed in between was popped,
+	// so literal_values_ for vars in comp is restored. removed_size and
+	// lscope_size give the same monotone-restored property for
+	// removed_clauses_ and learned_clause_scope_.
+	//
+	// Always-on assertion at the use site catches any state mismatch and
+	// aborts loudly. Env-gated SHARPSAT_VERIFY_PRECOMPUTED_KEY additionally
+	// rebuilds the key and compares structurally — used for one-shot
+	// validation runs after plumbing a new use site. See
+	// docs/precomputed_key_extension_plan.md.
+	struct PrecomputedKeySnapshot {
+		CanonicalKey key;
+		size_t trail_size;
+		size_t removed_size;
+		size_t lscope_size;
+	};
+
+	// `precomputed_snap` (optional): the caller already built the canonical
 	// key for `comp` and L2-peeked the cache with a confirmed MISS. When
 	// non-null, solveComponent's entry skips the redundant buildCanonicalKey
-	// + L2 peek and uses *precomputed_key directly. Caller is responsible
-	// for ensuring (a) the value is bit-identical to what buildCanonicalKey
-	// would produce here, (b) the cache state hasn't changed since the
-	// caller's peek (single-threaded), and (c) the L2 peek genuinely missed.
-	// Currently used only at solveComponentImpl's post-consumption decompose
-	// loop. See docs/precomputed_key_safety_analysis.md for the verification.
+	// + L2 peek and uses precomputed_snap->key directly, after asserting
+	// the snapshot's trail_size / removed_size / lscope_size still match.
+	// Currently used at solveComponentImpl's post-consumption decompose
+	// loop. See docs/precomputed_key_safety_analysis.md +
+	// docs/precomputed_key_extension_plan.md for the verification.
 	mpz_class solveComponent(Component &comp,
 	                         std::vector<CutNode> separator,
 	                         bool separator_reset,
@@ -707,7 +732,7 @@ private:
 	                         int nd_node = -1,  // hierarchy node, -1 = use root
 	                         int reactive_metis_skip_until_depth = 0,
 	                         double abstract_budget = 0.0,
-	                         const CanonicalKey *precomputed_key = nullptr);
+	                         const PrecomputedKeySnapshot *precomputed_snap = nullptr);
 
 	// The body of solveComponent. The public solveComponent wraps this
 	// with function-boundary memoization (canonical-key lookup at

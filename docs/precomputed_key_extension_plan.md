@@ -168,8 +168,98 @@ For each commit (one per plumbed site, or one bundled commit):
 | t1_049 60 s decision throughput | ≥ baseline; no >2 % drop |
 | t1_049 full run count | exactly `8695763196077742` |
 | t1_049 full run wall time | ≤ today's 321.6 s baseline |
+| Suite under `SHARPSAT_VERIFY_PRECOMPUTED_KEY=1` (see below) | zero `PRECOMPUTED_KEY_STALE` aborts |
 
 Commit only if all pass.
+
+## Hard safeguards (mandatory infrastructure before plumbing any site)
+
+The audit-by-reading approach can miss a stale-key bug whose only
+symptom is a silently wrong final count via a cache STORE under the
+wrong key. To convert this from "we read the code carefully" to
+"any stale key crashes loudly the moment it occurs," add two
+mechanisms before plumbing the first site:
+
+### 1. Snapshot struct + always-on assertion
+
+`canonical_key` is a pure function of `(comp, literal_values_,
+removed_clauses_, learned_clause_scope_, …)`. Of these,
+`literal_values_` mutates most often but is the most disciplined:
+every `setLiteralIfFree(lit)` pushes onto `literal_stack_`; every
+`unSet(lit)` pops it. **The trail size is a perfect proxy for "is
+literal_values_ restored to what it was when the key was built."**
+
+```cpp
+struct PrecomputedKeySnapshot {
+    CanonicalKey key;
+    size_t trail_size;        // literal_stack_.size() at build
+    size_t removed_size;      // removed_clauses_.size() at build
+    size_t lscope_size;       // learned_clause_scope_.size() at build
+};
+```
+
+At the recursion site, before using the snapshot's key:
+
+```cpp
+assert(literal_stack_.size() == snap.trail_size
+    && removed_clauses_.size() == snap.removed_size
+    && learned_clause_scope_.size() == snap.lscope_size
+    && "stale precomputed_key: state mutated and not restored");
+```
+
+Cost: four size reads, three compares. Negligible. Catches every
+case where state mutated between build and use without being restored.
+
+Why `removed_clauses_.size()` rather than `removed_clauses_version_`:
+the version bumps on every mark AND every unmark, so a balanced
+mark+unmark in the intervening code would bump the version by 2 even
+though the NET set is unchanged. The size check tolerates balanced
+modifications (correct for the rest-continuation invariant we
+actually need). Same reasoning for `learned_clause_scope_.size()`.
+
+### 2. Shadow-rebuild verifier (env-gated, off in production)
+
+Same pattern as the existing `verifyL2Store` in
+`src/solver_diagnostics.cpp`:
+
+```cpp
+if (std::getenv("SHARPSAT_VERIFY_PRECOMPUTED_KEY")) {
+    CanonicalKey fresh = buildCanonicalKey(comp, ...);
+    if (fresh != *precomputed_key) {
+        std::cerr << "*** PRECOMPUTED_KEY_STALE ***\n"
+                  << "  expected hash=" << fresh.hash << "\n"
+                  << "  precomputed hash=" << precomputed_key->hash << "\n";
+        std::abort();
+    }
+}
+```
+
+Cost when on: a full canonical_key rebuild per use site (defeats the
+optimization, but only at debug time). Cost when off: one env-var
+check at startup (`static const bool` evaluates once via the lambda
+pattern used by `SHARPSAT_PROGRESS`). Catches structural mismatches
+that the size-based snapshot can't (e.g. if some operation we missed
+mutates state without changing trail size — currently we don't know
+of any such operation, but the verifier provides the guarantee).
+
+**Run the full regression suite under
+`SHARPSAT_VERIFY_PRECOMPUTED_KEY=1` once per plumbed site.** If
+zero aborts, ship with the verifier off; the snapshot assertion stays
+always-on.
+
+## Updated implementation order
+
+The hard safeguards land BEFORE any new site plumbing:
+
+| Step | Change | Test |
+|---|---|---|
+| 0a | Define `PrecomputedKeySnapshot` struct + the assertion at the existing site 1320 | t1_065, t1_011, t1_049 60s: no aborts |
+| 0b | Add `SHARPSAT_VERIFY_PRECOMPUTED_KEY` env-gated shadow verifier | Run suite under env-on; assert zero aborts |
+| 1 | Plumb site 1827 (var consumed by BCP, rest-continuation) | Full regression suite + shadow verifier ON |
+| 2 | Plumb site 1851 (clause removed/satisfied, rest-continuation) | Full regression suite + shadow verifier ON |
+| 3 | Plumb site 2015 (branchOnLiteral, lit already T_TRI) | Full regression suite + shadow verifier ON + `t1_045` count |
+
+Each step is one commit. Steps 1–3 are atomic and revertable.
 
 ## Rollback strategy
 

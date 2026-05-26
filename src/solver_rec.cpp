@@ -345,7 +345,7 @@ mpz_class Solver::solveComponent(Component &comp,
                                   int nd_node,
                                   int reactive_metis_skip_until_depth,
                                   double abstract_budget,
-                                  const CanonicalKey *precomputed_key) {
+                                  const PrecomputedKeySnapshot *precomputed_snap) {
 	if (stopwatch_.timeBoundBroken()) {
 		// Capture chain (outer levels) if not already captured.
 		// NOTE: timeout is an abort, not a leaf event — closed_log_sum_
@@ -370,13 +370,69 @@ mpz_class Solver::solveComponent(Component &comp,
 	unsigned free_vars = 0;
 	bool key_built = false;
 	if (can_cache) {
-		if (precomputed_key != nullptr) {
-			// Caller (solveComponentImpl's decompose loop at line ~1162)
-			// already built the canonical_key and L2-peeked. Re-using
-			// their result avoids a redundant buildCanonicalKey + peek
-			// (~780 ns saved per case). Safety verified in
-			// docs/precomputed_key_safety_analysis.md.
-			cached_key = *precomputed_key;
+		if (precomputed_snap != nullptr) {
+			// Caller already built the canonical_key for `comp` and
+			// L2-peeked with a confirmed MISS. Re-using their result
+			// avoids a redundant buildCanonicalKey + peek (~780 ns saved).
+			// Safety verified in docs/precomputed_key_safety_analysis.md
+			// + docs/precomputed_key_extension_plan.md.
+
+			// Always-on hard safeguard: canonical_key is a pure function
+			// of (comp, literal_values_, removed_clauses_,
+			// learned_clause_scope_, …). If any of these inputs has
+			// changed between the caller's build and our use without
+			// being restored, the snapshot's key is stale — and
+			// silently storing a count under a stale key is a soundness
+			// bug (cache pollution → wrong counts on later hits).
+			//
+			// trail_size catches literal_values_ mutations precisely:
+			// every setLiteralIfFree pushes onto literal_stack_, every
+			// unSet pops. Equal trail size ⇔ every push was matched by
+			// a pop ⇔ literal_values_ for vars in comp is restored.
+			// removed_size / lscope_size give the same property for
+			// removed_clauses_ and learned_clause_scope_. Size (not
+			// version_) is used so balanced mark+unmark is tolerated.
+			assert(literal_stack_.size() == precomputed_snap->trail_size
+			    && removed_clauses_.size() == precomputed_snap->removed_size
+			    && learned_clause_scope_.size() == precomputed_snap->lscope_size
+			    && "stale precomputed_snap: state mutated and not restored "
+			       "between caller's key build and solveComponent entry");
+
+			// Env-gated shadow verifier: rebuild the key here and compare
+			// structurally. Catches mismatches the size-based snapshot
+			// can't (e.g. an operation that mutates without changing
+			// trail size — we don't know of any, but the verifier
+			// provides the guarantee). Off in production. Used for
+			// one-shot validation runs after plumbing a new use site.
+			static const bool verify_precomputed_key = []() {
+				const char *e = std::getenv("SHARPSAT_VERIFY_PRECOMPUTED_KEY");
+				return e && e[0] == '1';
+			}();
+			if (verify_precomputed_key) {
+				CanonicalKey fresh = buildCanonicalKey(
+				    comp, literal_pool_, literals_, literal_values_,
+				    comp_manager_.getAnalyzer().clauseIdToOfs(),
+				    removed_clauses_,
+				    original_lit_pool_size_, config_.wl_iterations,
+				    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+				if (!(fresh.hash == precomputed_snap->key.hash
+				      && fresh.hash_hi == precomputed_snap->key.hash_hi
+				      && fresh.num_vars == precomputed_snap->key.num_vars
+				      && fresh.n_in_clauses == precomputed_snap->key.n_in_clauses)) {
+					std::cerr << "\n*** PRECOMPUTED_KEY_STALE ***\n"
+					          << "  expected hash=0x" << std::hex
+					          << precomputed_snap->key.hash << ":"
+					          << precomputed_snap->key.hash_hi << std::dec << "\n"
+					          << "  rebuilt  hash=0x" << std::hex
+					          << fresh.hash << ":" << fresh.hash_hi << std::dec << "\n"
+					          << "  depth=" << depth << " comp.num_vars="
+					          << comp.num_variables() << "\n";
+					std::cerr.flush();
+					std::abort();
+				}
+			}
+
+			cached_key = precomputed_snap->key;
 			key_built = true;
 			free_vars = (cached_key.num_vars > cached_key.n_in_clauses)
 			    ? (cached_key.num_vars - cached_key.n_in_clauses) : 0;
@@ -1198,6 +1254,15 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 					original_lit_pool_size_, config_.wl_iterations,
 					static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
 			}
+			// Snapshot state at key-build time for the precomputed-snapshot
+			// path in the recursive solveComponent call below. Used by the
+			// hard safeguard there to assert the key is still valid.
+			PrecomputedKeySnapshot snap{
+				key,
+				literal_stack_.size(),
+				removed_clauses_.size(),
+				learned_clause_scope_.size()
+			};
 			bool hit;
 			{
 				OpTimer _t(this, OP_L2_PEEK);
@@ -1313,14 +1378,15 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				}
 			} sub_filter(*this, *sub, decomposed);
 			int sub_nd = config_.picker_root_sep_only ? -1 : child_nd_node;
-			// Pass &key as precomputed_key: we already built the canonical
-			// key and L2-peeked above (line ~1162, ~1184). Avoids redundant
-			// build + peek at recursion entry. Safety analysis in
-			// docs/precomputed_key_safety_analysis.md.
+			// Pass &snap as precomputed_snap: we already built the canonical
+			// key for *sub and L2-peeked above with a confirmed MISS. The
+			// recursion's entry will assert state fingerprints still match
+			// before using the key. Safety analysis in
+			// docs/precomputed_key_safety_analysis.md + extension plan.
 			sub_count = solveComponent(*sub, {}, true, depth + 1, sub_nd,
 			                           reactive_metis_skip_until_depth,
 			                           sub_budget,
-			                           &key);
+			                           &snap);
 
 
 			// Brute-force cache check at STORE time. If sub-component is
