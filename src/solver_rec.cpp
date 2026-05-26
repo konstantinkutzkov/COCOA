@@ -507,6 +507,28 @@ mpz_class Solver::solveComponent(Component &comp,
 		}  // close: else branch of precomputed_key check
 	}
 
+	// Snapshot the entry state for rest-continuation recursions on the
+	// SAME `comp`. cached_key was built from the current literal_values_
+	// + removed_clauses_ + learned_clause_scope_; if any recursion
+	// inside this body fully unwinds its state (which DPLL's pop-on-
+	// return discipline guarantees for setLiteralIfFree/unSet and for
+	// markClauseRemoved/unmarkClauseRemoved), then at any rest-continuation
+	// point the trail/removed/lscope sizes are still equal to these,
+	// and cached_key is still valid for `comp`. The hard safeguard in
+	// the recursion's entry asserts this — if any unwound code path
+	// fails to restore, the assertion aborts loudly.
+	//
+	// Used only when key_built is true (can_cache + we built or were
+	// passed a key); otherwise sites pass nullptr and the recursion
+	// builds its own key.
+	PrecomputedKeySnapshot entry_snap;
+	if (key_built) {
+		entry_snap = {cached_key,
+		              literal_stack_.size(),
+		              removed_clauses_.size(),
+		              learned_clause_scope_.size()};
+	}
+
 	// Per-component XOR scope. On entry, walk comp's clauses once to
 	// initialize current_component_xor_; the assign/unassign hooks then
 	// keep it in sync through this component's lifetime (BCP + recursion).
@@ -553,7 +575,8 @@ mpz_class Solver::solveComponent(Component &comp,
 
 	mpz_class result = solveComponentImpl(
 	    comp, std::move(separator), separator_reset, depth, nd_node,
-	    reactive_metis_skip_until_depth, abstract_budget);
+	    reactive_metis_skip_until_depth, abstract_budget,
+	    key_built ? &entry_snap : nullptr);
 
 	if (can_cache && key_built) {
 		mpz_class structural = result;
@@ -588,7 +611,8 @@ mpz_class Solver::solveComponentImpl(Component &comp,
                                   int depth,
                                   int nd_node,
                                   int reactive_metis_skip_until_depth,
-                                  double abstract_budget) {
+                                  double abstract_budget,
+                                  const PrecomputedKeySnapshot *entry_snap) {
 	// Push this comp onto the chain of in-progress sub-components for
 	// the OPEN_WORK snapshot. RAII guard ensures we pop on every exit
 	// path (normal return, timeout return, etc.).
@@ -1890,9 +1914,16 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			if (!isActive(LiteralID(el.id, true))) {
 				// Consumed by BCP — skip. No decision spent, no
 				// budget split: pass abstract_budget through.
+				// Pass entry_snap as precomputed snapshot: we recurse
+				// on the SAME `comp` with the SAME literal_values_ /
+				// removed_clauses_ / learned_clause_scope_ as at entry
+				// (DPLL pop-on-return restores any intermediate
+				// mutation). The recursion's entry will assert state
+				// fingerprints still match before using the key.
 				return solveComponent(comp, rest, false, depth, nd_node,
 				                      reactive_metis_skip_until_depth,
-				                      abstract_budget);
+				                      abstract_budget,
+				                      entry_snap);
 			}
 			// Branch: A = v=true, B = v=false. This branch consumes a
 			// separator element — learning must be suppressed inside.

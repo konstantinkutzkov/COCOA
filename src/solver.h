@@ -750,7 +750,8 @@ private:
 	                             int depth = 0,
 	                             int nd_node = -1,
 	                             int reactive_metis_skip_until_depth = 0,
-	                             double abstract_budget = 0.0);
+	                             double abstract_budget = 0.0,
+	                             const PrecomputedKeySnapshot *entry_snap = nullptr);
 	// Branch on a literal, run BCP, recurse, then restore state.
 	//
 	// `from_separator` distinguishes the two call sites:
