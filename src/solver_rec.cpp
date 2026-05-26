@@ -718,8 +718,7 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				mpz_class arm1 = branchOnLiteral(
 				    other, comp, separator, separator_reset,
 				    depth, nd_node, /*from_separator=*/false,
-				    reactive_metis_skip_until_depth, child_budget,
-				    entry_snap);
+				    reactive_metis_skip_until_depth, child_budget);
 				return bias_choice.arm0_count + arm1;
 			}
 			default:
@@ -1890,14 +1889,12 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			                              separator, false, depth, nd_fwd,
 			                              v_in_sep,
 			                              reactive_metis_skip_until_depth,
-			                              child_budget,
-			                              entry_snap);
+			                              child_budget);
 			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp,
 			                              separator, false, depth, nd_fwd,
 			                              v_in_sep,
 			                              reactive_metis_skip_until_depth,
-			                              child_budget,
-			                              entry_snap);
+			                              child_budget);
 			return A + B;
 		} else {
 			ClauseOfs ofs = (ClauseOfs)tgt.id;
@@ -1956,14 +1953,12 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			                              comp, rest, false, depth, nd_node,
 			                              /*from_separator=*/true,
 			                              reactive_metis_skip_until_depth,
-			                              child_budget,
-			                              entry_snap);
+			                              child_budget);
 			mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t,
 			                              comp, rest, false, depth, nd_node,
 			                              /*from_separator=*/true,
 			                              reactive_metis_skip_until_depth,
-			                              child_budget,
-			                              entry_snap);
+			                              child_budget);
 			return A + B;
 		} else {
 			// Clause element
@@ -2046,14 +2041,12 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				                              false, depth, nd_node,
 				                              /*from_separator=*/true,
 				                              reactive_metis_skip_until_depth,
-				                              child_budget,
-				                              entry_snap);
+				                              child_budget);
 				mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, rest,
 				                              false, depth, nd_node,
 				                              /*from_separator=*/true,
 				                              reactive_metis_skip_until_depth,
-				                              child_budget,
-				                              entry_snap);
+				                              child_budget);
 				return A + B;
 			}
 			mpz_class A = branchOnClause(el.id, comp, rest, false, false, depth, nd_node,
@@ -2101,13 +2094,11 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 	mpz_class A = branchOnLiteral(t_first ? lit_t : lit_f, comp, {}, false, depth, -1,
 	                              /*from_separator=*/false,
 	                              reactive_metis_skip_until_depth,
-	                              child_budget,
-	                              entry_snap);
+	                              child_budget);
 	mpz_class B = branchOnLiteral(t_first ? lit_f : lit_t, comp, {}, false, depth, -1,
 	                              /*from_separator=*/false,
 	                              reactive_metis_skip_until_depth,
-	                              child_budget,
-	                              entry_snap);
+	                              child_budget);
 	return A + B;
 }
 
@@ -2117,8 +2108,7 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
                                    bool separator_reset, int depth, int nd_node,
                                    bool from_separator,
                                    int reactive_metis_skip_until_depth,
-                                   double child_abstract_budget,
-                                   const PrecomputedKeySnapshot *parent_snap) {
+                                   double child_abstract_budget) {
 	unsigned lit_save = literal_stack_.size();
 	// Invariants T1+T2 (gated): snapshot trail state for restore-check.
 	std::size_t snap_removed_size = 0;
@@ -2142,16 +2132,11 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 			return 0;
 		}
 		// Literal already T_TRI: no decision made, pass budget
-		// through unchanged. branchOnLiteral itself has not mutated
-		// any input to canonical_key on this path, so parent_snap is
-		// still valid (when the caller provided one — it has the same
-		// validity as it did at branchOnLiteral entry, since no
-		// setLiteralIfFree fired between entry and here).
+		// through unchanged.
 		return solveComponent(comp, std::move(separator), separator_reset,
 		                      depth, nd_node,
 		                      reactive_metis_skip_until_depth,
-		                      child_abstract_budget,
-		                      parent_snap);
+		                      child_abstract_budget);
 	}
 
 	// Push a placeholder StackLevel BEFORE setLiteralIfFree so:
