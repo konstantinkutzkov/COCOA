@@ -174,7 +174,8 @@ SOLVER_StateT Solver::countSATRec() {
 		int build_n_vars = (guard_var_ > 0)
 		                     ? (int)(guard_var_ - 1)
 		                     : (int)num_variables();
-		nd_hierarchy_.build(build_n_vars, clause_list, binary_pairs);
+		nd_hierarchy_.build(build_n_vars, clause_list, binary_pairs,
+		                    config_.metis_vars_only);
 		computeNdCentrality();
 	}
 
@@ -324,7 +325,10 @@ SOLVER_StateT Solver::countSATRec() {
 		statistics_.set_final_solution_count(0);
 		return TIMEOUT;
 	}
-	statistics_.set_final_solution_count(result);
+	// Apply projection multiplier from Arjun (default 1 → no-op).
+	// Encodes the 2^k factor for variables Arjun eliminated as
+	// genuinely-free. See Instance::count_multiplier_.
+	statistics_.set_final_solution_count(result * count_multiplier_);
 	return SUCCESS;
 }
 
@@ -427,12 +431,18 @@ mpz_class Solver::solveComponent(Component &comp,
 				return e && e[0] == '1';
 			}();
 			if (verify_precomputed_key) {
-				CanonicalKey fresh = buildCanonicalKey(
-				    comp, literal_pool_, literals_, literal_values_,
-				    comp_manager_.getAnalyzer().clauseIdToOfs(),
-				    removed_clauses_,
-				    original_lit_pool_size_, config_.wl_iterations,
-				    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+				CanonicalKey fresh = (config_.cache_hash_mode == SolverConfiguration::IDENTITY)
+				    ? buildIdentityKey(
+				        comp, literal_pool_, literal_values_,
+				        comp_manager_.getAnalyzer().clauseIdToOfs(),
+				        removed_clauses_, original_lit_pool_size_)
+				    : buildCanonicalKey(
+				        comp, literal_pool_, literals_, literal_values_,
+				        comp_manager_.getAnalyzer().clauseIdToOfs(),
+				        removed_clauses_,
+				        original_lit_pool_size_, config_.wl_iterations,
+				        static_wl_labels_.empty() ? nullptr : &static_wl_labels_,
+				        config_.use_indep_restriction ? &is_indep_ : nullptr);
 				if (!(fresh.hash == precomputed_snap->key.hash
 				      && fresh.hash_hi == precomputed_snap->key.hash_hi
 				      && fresh.num_vars == precomputed_snap->key.num_vars
@@ -468,11 +478,19 @@ mpz_class Solver::solveComponent(Component &comp,
 		const auto &rm = removed_clauses_;
 		{
 			OpTimer _t(this, OP_CANONICAL);
-			cached_key = buildCanonicalKey(
-			    comp, literal_pool_, literals_, literal_values_,
-			    comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
-			    original_lit_pool_size_, config_.wl_iterations,
-			    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+			if (config_.cache_hash_mode == SolverConfiguration::IDENTITY) {
+				cached_key = buildIdentityKey(
+				    comp, literal_pool_, literal_values_,
+				    comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
+				    original_lit_pool_size_);
+			} else {
+				cached_key = buildCanonicalKey(
+				    comp, literal_pool_, literals_, literal_values_,
+				    comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
+				    original_lit_pool_size_, config_.wl_iterations,
+				    static_wl_labels_.empty() ? nullptr : &static_wl_labels_,
+				    config_.use_indep_restriction ? &is_indep_ : nullptr);
+			}
 		}
 		key_built = true;
 		free_vars = (cached_key.num_vars > cached_key.n_in_clauses)
@@ -751,6 +769,8 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				          << " bound_log2=" << open_work_log2_bound_
 				          << " decisions=" << statistics_.num_decisions_
 				          << " l2_hits=" << comp_manager_.contentCache().stats_hits
+				          << " scc_fires_lit=" << statistics_.num_scc_unsat_pruned_lit_
+				          << " scc_fires_clause=" << statistics_.num_scc_unsat_pruned_clause_
 				          << std::endl;
 				last_progress_emit_s_ = now;
 			}
@@ -1266,11 +1286,19 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			CanonicalKey key;
 			{
 				OpTimer _t(this, OP_CANONICAL);
-				key = buildCanonicalKey(
-					*sub, literal_pool_, literals_, literal_values_,
-					comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
-					original_lit_pool_size_, config_.wl_iterations,
-					static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+				if (config_.cache_hash_mode == SolverConfiguration::IDENTITY) {
+					key = buildIdentityKey(
+						*sub, literal_pool_, literal_values_,
+						comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
+						original_lit_pool_size_);
+				} else {
+					key = buildCanonicalKey(
+						*sub, literal_pool_, literals_, literal_values_,
+						comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
+						original_lit_pool_size_, config_.wl_iterations,
+						static_wl_labels_.empty() ? nullptr : &static_wl_labels_,
+						config_.use_indep_restriction ? &is_indep_ : nullptr);
+				}
 			}
 			// Snapshot state at key-build time for the precomputed-snapshot
 			// path in the recursive solveComponent call below. Used by the
@@ -2029,7 +2057,13 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 	// legacy activity-score picker.
 	VariableIndex v = 0;
 
-	if (config_.perform_adaptive_branching) {
+	// When picker_order is set, always go through pickBranchVariable
+	// (it dispatches to the fixed-order path internally). Bypasses
+	// adaptive's probing entirely.
+	if (config_.picker_order != SolverConfiguration::NONE) {
+		OpTimer _t(this, OP_PICK);
+		v = pickBranchVariable(comp);
+	} else if (config_.perform_adaptive_branching) {
 		bool comp_unsat = false;
 		{
 			OpTimer _t(this, OP_PICK);
@@ -2238,6 +2272,11 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		noteResolved(child_abstract_budget);
 		result = 0;
 	} else {
+		// SCC-based UNSAT prune was previously checked here (2026-05-27)
+		// but removed (2026-05-28) — per-call cost dominated the
+		// occasional savings. The check now lives only in
+		// branchOnClause's negate arm with a clause-length gate; see
+		// scc_unsat_solver.cpp + solver_config.h::scc_unsat_min_clause_len.
 		result = solveComponent(comp, std::move(separator), separator_reset,
 		                        depth, nd_node,
 		                        reactive_metis_skip_until_depth,
@@ -2474,6 +2513,25 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 			// docs/branchonclause_branch_constraint_plan.md.)
 			noteResolved(child_abstract_budget);
 			result = 0;
+		} else if (config_.use_scc_unsat_prune
+		           && negate_literals
+		           && [&]() {
+			// Length-gate: only fire on clauses long enough to make
+			// the BCP cascade likely to miss a 2-CNF UNSAT.
+			unsigned len = 0;
+			for (auto lt = beginOf(cl_ofs); *lt != SENTINEL_LIT; ++lt) ++len;
+			return len >= config_.scc_unsat_min_clause_len;
+		}()
+		           && sccCheckComponentUnsat(comp)) {
+			// SCC-based 2-SAT UNSAT prune in the negate arm only,
+			// for clauses of length ≥ scc_unsat_min_clause_len (default 5).
+			// The negate arm forces all k literals false at once →
+			// wide BCP cone; SCC catches 2-CNF UNSAT certificates
+			// that BCP's forward propagation missed. branchOnLiteral
+			// has no SCC gate (see comment there for rationale).
+			statistics_.num_scc_unsat_pruned_clause_++;
+			noteResolved(child_abstract_budget);
+			result = 0;
 		} else {
 			result = solveComponent(comp, std::move(separator), separator_reset,
 			                        depth, nd_node,
@@ -2608,13 +2666,66 @@ VariableIndex Solver::pickBranchVariable(Component &comp) {
 	VariableIndex best = 0;
 	float best_score = -1.0f;
 	unsigned active_count = 0;
+	// Pass 1: I-restricted (no-op when use_indep_restriction is off
+	// since is_indep_ defaults all-true).
+	const bool restrict_to_indep = config_.use_indep_restriction;
+
+	// Fixed-order picker: iterate comp's vars, return the one with the
+	// smallest var_to_order_[v] (i.e., highest-priority under the
+	// precomputed order). Bypasses scoreOf entirely. O(comp_size) per
+	// call but no probing.
+	if (config_.picker_order != SolverConfiguration::NONE
+	    && !var_to_order_.empty()) {
+		unsigned best_order_indep = UINT_MAX;
+		VariableIndex best_indep = 0;
+		unsigned best_order_any = UINT_MAX;
+		VariableIndex best_any = 0;
+		for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
+			if (!isActive(LiteralID(*it, true))) continue;
+			active_count++;
+			if (*it >= var_to_order_.size()) continue;
+			const unsigned ord = var_to_order_[*it];
+			if (ord >= best_order_any) {
+				// already worse than current any-best
+			} else {
+				best_order_any = ord;
+				best_any = *it;
+			}
+			if (restrict_to_indep && *it < is_indep_.size() && is_indep_[*it]
+			    && ord < best_order_indep) {
+				best_order_indep = ord;
+				best_indep = *it;
+			}
+		}
+		if (restrict_to_indep && best_indep != 0) return best_indep;
+		return best_any;
+	}
+
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
 		if (!isActive(LiteralID(*it, true))) continue;
+		if (restrict_to_indep && !is_indep_[*it]) continue;
 		active_count++;
 		float s = scoreOf(*it);
 		if (s > best_score) {
 			best_score = s;
 			best = *it;
+		}
+	}
+	// Pass 2: unrestricted fallback when projection found no I-var.
+	// Phase C "DPLL fallback at the indep-support boundary" — under
+	// Arjun's invariant the resulting sub-tree contributes 0 or 1
+	// because each non-I var is functionally determined by the
+	// already-assigned I-vars; the counting machinery just walks the
+	// remaining vars to discover satisfiability.
+	if (best == 0 && restrict_to_indep) {
+		for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
+			if (!isActive(LiteralID(*it, true))) continue;
+			active_count++;
+			float s = scoreOf(*it);
+			if (s > best_score) {
+				best_score = s;
+				best = *it;
+			}
 		}
 	}
 	if (config_.log_branches && best != 0) {
@@ -2667,6 +2778,9 @@ Solver::BranchTarget Solver::pickBranchTarget(
 	if (config_.picker_sep_lockstep) {
 		for (const auto &nd : separator) {
 			if (nd.kind == CutNode::VAR) {
+				// Skip non-I separator vars under projection
+				if (config_.use_indep_restriction
+				    && !is_indep_[nd.id]) continue;
 				if (isActive(LiteralID(nd.id, true))) {
 					best.kind = BranchTarget::VAR;
 					best.id = nd.id;
@@ -2756,6 +2870,12 @@ Solver::BranchTarget Solver::pickBranchTarget(
 	if (do_dump) entries.reserve(64);
 
 	// Phase 2a: score VARs.
+	// Under use_indep_restriction we track best-among-I separately
+	// from best-overall; if any I-var scored above the current best,
+	// we override it at the end. When no I-var is active, fall back to
+	// best-overall (DPLL fallback at the indep-support boundary).
+	const bool restrict_to_indep = config_.use_indep_restriction;
+	BranchTarget best_indep;  // separate tracking for I-vars under projection
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
 		if (!isActive(LiteralID(*it, true))) continue;
 		float raw = (float)comp_manager_.scoreOf(*it);
@@ -2778,6 +2898,11 @@ Solver::BranchTarget Solver::pickBranchTarget(
 			best.kind  = BranchTarget::VAR;
 			best.id    = *it;
 			best.score = s;
+		}
+		if (restrict_to_indep && is_indep_[*it] && s > best_indep.score) {
+			best_indep.kind  = BranchTarget::VAR;
+			best_indep.id    = *it;
+			best_indep.score = s;
 		}
 	}
 
@@ -2854,6 +2979,10 @@ Solver::BranchTarget Solver::pickBranchTarget(
 		          << " score=" << best.score
 		          << "\n";
 	}
+	// Phase C: prefer best-I if projection is on AND any I-var was
+	// scored above the default sentinel; otherwise fall back to
+	// best-overall (DPLL fallback past the indep-support boundary).
+	if (restrict_to_indep && best_indep.score > 0.0f) return best_indep;
 	return best;
 }
 

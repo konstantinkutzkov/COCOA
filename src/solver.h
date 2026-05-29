@@ -151,6 +151,22 @@ public:
 	mutable uint64_t op_count_[OP_COUNT] = {0};
 	mutable uint64_t op_time_ns_[OP_COUNT] = {0};
 
+	// BCP long-clause path-frequency counters (measurement-only, 2026-05-29).
+	// Bucket every iteration of the watch_list_ loop in BCP() by outcome,
+	// to verify the synthesis's "path B is 30-50%" estimate before any
+	// blocker-literal / cached-pos optimization. See docs note on this date.
+	mutable uint64_t bcp_long_visits_ = 0;       // total iterations
+	mutable uint64_t bcp_path_A_ = 0;            // isClauseRemoved skip
+	mutable uint64_t bcp_path_B_ = 0;            // isSatisfied(p_otherLit) skip
+	mutable uint64_t bcp_path_C1_sound_fail_ = 0;  // !learnedClauseInScopeOrSound
+	mutable uint64_t bcp_path_C2_comp_fail_ = 0;   // !learnedClauseInComponent
+	mutable uint64_t bcp_path_D_early_ = 0;      // scan finds replacement at body[2..3]
+	mutable uint64_t bcp_path_E_late_ = 0;       // scan finds replacement at body[>=4]
+	mutable uint64_t bcp_path_F_propagate_ = 0;  // SENTINEL -> propagate other watch
+	mutable uint64_t bcp_path_G_conflict_ = 0;   // SENTINEL -> conflict
+	mutable uint64_t bcp_scan_lits_walked_ = 0;  // total lits walked in scan loop
+	mutable uint64_t bcp_scan_invocations_ = 0;  // how many scans ran
+
 	// RAII timer. Bracket an operation with: { OpTimer _t(this, OP_X); ... }
 	struct OpTimer {
 		const Solver *s;
@@ -184,6 +200,44 @@ public:
 			          << ":avg=" << avg_ns << "ns";
 		}
 		std::cerr << "\n";
+	}
+
+	// Emit BCP long-clause path-frequency counters. Called from FINAL.
+	void printBcpPaths(const char *tag) const {
+		uint64_t v = bcp_long_visits_;
+		auto pct = [v](uint64_t x) {
+			return v > 0 ? 100.0 * (double)x / (double)v : 0.0;
+		};
+		double avg_scan = bcp_scan_invocations_ > 0
+		    ? (double)bcp_scan_lits_walked_ / (double)bcp_scan_invocations_
+		    : 0.0;
+		std::cerr << "BCP_PATHS " << tag
+		          << " visits=" << v
+		          << " A_removed=" << bcp_path_A_ << "(" << pct(bcp_path_A_) << "%)"
+		          << " B_sat=" << bcp_path_B_ << "(" << pct(bcp_path_B_) << "%)"
+		          << " C1_sound=" << bcp_path_C1_sound_fail_ << "(" << pct(bcp_path_C1_sound_fail_) << "%)"
+		          << " C2_comp=" << bcp_path_C2_comp_fail_ << "(" << pct(bcp_path_C2_comp_fail_) << "%)"
+		          << " D_early=" << bcp_path_D_early_ << "(" << pct(bcp_path_D_early_) << "%)"
+		          << " E_late=" << bcp_path_E_late_ << "(" << pct(bcp_path_E_late_) << "%)"
+		          << " F_prop=" << bcp_path_F_propagate_ << "(" << pct(bcp_path_F_propagate_) << "%)"
+		          << " G_confl=" << bcp_path_G_conflict_ << "(" << pct(bcp_path_G_conflict_) << "%)"
+		          << " scan_avg_lits=" << avg_scan
+		          << "\n";
+		// Sound-memo telemetry (counts inside Instance::learnedClauseSound).
+		uint64_t sc = sound_calls_;
+		double memo_hit_pct = sc > 0 ? 100.0 * (double)sound_memo_hits_ / (double)sc : 0.0;
+		double bfs_misses = (double)(sc - sound_memo_hits_);
+		double avg_bfs = bfs_misses > 0 ? (double)sound_bfs_nodes_ / bfs_misses : 0.0;
+		uint64_t icc = in_component_calls_;
+		double in_comp_avg_walk = icc > 0
+		    ? (double)in_component_lits_walked_ / (double)icc : 0.0;
+		std::cerr << "PATHC_DETAIL " << tag
+		          << " sound_calls=" << sc
+		          << " memo_hit%=" << memo_hit_pct
+		          << " avg_bfs_per_miss=" << avg_bfs
+		          << " in_component_calls=" << icc
+		          << " in_component_avg_walk=" << in_comp_avg_walk
+		          << "\n";
 	}
 
 	void solve(const string & file_name);
@@ -258,6 +312,26 @@ public:
 		    removed_clauses_, original_lit_pool_size_);
 	}
 
+	// Test-support: run sccCheckComponentUnsat against the root super-
+	// component, with no trail set. Used by tests/test_scc_unsat_solver.cpp
+	// to drive the bridge layer on tiny CNFs and confirm the right edges
+	// reach the SCC algorithm.
+	bool _sccCheckRootForTest() {
+		Component &root = comp_manager_.superComponentOf(stack_.top());
+		return sccCheckComponentUnsat(root);
+	}
+
+	// Test-support: mark every long clause in the root super-component
+	// as removed (adds each to removed_clauses_). Used to construct
+	// regression tests where the SCC bridge MUST filter removed clauses
+	// — see tests/test_scc_removed_clauses.cpp.
+	void _markAllLongClausesRemovedForTest() {
+		Component &root = comp_manager_.superComponentOf(stack_.top());
+		for (auto it = root.clsBegin(); *it != clsSENTINEL; ++it) {
+			markClauseRemoved(comp_manager_.clauseOfsOf(*it));
+		}
+	}
+
 	// Test-support: randomly permute the stored-literal order within
 	// each original long clause in literal_pool_. Preserves SENTINEL_LIT
 	// terminators. Watch-list references track clauses by ClauseOfs,
@@ -315,6 +389,39 @@ public:
 	void setTimeBound(long int i) {
 		stopwatch_.setTimeBound(i);
 	}
+
+	// Provide Arjun's result for projected counting.
+	// `indep_vars_1based` contains 1-indexed variable IDs in the
+	// independent support I (vars that the picker must branch on).
+	// `multiplier` is Arjun's count-factor for eliminated free vars
+	// (the final reported count is search_count * multiplier).
+	//
+	// Must be called before solve() and applied after createfromFile
+	// has populated the variable space (see solve()).
+	void setArjunResult(std::vector<unsigned> indep_vars_1based,
+	                    mpz_class multiplier) {
+		pending_arjun_indep_ = std::move(indep_vars_1based);
+		pending_arjun_multiplier_ = std::move(multiplier);
+		pending_arjun_set_ = true;
+	}
+
+	// SCC-based 2-SAT UNSAT detection on the residual restricted to
+	// `comp`. Returns true iff some variable in `comp` has both
+	// polarities in the same SCC of the binary-implication graph —
+	// equivalently, the binary subset of the residual formula is
+	// already UNSAT. Sound on the full formula: long clauses can only
+	// strengthen UNSAT, never weaken it. Incomplete: a false result
+	// does NOT prove SAT.
+	//
+	// Input:
+	//   - Active binary clauses (a v b) with both literals X_TRI.
+	//   - Long clauses in `comp` shortened to exactly 2 active literals
+	//     by the current trail (treated as a binary).
+	//
+	// Cost: O(comp.num_variables() + #active binary literals).
+	// Definition lives in src/scc_unsat_solver.cpp (kept separate so
+	// the SCC algorithm can be unit-tested in isolation).
+	bool sccCheckComponentUnsat(Component &comp);
 
 private:
 	SolverConfiguration config_;
@@ -560,6 +667,25 @@ private:
 	// Equivalences queued by setPendingRedundantEquivalences; consumed
 	// by solve() after preprocessing and before search starts.
 	std::vector<std::tuple<unsigned, unsigned, bool>> pending_redundant_equivs_;
+
+	// Arjun result queued by setArjunResult; consumed by solve() after
+	// preprocessing finishes (so the indep mapping is over the post-PP
+	// variable space). When pending_arjun_set_ is true, solve() will
+	// populate is_indep_ from pending_arjun_indep_ and set
+	// count_multiplier_ = pending_arjun_multiplier_.
+	std::vector<unsigned> pending_arjun_indep_;
+	mpz_class             pending_arjun_multiplier_ = 1;
+	bool                  pending_arjun_set_        = false;
+
+	// Fixed branching order (used when config_.picker_order != NONE).
+	// Computed once at solve start. var_to_order_[v] gives v's position
+	// in the fixed order; UINT_MAX means "not in the order" (e.g.,
+	// non-I vars when projection is on). The picker iterates the
+	// component's active vars and returns the one with the smallest
+	// var_to_order_[v]. See computeFixedBranchOrder() below.
+	std::vector<unsigned> fixed_order_vars_;     // ordered list
+	std::vector<unsigned> var_to_order_;         // reverse index
+	void computeFixedBranchOrder();
 
 	// Counters for the experimental -decomposeInSep / -cacheInSep paths,
 	// printed at solve end via printMidSepStats().

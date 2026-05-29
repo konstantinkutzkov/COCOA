@@ -4,6 +4,137 @@ Chronological record of solver timing measurements. Every run recorded
 here includes: commit hash, compiler flags, solver CLI flags, input
 instance, measured wall time, and any environmental notes.
 
+## 2026-05-29 — Blocker literal (Glucose/MiniSat-2 style) → +75 % throughput on triple_no_lockstep t1_105
+
+Added BCP path-frequency counters (path A/B/C/D/E/F/G + scan length) to
+verify the synthesis claim that BCP is the bottleneck on t1_105.
+
+**Profile finding before any code change** (5-min runs on t1_105):
+
+| Config | BCP wall share | BCP per-call | Dominant BCP path |
+|---|---:|---:|---|
+| `-rec -sep 5 -cb 3 -sepMode metis` (default) | 9.7 % | 3.8 μs | n/a (CANONICAL = 80 %) |
+| triple_no_lockstep + `-checkUnsat` | **94.4 %** | **86.9 μs** | B_sat = 52 %, C_scope = 38 % |
+
+Under triple_no_lockstep, B + C = 90 % of all long-clause visits are
+non-productive skips; the productive F_propagate path is 0.19 %.
+
+**Change** (~80 LOC, uncommitted):
+
+- `struct WatchEntry { ClauseOfs ofs; LiteralID blocker; }` replaces
+  `ClauseOfs` as the `watch_list_` element type
+  ([structures.h:82-92](src/structures.h#L82-L92)).
+- BCP loop ([solver.cpp:1067-1140](src/solver.cpp#L1067-L1140)) checks
+  `isSatisfied(itcl->blocker)` FIRST — single `literal_values_` read,
+  no `beginOf(ofs)` cache-line miss. On miss-then-real-B, the stale
+  blocker is refreshed.
+- All `addWatchLinkTo` callers pass the OTHER watched literal as the
+  initial blocker (instance.cpp:218-219, 318-321, instance.h:757-758,
+  solver.cpp:294-295, solver_diagnostics.cpp:1518-1519).
+- On replacement-found, the new entry's blocker = other watch
+  (still X_TRI or T_TRI per the isSatisfied check we just passed).
+- On propagation, the current entry's blocker is updated to the
+  now-T other watch (helps post-backtrack re-descent).
+
+**Result on triple_no_lockstep t1_105, 5-min budget**:
+
+| metric | BEFORE | AFTER | delta |
+|---|---:|---:|---:|
+| decisions | 2 885 490 | **5 059 076** | **+75 %** |
+| cache stores | 823 817 | 943 875 | +15 % |
+| cache hits | 928 247 | **1 945 062** | **+110 %** |
+| BCP visits | 2 246 569 943 | 5 069 928 679 | +126 % |
+| BCP avg per-call (ns) | 86 898 | **53 037** | **−39 %** |
+| BCP wall share | 94.4 % | 93.1 % | − |
+| B_sat count | 1.18 B | 2.77 B | +136 % |
+| C_scope share | 38.1 % | 39.1 % | — (next target) |
+
+Invocation:
+```
+./sharpsat-separator/build/sharpSAT -checkUnsat -rec -sep 5 -cb 3 \
+    -sepMode metis -wlIter 2 -reactiveMetis -reactiveMetisMin 10 \
+    -reactiveMetisSkip 4 -unifiedPicker -decomposeAfterK 1000 \
+    -cascadeW 0 -t 300 ./temp_cnf/mc2025_track1_105.cnf
+```
+
+**Soundness**: count canaries verified identical to memory on t1_065
+(37 778 931 862 957 161 709 568), t1_071, t1_011 (536 870 912 306).
+Default-flag runs also produce identical counts.
+
+**Open**: path C (38 % of BCP visits = learned-clause scope/component
+check at solver.cpp:1090-1093) is now the dominant overhead path.
+Memoization via per-clause [min_var, max_var] or per-(clause,
+sub_varset_version) cache is the candidate next lever.
+
+## 2026-05-29 — Path C postmortem + BFS scratch buffers → +18.5 % more decisions on top of blocker
+
+**Failed first attempt: per-clause outside-mask vars cache** keyed on
+`current_sub_varset_version_` (bumped in SubVarsetGuard ctor/dtor).
+On t1_105 triple_no_lockstep at -t 300: decisions 5.06 M → 5.00 M
+(−1.2 %), BCP per-call 53.0 μs → 53.7 μs (+1.3 % regression). Cause:
+mask-version churn (~10^3/s) leaves the cache cold; unordered_map
+find overhead exceeds the ~10 ns walk it tried to replace; and the
+cache targeted the wrong function entirely.
+
+**Telemetry split (C1 = sound_fail, C2 = comp_fail)** at
+solver.cpp:1115-1124 + new counters in [instance.h:543-617](src/instance.h#L543-L617)
+([sound_calls_, sound_memo_hits_, sound_bfs_nodes_, in_component_calls_, in_component_lits_walked_]):
+
+```
+C1_sound = 1,981,705,593  (39.12 % of BCP visits)
+C2_comp  =     517,190    ( 0.01 %)  ← negligible
+sound_calls = 2.28 B   memo_hit% = 82.86 %
+avg_bfs_per_miss = 6.79 nodes      in_component_avg_walk = 20.13 lits
+```
+
+**99.97 % of path C is the sound check.** Even at 83 % memo hit rate,
+the 17 % BFS misses (388 M calls) each allocated a fresh
+`unordered_set<ClauseOfs>` + `vector<ClauseOfs>` per call — that
+allocation churn is what dominated path C wall time.
+
+**Fix**: reused member scratch buffers + linear-search dedupe (typical
+visited set ~7 entries; linear search beats hashmap at that size).
+[instance.h:543-617 + scratch members at instance.h:564-575](src/instance.h#L543-L617).
+~30 LOC.
+
+**Result on triple_no_lockstep t1_105, -t 300**:
+
+| metric | post-blocker baseline | + BFS scratch | delta |
+|---|---:|---:|---:|
+| decisions | 5 056 494 | **5 991 204** | **+18.5 %** |
+| BCP avg per-call (ns) | 53 073 | **44 318** | **−16.5 %** |
+| BCP visits | 5.07 B | 6.30 B | +24.4 % |
+| cache hits | 1 943 913 | 2 287 733 | +17.7 % |
+| sound_calls | 2.28 B | 2.64 B | +15.6 % |
+| memo_hit % | 82.86 | 82.95 | — |
+| BCP wall share | 93.2 % | 91.6 % | − |
+
+**Cumulative gain vs original triple_no_lockstep baseline** (no blocker, no
+BFS fix): 2 885 490 → 5 991 204 decisions = **+108 % (2.08× throughput)**
+in the same 5-min budget. Counts on canaries t1_065, t1_011, t1_071
+unchanged.
+
+Invocation:
+```
+./sharpsat-separator/build/sharpSAT -checkUnsat -rec -sep 5 -cb 3 \
+    -sepMode metis -wlIter 2 -reactiveMetis -reactiveMetisMin 10 \
+    -reactiveMetisSkip 4 -unifiedPicker -decomposeAfterK 1000 \
+    -cascadeW 0 -t 300 ./temp_cnf/mc2025_track1_105.cnf
+```
+
+**Open**: at 91.6 % BCP wall share, BCP is still the dominant op.
+Within BCP, C1_sound is still 35 % of visits. Next candidate
+optimizations (per [the workflow](postmortem)):
+- Per-Clause sound-version stamp in the clause header (~2 ns header
+  read replaces ~30 ns unordered_map find in the memo)
+- Precomputed "minimal-witness" per learned clause at learn time
+  (sound check becomes O(1-4) set intersection vs O(5-20) BFS)
+- The 17 % memo-miss rate likely sustained by `removed_clauses_version_`
+  churn from branchOnClause/deriv_cache probes — reducing the churn
+  rate would amplify the memo
+
+
+
 ## 2026-05-26 — Clean-CPU re-measurement: t1_045 sound best is 34.41 min; new plumbing reverted
 
 Tracked down a stray sharpSAT process (PID 83908) that had been running

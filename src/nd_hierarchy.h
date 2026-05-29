@@ -88,9 +88,18 @@ struct NDHierarchy {
   //   binary_pairs   - list of (var_a, var_b) for binary clauses; each
   //                    pair represents one binary clause (caller must
   //                    deduplicate)
+  // vars_only: when true, long clauses are encoded as CLIQUES among
+  // their variables (one undirected edge per pair) instead of via aux
+  // clause-nodes in a bipartite graph. The resulting separators
+  // contain only VAR CutNodes — never CLAUSE — so they can be consumed
+  // purely by variable branching. Required for the Arjun integration
+  // (no clause branching post-Arjun) and useful for testing var-only
+  // separator strategies on existing instances. Default false
+  // preserves the bipartite behavior.
   void build(int n_vars,
              const std::vector<std::pair<unsigned, std::vector<unsigned>>> &long_clauses,
              const std::vector<std::pair<unsigned, unsigned>> &binary_pairs,
+             bool vars_only = false,
              int target_npes = 8);
 
   // Look up the best separator for a component described by its active

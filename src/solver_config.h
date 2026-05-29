@@ -101,6 +101,103 @@ struct SolverConfiguration {
   bool perform_clause_branching = false;
   unsigned clause_branch_min_length = 8;
 
+  // METIS graph mode: when true, NDHierarchy::build constructs a
+  // *variable-only* graph for METIS, encoding long clauses as cliques
+  // among their variables (rather than aux clause-nodes in a bipartite
+  // graph). Separators therefore contain only VAR CutNodes, never
+  // CLAUSE — which is required when clause branching is disabled (no
+  // way to "consume" a clause separator element) and for the Arjun
+  // integration where branching is further restricted to the
+  // independent support. Default off — preserves existing bipartite
+  // behavior.
+  //
+  // CLI: -metisVars.
+  bool metis_vars_only = false;
+
+  // Restrict variable branching to the independent support (I).
+  // When false, every active variable is a branching candidate (total
+  // #SAT semantics). When true, the picker filters out variables with
+  // !is_indep_[v]; the leaf factor counts only free I-vars; the final
+  // count is multiplied by count_multiplier_.
+  //
+  // Phase B introduces this gate; Phase D wires it to Arjun's output.
+  // Stays default-off until Arjun integration is complete + verified.
+  //
+  // CLI: -useIndepRestriction (manual, for testing).
+  bool use_indep_restriction = false;
+
+  // Cache hash mode. Two options:
+  //   CANONICAL (default): WL-refinement isomorphism-aware key. Slow per
+  //     call (~30-40us) but catches structurally-equivalent components.
+  //     Best for formulas with symmetries / equivalence chains.
+  //   IDENTITY: chibihash64 over packed [vars + active long clauses].
+  //     ~tens of ns per call (~1000x faster) but only catches LITERALLY
+  //     identical components. Best for instances where the search tree
+  //     re-encounters the exact same partial assignments (Sudoku-like
+  //     structured instances).
+  //
+  // CLI: -hashMode {canonical, identity}.
+  //
+  // For portfolio design: ganak uses IDENTITY exclusively + TD-lookahead
+  // branching. On t1_105 our CANONICAL spends ~15+ min just on key
+  // building over a 30 min budget; identity mode reduces that to ms.
+  enum CacheHashMode { CANONICAL, IDENTITY };
+  CacheHashMode cache_hash_mode = CANONICAL;
+
+  // Picker ordering. When NONE (default), the picker uses its normal
+  // scoring (adaptive or plain). When set to a specific ordering, the
+  // picker iterates comp's active vars and returns the first one (in
+  // global ordering position) that's an active I-var. The fixed order
+  // is computed once at solve start.
+  //
+  // Modes:
+  //   DEGREE — vars sorted by their occurrence count (frequency) in
+  //            the post-preprocessing formula, descending. Cheap to
+  //            compute; reasonable structural proxy.
+  //   (METIS, TD — placeholders for future orderings.)
+  //
+  // CLI: -pickerOrder {degree, metis, td}.
+  //
+  // Hypothesis: a deterministic branching order makes the search tree
+  // more structured, increasing the probability that two sub-trees
+  // reach equivalent residuals (more cache hits). Per-decision cost
+  // drops to ~O(comp_size) with a single comparison per var, no
+  // probing. Pairs naturally with canonical_key (which catches the
+  // most equivalences).
+  // METIS_DEG: run METIS on the var-only short-clause graph (binaries
+  //   + length-3 only), collect separator vars, sort by tuple
+  //   (is_indep, in_separator, degree) descending. Branch in that order.
+  //   Hypothesis: short-clause structural separators sit at high-impact
+  //   positions; ordering by degree within them picks the variables
+  //   that BCP-propagate widely first.
+  enum PickerOrder { NONE, DEGREE, DEGREE_ASC, METIS, TD, METIS_DEG };
+  PickerOrder picker_order = NONE;
+
+  // SCC-based 2-SAT UNSAT pruning. When true, after BCP succeeds in
+  // branchOnLiteral but before the recursive solveComponent call, run
+  // Solver::sccCheckComponentUnsat against the current component. If
+  // the binary-implication graph proves the residual UNSAT, close the
+  // branch with count 0 — saving the whole sub-tree.
+  //
+  // Sound on the full formula: long clauses can only strengthen UNSAT,
+  // so a 2-CNF UNSAT verdict on the binary subset carries over.
+  // Incomplete: misses UNSAT branches that require long-clause
+  // reasoning.
+  //
+  // CLI: -checkUnsat. Default off — no behavioural change for any
+  // existing benchmark unless the flag is explicitly set.
+  //
+  // 2026-05-28: After measurements showed the per-call cost dominated
+  // savings when running on every branchOnLiteral, restricted the call
+  // to ONLY branchOnClause's negate arm with clause length above a
+  // threshold (default 5). The negate arm forces k literals at once,
+  // producing wide BCP cones where SCC has a chance of catching
+  // 2-CNF UNSAT certificates BCP itself missed.
+  //
+  // See docs/scc_unsat_prune_plan.md and src/scc_unsat_solver.cpp.
+  bool use_scc_unsat_prune = false;
+  unsigned scc_unsat_min_clause_len = 5;
+
   // Separator branching: branch on elements of a precomputed METIS
   // nested-dissection separator until the separator is exhausted in the
   // current sub-component, then recurse on disconnected sub-components.

@@ -1,4 +1,5 @@
 #include "solver.h"
+#include "preprocessor_arjun.h"
 #include "preprocessor_light.h"
 
 #include <cstdlib>
@@ -18,6 +19,9 @@ int main(int argc, char *argv[]) {
   string input_file;
   Solver theSolver;
   bool arjun_light = false;
+  bool arjun_full = false;
+  string arjun_save_to;           // -arjunSaveTo <prefix> -> persist outputs
+  string arjun_sidecar_in;        // -arjunSidecar <path> -> reuse prior outputs
 
 
   if (argc <= 1) {
@@ -296,6 +300,38 @@ int main(int argc, char *argv[]) {
       theSolver.statistics().maximum_cache_size_bytes_ = atol(argv[i + 1]) * (uint64_t) 1000000;
     } else if (strcmp(argv[i], "-arjunLight") == 0) {
       arjun_light = true;
+    } else if (strcmp(argv[i], "-arjun") == 0) {
+      arjun_full = true;
+    } else if (strcmp(argv[i], "-arjunSaveTo") == 0) {
+      if (argc <= i + 1) { cout << "-arjunSaveTo needs a path\n"; return -1; }
+      arjun_save_to = argv[i + 1]; i++;
+    } else if (strcmp(argv[i], "-arjunSidecar") == 0) {
+      if (argc <= i + 1) { cout << "-arjunSidecar needs a path\n"; return -1; }
+      arjun_sidecar_in = argv[i + 1]; i++;
+    } else if (strcmp(argv[i], "-metisVars") == 0) {
+      theSolver.config().metis_vars_only = true;
+    } else if (strcmp(argv[i], "-useIndepRestriction") == 0) {
+      theSolver.config().use_indep_restriction = true;
+    } else if (strcmp(argv[i], "-hashMode") == 0) {
+      if (argc <= i + 1) { cout << "-hashMode needs canonical|identity\n"; return -1; }
+      string m = argv[i + 1]; i++;
+      if (m == "canonical") theSolver.config().cache_hash_mode = SolverConfiguration::CANONICAL;
+      else if (m == "identity") theSolver.config().cache_hash_mode = SolverConfiguration::IDENTITY;
+      else { cout << "-hashMode: unknown mode '" << m << "' (canonical|identity)\n"; return -1; }
+    } else if (strcmp(argv[i], "-pickerOrder") == 0) {
+      if (argc <= i + 1) { cout << "-pickerOrder needs degree|metis|td\n"; return -1; }
+      string m = argv[i + 1]; i++;
+      if (m == "degree") theSolver.config().picker_order = SolverConfiguration::DEGREE;
+      else if (m == "degree_asc") theSolver.config().picker_order = SolverConfiguration::DEGREE_ASC;
+      else if (m == "metis") theSolver.config().picker_order = SolverConfiguration::METIS;
+      else if (m == "metis_deg") theSolver.config().picker_order = SolverConfiguration::METIS_DEG;
+      else if (m == "td") theSolver.config().picker_order = SolverConfiguration::TD;
+      else { cout << "-pickerOrder: unknown mode '" << m << "' (degree|degree_asc|metis|metis_deg|td)\n"; return -1; }
+    } else if (strcmp(argv[i], "-checkUnsat") == 0) {
+      theSolver.config().use_scc_unsat_prune = true;
+    } else if (strcmp(argv[i], "-checkUnsatMinClauseLen") == 0) {
+      if (argc <= i + 1) { cout << "-checkUnsatMinClauseLen needs an int\n"; return -1; }
+      theSolver.config().scc_unsat_min_clause_len = (unsigned)atoi(argv[i + 1]); i++;
     } else if (strcmp(argv[i], "-dumpReactiveMetisInputs") == 0) {
       if (argc <= i + 1) { cout << "-dumpReactiveMetisInputs needs a path\n"; return -1; }
       theSolver.config().dump_reactive_metis_path = argv[i + 1];
@@ -358,11 +394,115 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  // Helper: read sidecar (indep set + multiplier), pass to solver.
+  auto load_arjun_sidecar = [&](const std::string& path) -> bool {
+    std::ifstream sc(path);
+    if (!sc) {
+      cerr << "[arjun] cannot read sidecar " << path << "\n";
+      return false;
+    }
+    std::vector<unsigned> indep;
+    mpz_class multiplier = 1;
+    std::string line;
+    while (std::getline(sc, line)) {
+      if (line.empty() || line[0] == 'c') continue;
+      std::istringstream ss(line);
+      std::string tok;
+      ss >> tok;
+      if (tok == "indep") {
+        unsigned n = 0;
+        ss >> n;
+        indep.reserve(n);
+        for (unsigned i = 0; i < n; i++) {
+          if (!std::getline(sc, line)) break;
+          std::istringstream ssv(line);
+          unsigned v = 0;
+          ssv >> v;
+          if (v != 0) indep.push_back(v);
+        }
+      } else if (tok == "multiplier") {
+        std::string mstr;
+        ss >> mstr;
+        multiplier = mpz_class(mstr);
+      }
+    }
+    cout << "c o [arjun] indep size=" << indep.size()
+         << " multiplier=" << multiplier.get_str() << "\n";
+    theSolver.setArjunResult(std::move(indep), multiplier);
+    return true;
+  };
+
+  // Arjun-full: BVE + distillation + indep-support extraction + multiplier.
+  // Mutually exclusive with arjun_light (validate_flags() in Phase E).
+  // Routes the solver at Arjun's simplified CNF and populates
+  // is_indep_ / count_multiplier_ via setArjunResult().
+  //
+  // Two cache-controlling flags help avoid running Arjun more than once
+  // during a portfolio sweep:
+  //   -arjunSaveTo <prefix>  writes simplified to <prefix>.cnf and the
+  //                          sidecar to <prefix>.sidecar; doesn't unlink
+  //                          (so subsequent runs can reuse them).
+  //   -arjunSidecar <path>   skips Arjun; reads <path> as the sidecar
+  //                          and uses input_file as the simplified CNF.
+  string arjun_simplified_path;
+  string arjun_sidecar_path;
+  bool arjun_keep_files = false;
+  if (arjun_full && !input_file.empty()) {
+    if (!arjun_save_to.empty()) {
+      arjun_simplified_path = arjun_save_to + ".cnf";
+      arjun_sidecar_path    = arjun_save_to + ".sidecar";
+      arjun_keep_files = true;
+    } else {
+      char tmpl[] = "/tmp/sharpsat_arjun_XXXXXX.cnf";
+      int fd = mkstemps(tmpl, 4);
+      if (fd < 0) {
+        cerr << "[arjun] mkstemps failed; skipping Arjun preprocessing\n";
+      } else {
+        close(fd);
+        arjun_simplified_path = tmpl;
+        arjun_sidecar_path = arjun_simplified_path + ".sidecar";
+      }
+    }
+    if (!arjun_simplified_path.empty()) {
+      if (!PreprocessorArjun::simplify(input_file, arjun_simplified_path,
+                                       arjun_sidecar_path,
+                                       /*verbosity=*/0,
+                                       /*all_indep=*/false)) {
+        cerr << "[arjun] preprocessing failed; using original CNF\n";
+        if (!arjun_keep_files) {
+          unlink(arjun_simplified_path.c_str());
+          unlink(arjun_sidecar_path.c_str());
+        }
+        arjun_simplified_path.clear();
+        arjun_sidecar_path.clear();
+      } else {
+        cout << "c o [arjun] simplified CNF written to "
+             << arjun_simplified_path << "\n";
+        input_file = arjun_simplified_path;
+        load_arjun_sidecar(arjun_sidecar_path);
+        // NOTE: do NOT disable our preprocessing — Arjun's simplified
+        // CNF may have unit clauses (forced by Arjun's backbone phase)
+        // that need BCP propagation. simplePreProcess handles them and
+        // its var renumbering is picked up by the Arjun-apply code's
+        // compact_to_orig_ translation.
+      }
+    }
+  } else if (!arjun_sidecar_in.empty() && !input_file.empty()) {
+    // Reuse a previously-produced Arjun output: load sidecar, use
+    // input_file as-is (caller should pass the Arjun-simplified CNF).
+    cout << "c o [arjun] reusing sidecar " << arjun_sidecar_in << "\n";
+    load_arjun_sidecar(arjun_sidecar_in);
+  }
+
   theSolver.solve(input_file);
 
   if (!simplified_path.empty()) {
     unlink(simplified_path.c_str());
     unlink(equiv_sidecar_path.c_str());
+  }
+  if (!arjun_simplified_path.empty() && !arjun_keep_files) {
+    unlink(arjun_simplified_path.c_str());
+    unlink(arjun_sidecar_path.c_str());
   }
   return 0;
 }

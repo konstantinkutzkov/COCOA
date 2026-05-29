@@ -229,6 +229,8 @@ std::vector<std::vector<int>> Solver::extractFormulaAsDimacs() {
 void Solver::rebuildFromPreprocessedCNF(const PreprocessorResult &pre_out) {
 	// 1. Reset per-variable state (antecedent, DL, value).
 	is_branch_constraint_.assign(variables_.size(), false);
+	is_indep_.assign(variables_.size(), true);  // default all-indep
+
 	for (unsigned v = 0; v < variables_.size(); v++) {
 		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
 		variables_[v].decision_level = INVALID_DL;
@@ -289,8 +291,10 @@ void Solver::rebuildFromPreprocessedCNF(const PreprocessorResult &pre_out) {
 				occurrence_lists_[lit].push_back(ofs);
 			}
 			literal_pool_.push_back(SENTINEL_LIT);
-			literal(int_to_lit(c[0])).addWatchLinkTo(ofs);
-			literal(int_to_lit(c[1])).addWatchLinkTo(ofs);
+			LiteralID l0 = int_to_lit(c[0]);
+			LiteralID l1 = int_to_lit(c[1]);
+			literal(l0).addWatchLinkTo(ofs, l1);  // blocker = other watch
+			literal(l1).addWatchLinkTo(ofs, l0);
 			n_long++;
 		}
 	}
@@ -596,7 +600,55 @@ void Solver::solve(const string &file_name) {
 			pending_redundant_equivs_.clear();
 		}
 
+		// Apply pending Arjun result (independent support + multiplier).
+		// Translates input-CNF var IDs through compact_to_orig_ to the
+		// post-preprocessing space, then populates is_indep_ and
+		// count_multiplier_. After this, the picker (under
+		// use_indep_restriction) will only branch on I-vars; the leaf
+		// count gets multiplied by count_multiplier_ before being
+		// reported.
+		if (pending_arjun_set_) {
+			std::vector<unsigned> input_to_compact;
+			if (!compact_to_orig_.empty()) {
+				unsigned max_orig = 0;
+				for (unsigned c = 1; c < compact_to_orig_.size(); c++)
+					max_orig = std::max(max_orig, compact_to_orig_[c]);
+				input_to_compact.assign(max_orig + 1, 0);
+				for (unsigned c = 1; c < compact_to_orig_.size(); c++)
+					input_to_compact[compact_to_orig_[c]] = c;
+			}
+			auto translate = [&](unsigned v_input) -> unsigned {
+				if (input_to_compact.empty()) return v_input;
+				if (v_input >= input_to_compact.size()) return 0;
+				return input_to_compact[v_input];
+			};
+			// Default to non-indep, then mark I-vars.
+			is_indep_.assign(variables_.size(), false);
+			unsigned mapped = 0, dropped = 0;
+			for (unsigned v_in : pending_arjun_indep_) {
+				unsigned v = translate(v_in);
+				if (v == 0 || v >= is_indep_.size()) { dropped++; continue; }
+				is_indep_[v] = true;
+				mapped++;
+			}
+			count_multiplier_ = pending_arjun_multiplier_;
+			config_.use_indep_restriction = true;
+			if (!config_.quiet)
+				cout << "c o [arjun] applied indep support: "
+				     << mapped << " mapped (dropped " << dropped
+				     << "); count_multiplier_ = "
+				     << count_multiplier_.get_str() << "\n";
+			pending_arjun_set_ = false;
+		}
+
 		comp_manager_.initialize(literals_, literal_pool_, original_lit_pool_size_);
+
+		// Compute fixed branching order if requested. Must happen after
+		// comp_manager_.initialize() (so clauseIdToOfs is populated) and
+		// after is_indep_ population (so we restrict to I-vars).
+		if (config_.picker_order != SolverConfiguration::NONE) {
+			computeFixedBranchOrder();
+		}
 		comp_manager_.setRemovedClauses(&removed_clauses_);
 
 		// Phase 1 SAT-check diagnostic: initialize the persistent CMS
@@ -663,6 +715,7 @@ void Solver::solve(const string &file_name) {
 		statistics_.printShort();
 
 	printOpStats("FINAL");
+	printBcpPaths("FINAL");
 
 	// OPEN_WORK: per-variant progress metric for probe_flags / portfolio
 	// routing. On finish, n_open_comps=0 and progress_bits=n_root.
@@ -693,6 +746,13 @@ void Solver::solve(const string &file_name) {
 	          << " learned_clauses=" << statistics_.num_clauses_learned_
 	          << " dedup_dropped=" << statistics_.num_learned_dedup_dropped_
 	          << " binary_filter_fires=" << statistics_.num_learned_binary_filtered_
+	          << std::endl;
+	std::cerr << "SCC_UNSAT_STATS"
+	          << " enabled=" << (config_.use_scc_unsat_prune ? 1 : 0)
+	          << " pruned_lit=" << statistics_.num_scc_unsat_pruned_lit_
+	          << " pruned_clause=" << statistics_.num_scc_unsat_pruned_clause_
+	          << " total=" << (statistics_.num_scc_unsat_pruned_lit_
+	                            + statistics_.num_scc_unsat_pruned_clause_)
 	          << std::endl;
 	double avg_comp = statistics_.num_comp_entries_
 	                    ? (double)statistics_.sum_comp_vars_at_entry_ / statistics_.num_comp_entries_
@@ -1008,12 +1068,33 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 		}
 		//END Propagate Redundant Binaries
 		for (auto itcl = literal(unLit).watch_list_.rbegin();
-				*itcl != SENTINEL_CL; itcl++) {
-			bool isLitA = (*beginOf(*itcl) == unLit);
-			auto p_watchLit = beginOf(*itcl) + 1 - isLitA;
-			auto p_otherLit = beginOf(*itcl) + isLitA;
+				itcl->ofs != SENTINEL_CL; itcl++) {
+			bcp_long_visits_++;
 
-			if (isSatisfied(*p_otherLit) || isClauseRemoved(*itcl)) {
+			// BLOCKER FAST PATH: if the cached blocker literal is currently
+			// true, the clause is satisfied — skip without touching the
+			// clause body. Single literal_values_ read; saves the
+			// beginOf(ofs)/isLitA/p_otherLit deref chain. Glucose/MiniSat-2
+			// pattern. Soundness: blocker is a literal in the clause; if
+			// true, clause is satisfied in any context.
+			if (isSatisfied(itcl->blocker)) {
+				bcp_path_B_++;
+				continue;
+			}
+
+			bool isLitA = (*beginOf(itcl->ofs) == unLit);
+			auto p_watchLit = beginOf(itcl->ofs) + 1 - isLitA;
+			auto p_otherLit = beginOf(itcl->ofs) + isLitA;
+
+			// Blocker miss but the real other watch is satisfied — refresh
+			// the stale blocker so future visits hit the fast path.
+			if (isSatisfied(*p_otherLit)) {
+				itcl->blocker = *p_otherLit;
+				bcp_path_B_++;
+				continue;
+			}
+			if (isClauseRemoved(itcl->ofs)) {
+				bcp_path_A_++;
 				continue;
 			}
 			// Scope check for learned clauses: if a learned clause was
@@ -1030,29 +1111,44 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 			// the cached count of S with constraints not entailed by S alone.
 			// Mask is empty at root → no filter; populated by SubVarsetGuard
 			// at every solveComponent entry.
-			if (*itcl >= (ClauseOfs)original_lit_pool_size_) {
-				if (!learnedClauseInScopeOrSound(*itcl, config_.sound_provenance)) continue;
-				if (!learnedClauseInComponent(*itcl, current_sub_varset_)) continue;
+			if (itcl->ofs >= (ClauseOfs)original_lit_pool_size_) {
+				if (!learnedClauseInScopeOrSound(itcl->ofs, config_.sound_provenance)) {
+					bcp_path_C1_sound_fail_++;
+					continue;
+				}
+				if (!learnedClauseInComponent(itcl->ofs, current_sub_varset_)) {
+					bcp_path_C2_comp_fail_++;
+					continue;
+				}
 			}
-			auto itL = beginOf(*itcl) + 2;
+			auto itL = beginOf(itcl->ofs) + 2;
+			auto itL_start = itL;
+			bcp_scan_invocations_++;
 			while (isResolved(*itL))
 				itL++;
+			bcp_scan_lits_walked_ += (uint64_t)(itL - itL_start);
 			// either we found a free or satisfied lit
 			if (*itL != SENTINEL_LIT) {
-				literal(*itL).addWatchLinkTo(*itcl);
+				if ((itL - itL_start) <= 1) bcp_path_D_early_++;
+				else bcp_path_E_late_++;
+				// New entry's blocker = the OTHER watch (which we know is
+				// X_TRI or T_TRI here — we passed the isSatisfied check).
+				literal(*itL).addWatchLinkTo(itcl->ofs, *p_otherLit);
 				swap(*itL, *p_watchLit);
 				*itcl = literal(unLit).watch_list_.back();
 				literal(unLit).watch_list_.pop_back();
 			} else {
-				// or p_unLit stays resolved
-				// and we have hence no free literal left
-				// for p_otherLit remain poss: Active or Resolved
-				if (setLiteralIfFree(*p_otherLit, Antecedent(*itcl))) { // implication
+				if (setLiteralIfFree(*p_otherLit, Antecedent(itcl->ofs))) { // implication
+					bcp_path_F_propagate_++;
 					if (isLitA)
 						swap(*p_otherLit, *p_watchLit);
+					// *p_otherLit is now T_TRI; cache as blocker so a future
+					// re-visit (after backtrack + re-descend) fast-paths.
+					itcl->blocker = *p_otherLit;
 				} else {
+					bcp_path_G_conflict_++;
 					if (config_.log_conflicts) {
-						std::cerr << "CONFLICT_CL ofs=" << *itcl
+						std::cerr << "CONFLICT_CL ofs=" << itcl->ofs
 						          << " DL=" << stack_.get_decision_level()
 						          << " decisions=";
 						for (auto l : literal_stack_)
@@ -1060,10 +1156,10 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 						std::cerr << "\n";
 					}
 					if (config_.verbose)
-						cout << "  CONFLICT_CL=" << *itcl
+						cout << "  CONFLICT_CL=" << itcl->ofs
 							 << " unLit=" << unLit.toInt()
-							 << " removed=" << isClauseRemoved(*itcl) << endl;
-					setConflictState(*itcl);
+							 << " removed=" << isClauseRemoved(itcl->ofs) << endl;
+					setConflictState(itcl->ofs);
 					return false;
 				}
 			}
@@ -1410,6 +1506,10 @@ void Solver::stage0_cheap_scores(Component &comp,
                                  std::vector<double> &cheap,
                                  std::vector<VariableIndex> &candidates) {
 	candidates.clear();
+	// Note: under use_indep_restriction we keep ALL active vars in
+	// candidates here; the picker (pickBranchVariableAdaptive) prefers
+	// I-vars and falls back to any active var when none remain. See
+	// Phase C "DPLL fallback at the indep-support boundary".
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
 		if (literal_values_[LiteralID(*it, true)] == X_TRI)
 			candidates.push_back(*it);
@@ -1603,14 +1703,21 @@ VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsa
 	// score instead — same asymptotic cost as the legacy
 	// `pickBranchVariable`.
 	if (candidates.size() < min_probe_vars) {
-		VariableIndex best = candidates[0];
-		double best_score = cheap[best];
+		// Track best-overall and best-among-I separately; prefer
+		// best-I when projection is on AND any I-var is present
+		// (DPLL fallback to best-overall when no I-var remains).
+		VariableIndex best = 0, best_indep = 0;
+		double best_score = -1.0, best_indep_score = -1.0;
+		const bool restrict_to_indep = config_.use_indep_restriction;
 		for (VariableIndex v : candidates) {
-			if (cheap[v] > best_score) {
-				best_score = cheap[v];
-				best = v;
+			if (cheap[v] > best_score) { best_score = cheap[v]; best = v; }
+			if (restrict_to_indep && is_indep_[v]
+			    && cheap[v] > best_indep_score) {
+				best_indep_score = cheap[v];
+				best_indep = v;
 			}
 		}
+		if (restrict_to_indep && best_indep != 0) return best_indep;
 		return best;
 	}
 
@@ -1673,7 +1780,10 @@ VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsa
 	};
 
 	double best_tau = std::numeric_limits<double>::infinity();
+	double best_indep_tau = std::numeric_limits<double>::infinity();
 	VariableIndex best_v = 0;
+	VariableIndex best_indep_v = 0;
+	const bool restrict_to_indep = config_.use_indep_restriction;
 	for (const auto &c : scored) {
 		double a = (double)c.vars_forced_T + epsilon * (double)clamp_delta(c.delta_2c_T);
 		double b = (double)c.vars_forced_F + epsilon * (double)clamp_delta(c.delta_2c_F);
@@ -1682,12 +1792,19 @@ VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsa
 			best_tau = tau;
 			best_v = c.v;
 		}
+		if (restrict_to_indep && is_indep_[c.v] && tau < best_indep_tau) {
+			best_indep_tau = tau;
+			best_indep_v = c.v;
+		}
 	}
 	if (config_.verbose) {
 		std::cout << "  TIER2_PICK v=" << best_v
 		          << " tau=" << best_tau
 		          << " scored=" << scored.size() << std::endl;
 	}
+	// Prefer I-var; fall back to best_v when no I-var was scored
+	// (DPLL fallback past the indep-support boundary).
+	if (restrict_to_indep && best_indep_v != 0) return best_indep_v;
 	return best_v;
 }
 
@@ -2333,6 +2450,7 @@ void Solver::resetPostPreprocessScratch() {
 	// this is defensive: belt-and-suspenders in case a future refactor
 	// changes that.
 	is_branch_constraint_.assign(variables_.size(), false);
+	is_indep_.assign(variables_.size(), true);  // default all-indep
 	for (unsigned v = 1; v < variables_.size(); v++) {
 		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
 		variables_[v].decision_level = INVALID_DL;
@@ -3226,4 +3344,155 @@ Solver::DerivCacheBranchChoice Solver::deriv_cache_bias_select_(
 		          << std::endl;
 	}
 	return choice;
+}
+
+// ---------------------------------------------------------------------
+// Compute the fixed branching order based on config_.picker_order.
+// Called once at solve start, after preprocessing + Arjun-apply.
+//
+// DEGREE: vars sorted by their incidence count in the post-PP formula
+//         (active binaries + long-clause occurrences), descending. The
+//         picker then iterates a component's vars and returns the one
+//         with the lowest order position.
+// METIS / TD: placeholders — fall back to DEGREE for now.
+// ---------------------------------------------------------------------
+void Solver::computeFixedBranchOrder() {
+	const unsigned n = num_variables();
+	std::vector<unsigned> degree(n + 1, 0);
+
+	// Binary clause contributions: literal(l).binary_links_ holds
+	// partners for each polarity. Original binaries only (post-PP).
+	for (unsigned v = 1; v <= n; v++) {
+		for (int pol = 0; pol < 2; pol++) {
+			const LiteralID l(v, pol == 1);
+			const Literal &lit_rec = literal(l);
+			const unsigned orig_count = lit_rec.original_binary_link_count_;
+			degree[v] += orig_count;
+		}
+	}
+
+	// Long clause contributions: iterate by ClauseID via the analyzer's
+	// clause_id_to_ofs[] map, which gives the BODY offset (post-header)
+	// of each original long clause.
+	const auto& clause_id_to_ofs = comp_manager_.getAnalyzer().clauseIdToOfs();
+	for (unsigned cid = 1; cid < clause_id_to_ofs.size(); cid++) {
+		const ClauseOfs ofs = clause_id_to_ofs[cid];
+		if (ofs == 0 || ofs >= original_lit_pool_size_) continue;
+		for (auto lt = literal_pool_.begin() + ofs;
+		     *lt != SENTINEL_LIT; ++lt) {
+			const unsigned v = lt->var();
+			if (v >= 1 && v <= n) degree[v]++;
+		}
+	}
+
+	// METIS_DEG: compute separator vars from short-clause var-only METIS,
+	// then prioritize them. Other modes: just degree-based.
+	std::vector<bool> in_metis_sep(n + 1, false);
+	if (config_.picker_order == SolverConfiguration::METIS_DEG) {
+		// Build var-only METIS input restricted to clauses of length ≤ 3.
+		// Length 2 (binaries) become direct var-var edges. Length 3 become
+		// triangles (3 edges per clause via clique encoding in
+		// NDHierarchy::build).
+		std::vector<std::pair<unsigned, std::vector<unsigned>>> short_long;
+		for (unsigned cid = 1; cid < clause_id_to_ofs.size(); cid++) {
+			const ClauseOfs ofs = clause_id_to_ofs[cid];
+			if (ofs == 0 || ofs >= original_lit_pool_size_) continue;
+			std::vector<unsigned> vars;
+			for (auto lt = literal_pool_.begin() + ofs;
+			     *lt != SENTINEL_LIT; ++lt) {
+				vars.push_back(lt->var());
+			}
+			if (vars.size() == 3) short_long.push_back({ofs, vars});
+		}
+		// Binaries: dedup with v < partner.
+		std::vector<std::pair<unsigned, unsigned>> bin_pairs;
+		for (unsigned v = 1; v <= n; v++) {
+			for (int pol = 0; pol < 2; pol++) {
+				const LiteralID l(v, pol == 1);
+				const Literal &lr = literal(l);
+				const unsigned orig = lr.original_binary_link_count_;
+				unsigned idx = 0;
+				for (auto bt = lr.binary_links_.begin();
+				     *bt != SENTINEL_LIT; ++bt, ++idx) {
+					if (idx >= orig) break;
+					const unsigned other = bt->var();
+					if (v < other) bin_pairs.push_back({v, other});
+				}
+			}
+		}
+		// Run METIS via local NDHierarchy.
+		NDHierarchy nd_local;
+		nd_local.build((int)n, short_long, bin_pairs, /*vars_only=*/true);
+		// Collect every variable that appears in any separator.
+		for (size_t i = 0; i < nd_local.separator.size(); i++) {
+			for (const auto& cn : nd_local.separator[i]) {
+				if (cn.kind == CutNode::VAR && cn.id <= n) {
+					in_metis_sep[cn.id] = true;
+				}
+			}
+		}
+		if (!config_.quiet) {
+			unsigned n_sep = 0;
+			for (unsigned v = 1; v <= n; v++) if (in_metis_sep[v]) n_sep++;
+			std::cout << "c o [picker_order METIS_DEG] sep vars from short-clause "
+			          << "graph: " << n_sep << " (of " << n << " total)\n";
+		}
+	}
+
+	// Build the order: list all candidate vars, sort by degree desc.
+	// Under projection, the picker still falls back to non-I if no
+	// I-var is available, so we include ALL vars in the order — non-I
+	// just get lower priority effectively (they're after the I-vars
+	// in the sorted list).
+	fixed_order_vars_.clear();
+	fixed_order_vars_.reserve(n);
+	for (unsigned v = 1; v <= n; v++) {
+		// Skip vars already assigned (e.g., by units / failed-lit test)
+		if (literal_values_[LiteralID(v, true)] != X_TRI) continue;
+		fixed_order_vars_.push_back(v);
+	}
+	// Sort: under projection I-vars come first; under METIS_DEG
+	// in-separator vars come next; within each tier, degree desc
+	// (or asc for DEGREE_ASC).
+	const bool restrict_to_indep = config_.use_indep_restriction;
+	const bool ascending = (config_.picker_order == SolverConfiguration::DEGREE_ASC);
+	const bool use_sep = (config_.picker_order == SolverConfiguration::METIS_DEG);
+	std::sort(fixed_order_vars_.begin(), fixed_order_vars_.end(),
+	          [this, restrict_to_indep, ascending, use_sep,
+	           &degree, &in_metis_sep](unsigned a, unsigned b) {
+		// Under projection, I-vars come first.
+		if (restrict_to_indep) {
+			const bool ai = a < is_indep_.size() && is_indep_[a];
+			const bool bi = b < is_indep_.size() && is_indep_[b];
+			if (ai != bi) return ai;
+		}
+		// Under METIS_DEG, in-separator vars come before non-separator.
+		if (use_sep) {
+			const bool as = in_metis_sep[a];
+			const bool bs = in_metis_sep[b];
+			if (as != bs) return as;
+		}
+		// Within group: ascending or descending by degree.
+		return ascending ? (degree[a] < degree[b]) : (degree[a] > degree[b]);
+	});
+
+	// Build reverse index.
+	var_to_order_.assign(n + 1, UINT_MAX);
+	for (size_t i = 0; i < fixed_order_vars_.size(); i++) {
+		var_to_order_[fixed_order_vars_[i]] = (unsigned)i;
+	}
+
+	if (!config_.quiet) {
+		cout << "c o [picker_order] computed fixed order over "
+		     << fixed_order_vars_.size() << " vars"
+		     << " (mode=" << (int)config_.picker_order << ")\n";
+		if (fixed_order_vars_.size() > 0) {
+			cout << "c o [picker_order] top 8 by degree:";
+			for (size_t i = 0; i < 8 && i < fixed_order_vars_.size(); i++) {
+				unsigned v = fixed_order_vars_[i];
+				cout << " v" << v << "(d=" << degree[v] << ")";
+			}
+			cout << "\n";
+		}
+	}
 }

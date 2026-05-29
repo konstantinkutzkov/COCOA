@@ -200,8 +200,8 @@ void Solver::verifyStateIntegrity(const char *label) {
 	std::unordered_set<uint64_t> actual_watches;
 	for (auto l = LiteralID(1, false); l != literals_.end_lit(); l.inc()) {
 		const auto &wl = literal(l).watch_list_;
-		for (auto wt = wl.rbegin(); *wt != SENTINEL_CL; ++wt) {
-			actual_watches.insert(((uint64_t)l.raw() << 32) | (uint64_t)*wt);
+		for (auto wt = wl.rbegin(); wt->ofs != SENTINEL_CL; ++wt) {
+			actual_watches.insert(((uint64_t)l.raw() << 32) | (uint64_t)wt->ofs);
 		}
 	}
 	if (expected_watches != actual_watches) {
@@ -1479,6 +1479,13 @@ void Solver::_prepareForKeyComputationNoPP(const std::string &file_name) {
 	createfromFile(file_name);
 	initStack(num_variables());
 	// Intentionally skip simplePreProcess() so free vars survive.
+	// Mark all binaries currently loaded as original — production
+	// rebuildFromPreprocessedCNF does this at solver.cpp:299. Tests
+	// that consume binary_links_ via filters like
+	// `idx < original_binary_link_count_` (canonical_key, scc_unsat)
+	// would otherwise see count=0 and skip every binary.
+	for (auto l = LiteralID(0, false); l != literals_.end_lit(); l.inc())
+		literal(l).recordOriginalBinaryLinks();
 	comp_manager_.initialize(literals_, literal_pool_, original_lit_pool_size_);
 	comp_manager_.setRemovedClauses(&removed_clauses_);
 }
@@ -1508,8 +1515,10 @@ void Solver::_injectLearnedLongClauseForTest(const std::vector<int> &dimacs_lits
 	for (int l : dimacs_lits)
 		literal_pool_.push_back(int_to_lit(l));
 	literal_pool_.push_back(SENTINEL_LIT);
-	literal(int_to_lit(dimacs_lits[0])).addWatchLinkTo(ofs);
-	literal(int_to_lit(dimacs_lits[1])).addWatchLinkTo(ofs);
+	LiteralID l0 = int_to_lit(dimacs_lits[0]);
+	LiteralID l1 = int_to_lit(dimacs_lits[1]);
+	literal(l0).addWatchLinkTo(ofs, l1);
+	literal(l1).addWatchLinkTo(ofs, l0);
 }
 
 // Test-support: inject a "learned" binary. Appends past

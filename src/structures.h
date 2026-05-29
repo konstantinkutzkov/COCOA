@@ -82,6 +82,18 @@ private:
 static const LiteralID NOT_A_LIT(0, false);
 #define SENTINEL_LIT NOT_A_LIT
 
+// Watch-list entry with cached "blocker" literal (Glucose/MiniSat-2 style).
+// On BCP entry, if literal_values_[blocker] == T, the clause is satisfied
+// without touching the clause body — saves the cache-line miss to beginOf(ofs)
+// for the dominant "B path" (52% of BCP visits under triple_no_lockstep).
+// Sentinel: WatchEntry() has ofs=SENTINEL_CL, blocker=NOT_A_LIT.
+struct WatchEntry {
+  ClauseOfs ofs;
+  LiteralID blocker;
+  WatchEntry() : ofs(SENTINEL_CL), blocker(NOT_A_LIT) {}
+  WatchEntry(ClauseOfs o, LiteralID b) : ofs(o), blocker(b) {}
+};
+
 class Literal {
 public:
   vector<LiteralID> binary_links_ = vector<LiteralID>(1,SENTINEL_LIT);
@@ -100,7 +112,7 @@ public:
   // any such binary is implied by the originals, hence implied by any
   // sub-formula whose vars include both of the binary's literals.
   vector<LiteralID> redundant_binary_links_ = vector<LiteralID>(1,SENTINEL_LIT);
-  vector<ClauseOfs> watch_list_ = vector<ClauseOfs>(1,SENTINEL_CL);
+  vector<WatchEntry> watch_list_ = vector<WatchEntry>(1, WatchEntry());
   float activity_score_ = 0.0f;
 
   // Number of original (non-learned) binary links.
@@ -124,23 +136,26 @@ public:
 
   void removeWatchLinkTo(ClauseOfs clause_ofs) {
     for (auto it = watch_list_.begin(); it != watch_list_.end(); it++)
-          if (*it == clause_ofs) {
+          if (it->ofs == clause_ofs) {
             *it = watch_list_.back();
             watch_list_.pop_back();
             return;
           }
   }
 
+  // Replace ofs only; blocker is unchanged (the clause's literal set hasn't
+  // moved, just its address in the lit pool).
   void replaceWatchLinkTo(ClauseOfs clause_ofs, ClauseOfs replace_ofs) {
         for (auto it = watch_list_.begin(); it != watch_list_.end(); it++)
-          if (*it == clause_ofs) {
-            *it = replace_ofs;
+          if (it->ofs == clause_ofs) {
+            it->ofs = replace_ofs;
             return;
           }
   }
 
-  void addWatchLinkTo(ClauseIndex clause_ofs) {
-    watch_list_.push_back(clause_ofs);
+  // Caller must pass the OTHER watched literal of the clause as the blocker.
+  void addWatchLinkTo(ClauseIndex clause_ofs, LiteralID blocker) {
+    watch_list_.push_back(WatchEntry(clause_ofs, blocker));
   }
 
   void addBinLinkTo(LiteralID lit) {
@@ -157,7 +172,7 @@ public:
 
   void resetWatchList(){
         watch_list_.clear();
-        watch_list_.push_back(SENTINEL_CL);
+        watch_list_.push_back(WatchEntry());
   }
 
   bool hasBinaryLinkTo(LiteralID lit) {

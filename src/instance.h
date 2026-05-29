@@ -181,6 +181,22 @@ protected:
   // bit-packed proxy well, byte-array adds 8× memory traffic for no
   // visible read-path win.
   std::vector<bool> is_branch_constraint_;
+
+  // is_indep_[v] (v 1-indexed): true iff variable v is in the
+  // independent support I. Default all-true (every variable is
+  // independent → branching unrestricted, equivalent to total #SAT).
+  // Phase D (Arjun integration) populates this from Arjun's output;
+  // Phase B (picker / leaf / canonical_key) consults it but only when
+  // config_.use_indep_restriction is set. Same indexing convention as
+  // is_branch_constraint_.
+  std::vector<bool> is_indep_;
+  // count_multiplier_: Arjun's `multiplier_weight` — the factor by
+  // which the search count must be multiplied to recover #SAT(F).
+  // Accounts for variables Arjun eliminated as genuinely-free. Default
+  // 1 = no projection scaling. Set by preprocessor_arjun.cpp (future
+  // Phase D); applied at the end of main.cpp where the final count is
+  // printed.
+  mpz_class count_multiplier_ = 1;
   LiteralIndexedVector<TriValue> literal_values_;
 
   // ------------------------------------------------------------------
@@ -386,6 +402,7 @@ protected:
     guard_var_ = variables_.size();  // new 1-based index = current size
     variables_.push_back(Variable{});
     is_branch_constraint_.resize(variables_.size(), false);
+    is_indep_.resize(variables_.size(), true);  // default: all-indep
     literals_.resize(variables_.size());
     literal_values_.resize(variables_.size(), X_TRI);
     occurrence_lists_.resize(variables_.size());
@@ -470,16 +487,24 @@ protected:
   // ofs < original_lit_pool_size_ first).
   bool learnedClauseInComponent(ClauseOfs cl_ofs,
                                 const std::vector<char> &mask) const {
+    in_component_calls_++;
     if (mask.empty()) return true;  // no current sub set → no filtering
-    for (auto lt = literal_pool_.begin() + cl_ofs; *lt != SENTINEL_LIT; lt++) {
+    auto lt0 = literal_pool_.begin() + cl_ofs;
+    auto lt = lt0;
+    bool result = true;
+    for (; *lt != SENTINEL_LIT; lt++) {
       unsigned v = lt->var();
       if (v == guard_var_) continue;
       if (v < mask.size() && mask[v]) continue;  // in current sub
       // Outside the current sub. Only block when still active
       // (X_TRI) — an active outside var means cross-sub hazard.
-      if (literal_values_[LiteralID(v, true)] == X_TRI) return false;
+      if (literal_values_[LiteralID(v, true)] == X_TRI) {
+        result = false;
+        break;
+      }
     }
-    return true;
+    in_component_lits_walked_ += (uint64_t)(lt - lt0);
+    return result;
   }
 
   bool isClauseRemoved(ClauseOfs cl_ofs) const {
@@ -519,11 +544,29 @@ protected:
   mutable std::unordered_map<ClauseOfs, std::pair<uint64_t, bool>>
       sound_provenance_cache_;
 
+  // Path-C telemetry counters (2026-05-29): split per-function call rate +
+  // memo hit rate + BFS depth to identify the actual cost driver inside
+  // path C (39 % of BCP visits under triple_no_lockstep).
+  mutable uint64_t sound_calls_ = 0;
+  mutable uint64_t sound_memo_hits_ = 0;
+  mutable uint64_t sound_bfs_nodes_ = 0;
+  mutable uint64_t in_component_calls_ = 0;
+  mutable uint64_t in_component_lits_walked_ = 0;
+
+  // Scratch buffers for learnedClauseSound's BFS — held as members so they
+  // retain capacity across calls (instead of allocating fresh
+  // unordered_set+vector each call, which was ~150 s / 280 s BCP wall on
+  // triple_no_lockstep t1_105 per 2026-05-29 telemetry). Avg BFS visits
+  // ~7 nodes, so linear search in a small vector beats hashmap.
+  mutable std::vector<ClauseOfs> sound_bfs_visited_;
+  mutable std::vector<ClauseOfs> sound_bfs_stack_;
+
   // Transitive-provenance soundness check. A learned clause D is sound
   // under the current `removed_clauses_` iff no clause in its transitive
   // antecedent chain is currently removed. Done via BFS over direct
   // antecedents, memoized per (cl_ofs, removed_clauses_version_).
   bool learnedClauseSound(ClauseOfs cl_ofs) const {
+    sound_calls_++;
     // Originals are always sound (they ARE in the formula or are
     // removed; the caller should filter ofs < original_lit_pool_size_
     // by checking removed_clauses_ directly).
@@ -534,21 +577,23 @@ protected:
     auto cit = sound_provenance_cache_.find(cl_ofs);
     if (cit != sound_provenance_cache_.end()
         && cit->second.first == removed_clauses_version_) {
+      sound_memo_hits_++;
       return cit->second.second;
     }
 
     // BFS over direct antecedents. Stack-based to avoid C++ recursion.
-    // `visited` prevents infinite loops (shouldn't happen on a valid
-    // antecedent DAG, but defensive) and also gives memoization within
-    // a single call.
-    std::unordered_set<ClauseOfs> visited;
-    std::vector<ClauseOfs> stack;
-    stack.push_back(cl_ofs);
-    visited.insert(cl_ofs);
+    // Reuse member scratch buffers (visited + stack) to avoid per-call
+    // allocation. Linear search in `visited` is faster than unordered_set
+    // for the typical BFS size (~7 nodes per call).
+    sound_bfs_visited_.clear();
+    sound_bfs_stack_.clear();
+    sound_bfs_stack_.push_back(cl_ofs);
+    sound_bfs_visited_.push_back(cl_ofs);
     bool result = true;
-    while (!stack.empty() && result) {
-      ClauseOfs cur = stack.back();
-      stack.pop_back();
+    while (!sound_bfs_stack_.empty() && result) {
+      ClauseOfs cur = sound_bfs_stack_.back();
+      sound_bfs_stack_.pop_back();
+      sound_bfs_nodes_++;
       auto pit = learned_clause_provenance_.find(cur);
       if (pit == learned_clause_provenance_.end()) {
         // No provenance recorded: be conservative — treat as unsound
@@ -562,8 +607,15 @@ protected:
           // Original antecedent: unsound iff currently removed.
           if (removed_clauses_.count(ant) != 0) { result = false; break; }
         } else {
-          // Learned antecedent: recurse via the stack.
-          if (visited.insert(ant).second) stack.push_back(ant);
+          // Learned antecedent: dedupe via linear search; push if new.
+          bool seen = false;
+          for (ClauseOfs v : sound_bfs_visited_) {
+            if (v == ant) { seen = true; break; }
+          }
+          if (!seen) {
+            sound_bfs_visited_.push_back(ant);
+            sound_bfs_stack_.push_back(ant);
+          }
         }
       }
     }
@@ -737,8 +789,8 @@ ClauseIndex Instance::addClause(vector<LiteralID> &literals) {
   }
   // make an end: SENTINEL_LIT
   literal_pool_.push_back(SENTINEL_LIT);
-  literal(literals[0]).addWatchLinkTo(cl_ofs);
-  literal(literals[1]).addWatchLinkTo(cl_ofs);
+  literal(literals[0]).addWatchLinkTo(cl_ofs, literals[1]);
+  literal(literals[1]).addWatchLinkTo(cl_ofs, literals[0]);
   getHeaderOf(cl_ofs).set_creation_time(statistics_.num_conflicts_);
   return cl_ofs;
 }

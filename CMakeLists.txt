@@ -50,6 +50,8 @@ add_definitions(-DIDXTYPEWIDTH=32 -DREALTYPEWIDTH=32)
 # built under ganak's _deps tree to avoid a second build.
 set(CMS5_DIR "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cryptominisat5-src/src"
     CACHE PATH "Path to CryptoMiniSat5 headers")
+set(CMS5_BUILD_INCLUDE "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cryptominisat5-build/include"
+    CACHE PATH "Path to CryptoMiniSat5 build-time headers (cryptominisat5/...) — required by Arjun")
 set(CMS5_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cryptominisat5-build/lib/libcryptominisat5.a"
     CACHE FILEPATH "Path to CryptoMiniSat5 static library")
 set(CADICAL_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cadical-build/libcadical.a"
@@ -59,6 +61,21 @@ set(CADIBACK_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cadiback-build/libcad
 set(SBVA_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/sbva-build/lib/libsbva.a"
     CACHE FILEPATH "Path to SBVA static library")
 set(CMS5_DEPS ${CMS5_LIB} ${CADIBACK_LIB} ${CADICAL_LIB} ${SBVA_LIB})
+
+# Arjun — used by preprocessor_arjun.cpp (Phase D) for independent-support
+# extraction + count-multiplier-preserving simplification. Points at the
+# static lib already built under ganak's _deps tree (same pattern as CMS5).
+set(ARJUN_DIR "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/arjun-build/include"
+    CACHE PATH "Path to Arjun headers (arjun/arjun.h)")
+set(ARJUN_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/arjun-build/lib/libarjun.a"
+    CACHE FILEPATH "Path to Arjun static library")
+set(APPROXMC_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/approxmc-build/lib/libapproxmc.a"
+    CACHE FILEPATH "Path to ApproxMC static library (Arjun dependency)")
+set(TREEDECOMP_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/treedecomp-build/lib/libtreedecomp.a"
+    CACHE FILEPATH "Path to treedecomp static library (Arjun dependency)")
+# Arjun also pulls MPFR (for its Field types). Provided by Homebrew on macOS.
+find_library(MPFR_LIB mpfr)
+set(ARJUN_DEPS ${ARJUN_LIB} ${APPROXMC_LIB} ${TREEDECOMP_LIB} ${MPFR_LIB})
 
 # CMS5_DIR is scoped to libsharpSAT only (where preprocessor_light.cpp
 # consumes <cryptominisat.h>). Don't put it in the project-wide include
@@ -71,7 +88,8 @@ add_executable (sharpSAT src/main.cpp)
 target_link_libraries (sharpSAT libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
     ${GKLIB_DIR}/build/libGKlib.a
-    ${CMS5_DEPS})
+    ${CMS5_DEPS}
+    ${ARJUN_DEPS})
 
 add_executable (test_probe tests/test_probe.cpp)
 target_include_directories (test_probe PRIVATE src)
@@ -132,6 +150,33 @@ target_link_libraries (test_probe_preprocessor_r4 libsharpSAT ${GMP_LIB} ${GMPXX
 add_executable (test_probe_preprocessor_filter tests/test_probe_preprocessor_filter.cpp)
 target_include_directories (test_probe_preprocessor_filter PRIVATE src)
 target_link_libraries (test_probe_preprocessor_filter libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
+
+# SCC-based 2-SAT UNSAT detector — standalone module with no
+# Solver/METIS/CMS5 dependencies. Compile scc_unsat.cpp directly into
+# the test exe rather than linking libsharpSAT so the unit test
+# exercises the module in true isolation.
+add_executable (test_scc_unsat tests/test_scc_unsat.cpp src/scc_unsat.cpp)
+target_include_directories (test_scc_unsat PRIVATE src)
+
+# Integration test for the solver-side bridge (Solver::sccCheckComponentUnsat).
+# Links libsharpSAT — same pattern as test_canonical_key_*.
+add_executable (test_scc_unsat_solver tests/test_scc_unsat_solver.cpp)
+target_include_directories (test_scc_unsat_solver PRIVATE src)
+target_link_libraries (test_scc_unsat_solver libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a
+    ${CMS5_DEPS})
+
+# Regression test for the 2026-05-27 fix: SCC bridge must filter
+# removed_clauses_ to keep its verdict invariant under canonical_key.
+# Without the fix this test would return UNSAT on a residual that is
+# actually SAT (see file header for full bug history).
+add_executable (test_scc_removed_clauses tests/test_scc_removed_clauses.cpp)
+target_include_directories (test_scc_removed_clauses PRIVATE src)
+target_link_libraries (test_scc_removed_clauses libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
     ${GKLIB_DIR}/build/libGKlib.a
     ${CMS5_DEPS})

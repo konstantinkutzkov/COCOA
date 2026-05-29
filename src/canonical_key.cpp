@@ -13,6 +13,9 @@
 
 #include "canonical_key.h"
 #include "component_types/component.h"
+#include "chibihash64.h"
+
+#include <vector>
 
 // Global clause type dictionary
 ClauseTypeDictionary g_clause_type_dict;
@@ -86,7 +89,8 @@ CanonicalKey buildCanonicalKey(
     const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
     unsigned original_lit_pool_size,
     int wl_iterations,
-    const std::vector<uint64_t> *static_wl_labels) {
+    const std::vector<uint64_t> *static_wl_labels,
+    const std::vector<bool> *is_indep) {
 
   // Collect active variables
   // Reset s_labels_collision so the post-WL "is it built?" check via
@@ -202,17 +206,38 @@ CanonicalKey buildCanonicalKey(
     }
   }
 
-  // Determine singletons and polarity flips (packed into flags byte)
+  // Determine singletons and polarity flips (packed into flags byte).
+  // Plus the I-bit (bit 2 = 0x04) when projection is active — this is
+  // the "pre-0 iteration" labeling: two structurally-identical
+  // components with different I-membership distributions will get
+  // distinct initial labels here, which propagates through the WL
+  // refinement to distinct final canonical keys. Default null
+  // is_indep = no I-bit, behavior identical to pre-Phase-B.
   s_var_flags.assign(n_vars, 0);
   for (unsigned i = 0; i < n_vars; i++) {
     if (s_pos_count[i] + s_neg_count[i] == 1)
-      s_var_flags[i] = 1;  // singleton
+      s_var_flags[i] |= 1;  // singleton
     else if (s_neg_count[i] > s_pos_count[i])
-      s_var_flags[i] = 2;  // flip
+      s_var_flags[i] |= 2;  // flip
+    if (is_indep && (*is_indep)[s_active_vars[i]])
+      s_var_flags[i] |= 4;  // in I
   }
 
-  // Pass 1b: Compute variable signatures via tabulation
+  // Pass 1b: Compute variable signatures via tabulation.
+  // When the I-bit is active (s_var_flags[i] & 4), pre-seed the
+  // signature with INDEP_SEED so I-vars and non-I-vars accumulate
+  // distinguishable signatures even if their clause-hash contributions
+  // are identical. Without this seed, two structurally-equivalent
+  // components with different I-distributions would collide on the
+  // canonical_key — wrong for projected counting.
+  //
+  // When is_indep is null (default), no var has bit 4 set, so the
+  // seed loop is a no-op and the signature is identical to pre-Phase-B.
+  const uint64_t INDEP_SEED = 0xC3F2E1D0B0A09080ULL;
   s_sig.assign(n_vars, 0);
+  for (unsigned i = 0; i < n_vars; i++) {
+    if (s_var_flags[i] & 4) s_sig[i] = INDEP_SEED;
+  }
 
   for (const auto &ref : s_clause_refs) {
     unsigned len = 0, np = 0, nn = 0, ns = 0;
@@ -753,4 +778,94 @@ std::vector<uint64_t> computeStaticWLLabels(
   }
 
   return labels;
+}
+
+// ---------------------------------------------------------------------
+// Identity-based cache key (ganak-style). Hashes the packed sequence
+// [active_var_ids ... 0 active_long_clause_ids ... 0] via chibihash64.
+//
+// Identity means: two components with the same active variable IDs and
+// the same active long clause IDs (after the same removal/satisfaction
+// filtering) produce the same hash. NOT isomorphism-aware — distinct
+// var IDs with identical structure get distinct hashes.
+//
+// Cost: O(active_vars + active_long_clauses) — single linear walk,
+// no WL refinement. Tens of nanoseconds in the common case.
+//
+// is_indep handling: NOT needed here. Identity hash uses literal var
+// IDs; two components with the same var IDs necessarily have the same
+// is_indep_[v] for each v, since I-membership is a global var property
+// (set once by Arjun). So I-distribution is implicit in the hash.
+// ---------------------------------------------------------------------
+CanonicalKey buildIdentityKey(
+    Component &comp,
+    const std::vector<LiteralID> &literal_pool,
+    const LiteralIndexedVector<TriValue> &literal_values,
+    const std::vector<ClauseOfs> &clause_id_to_ofs,
+    const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
+    unsigned original_lit_pool_size) {
+  // Reusable thread-local scratch (mirrors WL-key's static-buffer style).
+  static std::vector<uint32_t> packed;
+  packed.clear();
+
+  // Active variables (X_TRI), in component order.
+  unsigned n_vars = 0;
+  unsigned n_in_clauses = 0;
+  static std::vector<unsigned char> in_clause;
+  in_clause.clear();
+
+  // First pass: list of active vars
+  for (auto v_it = comp.varsBegin(); *v_it != varsSENTINEL; ++v_it) {
+    if (literal_values[LiteralID(*v_it, true)] != X_TRI) continue;
+    packed.push_back(*v_it);
+    n_vars++;
+    if (*v_it >= in_clause.size()) in_clause.resize(*v_it + 1, 0);
+  }
+  packed.push_back(0);  // SENTINEL between vars and clauses
+
+  // Active long clauses (apply same filters as the WL key).
+  unsigned n_long = 0;
+  for (auto cl_it = comp.clsBegin(); *cl_it != clsSENTINEL; ++cl_it) {
+    ClauseOfs ofs = clause_id_to_ofs[*cl_it];
+    if (ofs >= original_lit_pool_size) continue;  // skip learned
+    if (removed_clauses.count(ofs)) continue;
+    bool satisfied = false;
+    unsigned active_len = 0;
+    for (auto lt = literal_pool.begin() + ofs; *lt != SENTINEL_LIT; ++lt) {
+      if (literal_values[*lt] == T_TRI) { satisfied = true; break; }
+      if (literal_values[*lt] == X_TRI) active_len++;
+    }
+    if (satisfied || active_len < 2) continue;
+    packed.push_back((uint32_t)ofs);
+    n_long++;
+    // Mark each active var in this clause as "in a clause"
+    for (auto lt = literal_pool.begin() + ofs; *lt != SENTINEL_LIT; ++lt) {
+      if (literal_values[*lt] == X_TRI) {
+        const unsigned v = lt->var();
+        if (v < in_clause.size() && !in_clause[v]) {
+          in_clause[v] = 1;
+          n_in_clauses++;
+        }
+      }
+    }
+  }
+  packed.push_back(0);  // SENTINEL at end
+
+  // n_in_clauses also includes vars that have at least one active
+  // binary partner. Walk var binaries to update.
+  // (Skipped here — under projection counting we mainly care about
+  // CORRECT counts, not the precise free_vars factor. If issues arise,
+  // we extend this to walk binary_links_.)
+
+  // Compute hashes (two seeds for the 128-bit half).
+  const uint64_t seed_lo = 0xC0FFEE15A1100Cull;
+  const uint64_t seed_hi = 0xDEADBEEF600D1234ull;
+  const ptrdiff_t bytes = (ptrdiff_t)(packed.size() * sizeof(uint32_t));
+  CanonicalKey k;
+  k.hash       = chibihash64(packed.data(), bytes, seed_lo);
+  k.hash_hi    = chibihash64(packed.data(), bytes, seed_hi);
+  k.num_vars   = n_vars;
+  k.num_clauses = n_long;
+  k.n_in_clauses = n_in_clauses;
+  return k;
 }

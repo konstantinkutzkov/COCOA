@@ -71,6 +71,14 @@ public:
   // number of all conflicts occurred
   unsigned long num_conflicts_ = 0;
 
+  // Branches closed by the SCC-based 2-SAT UNSAT prune
+  // (Solver::sccCheckComponentUnsat). Only incremented when
+  // config_.use_scc_unsat_prune is on. Split by call site so we can
+  // attribute pruning to literal-branching vs clause-branching.
+  // Sum of the two is the total prune count.
+  unsigned long num_scc_unsat_pruned_lit_ = 0;
+  unsigned long num_scc_unsat_pruned_clause_ = 0;
+
   // number of clauses overall learned
   unsigned num_clauses_learned_ = 0;
   // Dedup drops at the conflict-UIP learning site.

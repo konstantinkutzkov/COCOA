@@ -94,30 +94,59 @@ void NDHierarchy::build(
     int n_vars,
     const vector<pair<unsigned, vector<unsigned>>> &clauses,
     const vector<pair<unsigned, unsigned>> &binary_pairs,
+    bool vars_only,
     int /* target_npes — unused, tree depth is automatic */)
 {
   valid = false;
   int n_cls = clauses.size();
-  int n_full = n_vars + n_cls;
+  // In vars_only mode the graph contains only variable nodes; long
+  // clauses contribute clique edges among their variables. In
+  // bipartite mode there's an aux node per long clause.
+  int n_full = vars_only ? n_vars : (n_vars + n_cls);
 
   if (n_full < 4) return;
 
   // Build adjacency lists (indexed by full graph index).
-  // Vertices: 0..n_vars-1 = variables, n_vars..n_full-1 = long-clause
-  // nodes. Binary clauses are NOT represented as separate nodes; they
-  // contribute a direct edge between their two variable nodes. This
-  // is not bipartite but METIS handles general undirected graphs.
+  // Bipartite mode: vertices 0..n_vars-1 = variables, n_vars..n_full-1
+  // = long-clause nodes. Binary clauses are NOT represented as
+  // separate nodes; they contribute a direct edge between their two
+  // variable nodes. This is not strictly bipartite but METIS handles
+  // general undirected graphs.
+  // Vars-only mode: only variable nodes; long clauses contribute one
+  // edge per pair of variables in the clause (clique). Multi-edges
+  // between vars co-occurring in multiple clauses are allowed —
+  // METIS treats them as weighted connectivity which is the right
+  // semantic.
   vector<vector<int>> full_adj(n_full);
-  for (int ci = 0; ci < n_cls; ci++) {
-    int clause_gidx = n_vars + ci;
-    for (unsigned var_id : clauses[ci].second) {
-      if (var_id < 1 || (int)var_id > n_vars) continue;
-      int var_gidx = var_id - 1;  // 0-indexed
-      full_adj[var_gidx].push_back(clause_gidx);
-      full_adj[clause_gidx].push_back(var_gidx);
+  if (vars_only) {
+    // Long clauses → cliques on their variables.
+    for (int ci = 0; ci < n_cls; ci++) {
+      const auto &cl_vars = clauses[ci].second;
+      const size_t k = cl_vars.size();
+      for (size_t i = 0; i < k; i++) {
+        if (cl_vars[i] < 1 || (int)cl_vars[i] > n_vars) continue;
+        int gi = (int)cl_vars[i] - 1;
+        for (size_t j = i + 1; j < k; j++) {
+          if (cl_vars[j] < 1 || (int)cl_vars[j] > n_vars) continue;
+          int gj = (int)cl_vars[j] - 1;
+          full_adj[gi].push_back(gj);
+          full_adj[gj].push_back(gi);
+        }
+      }
+    }
+  } else {
+    // Bipartite: var-clause edges via aux clause nodes.
+    for (int ci = 0; ci < n_cls; ci++) {
+      int clause_gidx = n_vars + ci;
+      for (unsigned var_id : clauses[ci].second) {
+        if (var_id < 1 || (int)var_id > n_vars) continue;
+        int var_gidx = var_id - 1;  // 0-indexed
+        full_adj[var_gidx].push_back(clause_gidx);
+        full_adj[clause_gidx].push_back(var_gidx);
+      }
     }
   }
-  // Binary clauses: direct var-var edges.
+  // Binary clauses: direct var-var edges (both modes).
   for (const auto &pr : binary_pairs) {
     unsigned a = pr.first, b = pr.second;
     if (a < 1 || (int)a > n_vars) continue;
@@ -391,6 +420,25 @@ void NDHierarchy::build(
   int total_sep = 0, internal = 0, passthrough = 0;
   int max_sep = 0;
   int sep_buckets[7] = {0,0,0,0,0,0,0};  // [0]=1-2, [1]=3-4, [2]=5-7, [3]=8-15, [4]=16-31, [5]=32-63, [6]=64+
+  // Per-element-kind breakdown: how many separator elements are VARs
+  // vs CLAUSEs across the whole hierarchy, and the kind of the
+  // largest separator node.
+  int total_sep_vars = 0, total_sep_clauses = 0;
+  int max_sep_vars = 0, max_sep_clauses = 0;  // for the max_sep node
+  // Build cl_ofs → length map from the long_clauses input passed to build().
+  // Lets the summary print a histogram of separator-clause lengths.
+  std::unordered_map<unsigned, unsigned> cl_len;
+  cl_len.reserve(clauses.size() * 2);
+  for (const auto &c : clauses) cl_len[c.first] = (unsigned)c.second.size();
+  // Histogram of clause lengths across ALL separator clause elements.
+  // Buckets: [3, 4, 5, 6, 7, 8, 9, 10-15, 16+]. Index 0 = length 3.
+  int cl_len_buckets[9] = {0,0,0,0,0,0,0,0,0};
+  auto bucket_idx = [](unsigned len) -> int {
+    if (len <= 3) return 0;
+    if (len <= 9) return (int)len - 3;   // len 4→1, 5→2, ..., 9→6
+    if (len <= 15) return 7;
+    return 8;
+  };
   for (int i = 0; i < next_node; i++) {
     bool is_leaf = (left_child[i] < 0 && right_child[i] < 0);
     if (is_leaf) continue;
@@ -398,7 +446,22 @@ void NDHierarchy::build(
     else {
       int s = (int)separator[i].size();
       total_sep += s; internal++;
-      if (s > max_sep) max_sep = s;
+      int sv = 0, sc = 0;
+      for (const auto &e : separator[i]) {
+        if (e.kind == CutNode::VAR) sv++;
+        else {
+          sc++;
+          auto it = cl_len.find(e.id);
+          if (it != cl_len.end()) cl_len_buckets[bucket_idx(it->second)]++;
+        }
+      }
+      total_sep_vars += sv;
+      total_sep_clauses += sc;
+      if (s > max_sep) {
+        max_sep = s;
+        max_sep_vars = sv;
+        max_sep_clauses = sc;
+      }
       if (s <= 2) sep_buckets[0]++;
       else if (s <= 4) sep_buckets[1]++;
       else if (s <= 7) sep_buckets[2]++;
@@ -409,11 +472,19 @@ void NDHierarchy::build(
     }
   }
   fprintf(stderr, "NDHierarchy: %d tree nodes, %d internal (sep), "
-          "%d passthrough, %d leaves, %d total sep elements, "
-          "max_sep=%d, sep_buckets=[1-2:%d, 3-4:%d, 5-7:%d, 8-15:%d, 16-31:%d, 32-63:%d, 64+:%d]\n",
-          next_node, internal, passthrough, next_leaf, total_sep, max_sep,
+          "%d passthrough, %d leaves, %d total sep elements "
+          "(vars=%d clauses=%d), "
+          "max_sep=%d (vars=%d clauses=%d), "
+          "sep_buckets=[1-2:%d, 3-4:%d, 5-7:%d, 8-15:%d, 16-31:%d, 32-63:%d, 64+:%d], "
+          "sep_clause_len=[3:%d, 4:%d, 5:%d, 6:%d, 7:%d, 8:%d, 9:%d, 10-15:%d, 16+:%d]\n",
+          next_node, internal, passthrough, next_leaf,
+          total_sep, total_sep_vars, total_sep_clauses,
+          max_sep, max_sep_vars, max_sep_clauses,
           sep_buckets[0], sep_buckets[1], sep_buckets[2], sep_buckets[3],
-          sep_buckets[4], sep_buckets[5], sep_buckets[6]);
+          sep_buckets[4], sep_buckets[5], sep_buckets[6],
+          cl_len_buckets[0], cl_len_buckets[1], cl_len_buckets[2],
+          cl_len_buckets[3], cl_len_buckets[4], cl_len_buckets[5],
+          cl_len_buckets[6], cl_len_buckets[7], cl_len_buckets[8]);
 }
 
 vector<CutNode> NDHierarchy::lookupSeparator(

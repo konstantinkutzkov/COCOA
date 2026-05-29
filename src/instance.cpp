@@ -215,8 +215,8 @@ void Instance::compactClauses() {
       for (unsigned i = 0; i < ClauseHeader::overheadInLits(); i++)
         literal_pool_.push_back(0);
       new_ofs = literal_pool_.size();
-      literal(*it).addWatchLinkTo(new_ofs);
-      literal(*(it + 1)).addWatchLinkTo(new_ofs);
+      literal(*it).addWatchLinkTo(new_ofs, *(it + 1));
+      literal(*(it + 1)).addWatchLinkTo(new_ofs, *it);
       num_clauses++;
       for (; *it != SENTINEL_LIT; it++) {
         literal_pool_.push_back(*it);
@@ -274,6 +274,12 @@ void Instance::compactVariables() {
   variables_.clear();
   variables_.resize(last_ofs + 1);
   is_branch_constraint_.assign(variables_.size(), false);
+  // Default all-indep (no projection); Phase D populates via Arjun.
+  // NOTE: compactVariables may run after Arjun has set is_indep_, in
+  // which case this assign would wipe the populated values. Phase D
+  // must handle preservation across compaction; for now (Phase B), the
+  // flag is off-by-default so this never matters.
+  is_indep_.assign(variables_.size(), true);
   occurrence_lists_.clear();
   occurrence_lists_.resize(variables_.size());
   literals_.clear();
@@ -309,10 +315,11 @@ void Instance::compactVariables() {
   }
 
   for (auto ofs : clause_ofs) {
-    literal(LiteralID(var_map[beginOf(ofs)->var()], beginOf(ofs)->sign())).addWatchLinkTo(
-        ofs);
-    literal(LiteralID(var_map[(beginOf(ofs) + 1)->var()],
-            (beginOf(ofs) + 1)->sign())).addWatchLinkTo(ofs);
+    LiteralID l0_new(var_map[beginOf(ofs)->var()], beginOf(ofs)->sign());
+    LiteralID l1_new(var_map[(beginOf(ofs) + 1)->var()],
+                     (beginOf(ofs) + 1)->sign());
+    literal(l0_new).addWatchLinkTo(ofs, l1_new);
+    literal(l1_new).addWatchLinkTo(ofs, l0_new);
     for (auto it_lit = beginOf(ofs); *it_lit != SENTINEL_LIT; it_lit++) {
       *it_lit = LiteralID(var_map[it_lit->var()], it_lit->sign());
       occurrence_lists_[*it_lit].push_back(ofs);
@@ -448,6 +455,7 @@ bool Instance::createfromFile(const string &file_name) {
 
   variables_.resize(nVars + 1);
   is_branch_constraint_.assign(nVars + 1, false);
+  is_indep_.assign(nVars + 1, true);  // default all-indep
   literal_values_.resize(nVars + 1, X_TRI);
   literal_pool_.reserve(filestatus.st_size);
   conflict_clauses_.reserve(2*nCls);
