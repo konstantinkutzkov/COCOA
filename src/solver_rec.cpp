@@ -132,6 +132,46 @@ void Solver::computeNdCentrality() {
   }
 }
 
+// Load per-variable TD centroid-distance scores from a text file produced
+// by tools/compute_tdscore.py. Format: one float per line, line i is the
+// score for DIMACS variable i (1-indexed). td_score_ is sized to
+// num_variables()+1 and indexed by VariableIndex. Missing trailing entries
+// default to 0; extra lines beyond num_variables() are ignored with a warning.
+void Solver::loadTdScoreFile(const std::string& path) {
+  td_score_.assign(num_variables() + 1, 0.0f);
+  std::ifstream f(path);
+  if (!f.is_open()) {
+    std::cerr << "ERROR: -tdScoreFile path could not be opened: " << path << std::endl;
+    return;
+  }
+  std::string line;
+  unsigned v = 1;
+  unsigned n_loaded = 0;
+  unsigned n_positive = 0;
+  while (std::getline(f, line)) {
+    if (line.empty()) continue;
+    try {
+      float val = (float)std::stod(line);
+      if (v <= num_variables()) {
+        td_score_[v] = val;
+        if (val > 0.0f) n_positive++;
+        n_loaded++;
+      }
+      v++;
+    } catch (const std::exception &e) {
+      std::cerr << "WARN: -tdScoreFile non-numeric line at var=" << v
+                << ": '" << line << "'" << std::endl;
+      v++;
+    }
+  }
+  unsigned overflow = (v > num_variables() + 1) ? (v - num_variables() - 1) : 0;
+  std::cerr << "[td] loaded " << n_loaded << " scores from " << path
+            << " (n_positive=" << n_positive
+            << ", nvars=" << num_variables();
+  if (overflow) std::cerr << ", ignored_extra=" << overflow;
+  std::cerr << ")" << std::endl;
+}
+
 SOLVER_StateT Solver::countSATRec() {
 	// Build precomputed ND hierarchy if separator branching is enabled.
 	if (config_.perform_separator_branching && !nd_hierarchy_.valid) {
@@ -325,10 +365,7 @@ SOLVER_StateT Solver::countSATRec() {
 		statistics_.set_final_solution_count(0);
 		return TIMEOUT;
 	}
-	// Apply projection multiplier from Arjun (default 1 → no-op).
-	// Encodes the 2^k factor for variables Arjun eliminated as
-	// genuinely-free. See Instance::count_multiplier_.
-	statistics_.set_final_solution_count(result * count_multiplier_);
+	statistics_.set_final_solution_count(result);
 	return SUCCESS;
 }
 
@@ -368,8 +405,13 @@ mpz_class Solver::solveComponent(Component &comp,
 	statistics_.sum_comp_vars_at_entry_ += comp.num_variables();
 	statistics_.num_comp_entries_++;
 
+	// can_cache gates the entire L2 path (build + peek + store) at the
+	// solveComponent function-boundary entry. -noL2 / skip_l2_cache makes
+	// it false unconditionally; L1 still works because it's wired at the
+	// decomp site, not here.
 	bool can_cache = config_.perform_component_caching
-	                 && comp.num_variables() >= 3;
+	                 && comp.num_variables() >= 3
+	                 && !config_.skip_l2_cache;
 	CanonicalKey cached_key;
 	unsigned free_vars = 0;
 	bool key_built = false;
@@ -441,8 +483,7 @@ mpz_class Solver::solveComponent(Component &comp,
 				        comp_manager_.getAnalyzer().clauseIdToOfs(),
 				        removed_clauses_,
 				        original_lit_pool_size_, config_.wl_iterations,
-				        static_wl_labels_.empty() ? nullptr : &static_wl_labels_,
-				        config_.use_indep_restriction ? &is_indep_ : nullptr);
+				        static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
 				if (!(fresh.hash == precomputed_snap->key.hash
 				      && fresh.hash_hi == precomputed_snap->key.hash_hi
 				      && fresh.num_vars == precomputed_snap->key.num_vars
@@ -488,8 +529,7 @@ mpz_class Solver::solveComponent(Component &comp,
 				    comp, literal_pool_, literals_, literal_values_,
 				    comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
 				    original_lit_pool_size_, config_.wl_iterations,
-				    static_wl_labels_.empty() ? nullptr : &static_wl_labels_,
-				    config_.use_indep_restriction ? &is_indep_ : nullptr);
+				    static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
 			}
 		}
 		key_built = true;
@@ -1284,7 +1324,11 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			}
 
 			CanonicalKey key;
-			{
+			// L2 path: skip BOTH the canonical-key build AND the peek when
+			// -noL2 is set. L1 above has already done its work; on cache-dead
+			// instances (e.g. t1_105) this reclaims ~80% of wall.
+			bool l2_enabled = !config_.skip_l2_cache;
+			if (l2_enabled) {
 				OpTimer _t(this, OP_CANONICAL);
 				if (config_.cache_hash_mode == SolverConfiguration::IDENTITY) {
 					key = buildIdentityKey(
@@ -1296,8 +1340,7 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 						*sub, literal_pool_, literals_, literal_values_,
 						comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
 						original_lit_pool_size_, config_.wl_iterations,
-						static_wl_labels_.empty() ? nullptr : &static_wl_labels_,
-						config_.use_indep_restriction ? &is_indep_ : nullptr);
+						static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
 				}
 			}
 			// Snapshot state at key-build time for the precomputed-snapshot
@@ -1310,11 +1353,13 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				learned_clause_scope_.size()
 			};
 			bool hit;
-			{
+			if (l2_enabled) {
 				OpTimer _t(this, OP_L2_PEEK);
 				hit = (config_.perform_component_caching &&
 				       sub->num_variables() >= 3 &&
 				       comp_manager_.contentCache().peek(key, sub_count));
+			} else {
+				hit = false;
 			}
 			if (hit) {
 				// L2 hit: canonicalized form matches a previously-cached
@@ -1432,7 +1477,7 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 			sub_count = solveComponent(*sub, {}, true, depth + 1, sub_nd,
 			                           reactive_metis_skip_until_depth,
 			                           sub_budget,
-			                           &snap);
+			                           l2_enabled ? &snap : nullptr);
 
 
 			// Brute-force cache check at STORE time. If sub-component is
@@ -2666,9 +2711,6 @@ VariableIndex Solver::pickBranchVariable(Component &comp) {
 	VariableIndex best = 0;
 	float best_score = -1.0f;
 	unsigned active_count = 0;
-	// Pass 1: I-restricted (no-op when use_indep_restriction is off
-	// since is_indep_ defaults all-true).
-	const bool restrict_to_indep = config_.use_indep_restriction;
 
 	// Fixed-order picker: iterate comp's vars, return the one with the
 	// smallest var_to_order_[v] (i.e., highest-priority under the
@@ -2676,8 +2718,6 @@ VariableIndex Solver::pickBranchVariable(Component &comp) {
 	// call but no probing.
 	if (config_.picker_order != SolverConfiguration::NONE
 	    && !var_to_order_.empty()) {
-		unsigned best_order_indep = UINT_MAX;
-		VariableIndex best_indep = 0;
 		unsigned best_order_any = UINT_MAX;
 		VariableIndex best_any = 0;
 		for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
@@ -2685,47 +2725,21 @@ VariableIndex Solver::pickBranchVariable(Component &comp) {
 			active_count++;
 			if (*it >= var_to_order_.size()) continue;
 			const unsigned ord = var_to_order_[*it];
-			if (ord >= best_order_any) {
-				// already worse than current any-best
-			} else {
+			if (ord < best_order_any) {
 				best_order_any = ord;
 				best_any = *it;
 			}
-			if (restrict_to_indep && *it < is_indep_.size() && is_indep_[*it]
-			    && ord < best_order_indep) {
-				best_order_indep = ord;
-				best_indep = *it;
-			}
 		}
-		if (restrict_to_indep && best_indep != 0) return best_indep;
 		return best_any;
 	}
 
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
 		if (!isActive(LiteralID(*it, true))) continue;
-		if (restrict_to_indep && !is_indep_[*it]) continue;
 		active_count++;
 		float s = scoreOf(*it);
 		if (s > best_score) {
 			best_score = s;
 			best = *it;
-		}
-	}
-	// Pass 2: unrestricted fallback when projection found no I-var.
-	// Phase C "DPLL fallback at the indep-support boundary" — under
-	// Arjun's invariant the resulting sub-tree contributes 0 or 1
-	// because each non-I var is functionally determined by the
-	// already-assigned I-vars; the counting machinery just walks the
-	// remaining vars to discover satisfiability.
-	if (best == 0 && restrict_to_indep) {
-		for (auto it = comp.varsBegin(); *it != varsSENTINEL; it++) {
-			if (!isActive(LiteralID(*it, true))) continue;
-			active_count++;
-			float s = scoreOf(*it);
-			if (s > best_score) {
-				best_score = s;
-				best = *it;
-			}
 		}
 	}
 	if (config_.log_branches && best != 0) {
@@ -2778,9 +2792,6 @@ Solver::BranchTarget Solver::pickBranchTarget(
 	if (config_.picker_sep_lockstep) {
 		for (const auto &nd : separator) {
 			if (nd.kind == CutNode::VAR) {
-				// Skip non-I separator vars under projection
-				if (config_.use_indep_restriction
-				    && !is_indep_[nd.id]) continue;
 				if (isActive(LiteralID(nd.id, true))) {
 					best.kind = BranchTarget::VAR;
 					best.id = nd.id;
@@ -2870,12 +2881,6 @@ Solver::BranchTarget Solver::pickBranchTarget(
 	if (do_dump) entries.reserve(64);
 
 	// Phase 2a: score VARs.
-	// Under use_indep_restriction we track best-among-I separately
-	// from best-overall; if any I-var scored above the current best,
-	// we override it at the end. When no I-var is active, fall back to
-	// best-overall (DPLL fallback at the indep-support boundary).
-	const bool restrict_to_indep = config_.use_indep_restriction;
-	BranchTarget best_indep;  // separate tracking for I-vars under projection
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
 		if (!isActive(LiteralID(*it, true))) continue;
 		float raw = (float)comp_manager_.scoreOf(*it);
@@ -2898,11 +2903,6 @@ Solver::BranchTarget Solver::pickBranchTarget(
 			best.kind  = BranchTarget::VAR;
 			best.id    = *it;
 			best.score = s;
-		}
-		if (restrict_to_indep && is_indep_[*it] && s > best_indep.score) {
-			best_indep.kind  = BranchTarget::VAR;
-			best_indep.id    = *it;
-			best_indep.score = s;
 		}
 	}
 
@@ -2979,10 +2979,6 @@ Solver::BranchTarget Solver::pickBranchTarget(
 		          << " score=" << best.score
 		          << "\n";
 	}
-	// Phase C: prefer best-I if projection is on AND any I-var was
-	// scored above the default sentinel; otherwise fall back to
-	// best-overall (DPLL fallback past the indep-support boundary).
-	if (restrict_to_indep && best_indep.score > 0.0f) return best_indep;
 	return best;
 }
 

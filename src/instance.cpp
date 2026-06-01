@@ -274,12 +274,6 @@ void Instance::compactVariables() {
   variables_.clear();
   variables_.resize(last_ofs + 1);
   is_branch_constraint_.assign(variables_.size(), false);
-  // Default all-indep (no projection); Phase D populates via Arjun.
-  // NOTE: compactVariables may run after Arjun has set is_indep_, in
-  // which case this assign would wipe the populated values. Phase D
-  // must handle preservation across compaction; for now (Phase B), the
-  // flag is off-by-default so this never matters.
-  is_indep_.assign(variables_.size(), true);
   occurrence_lists_.clear();
   occurrence_lists_.resize(variables_.size());
   literals_.clear();
@@ -455,7 +449,6 @@ bool Instance::createfromFile(const string &file_name) {
 
   variables_.resize(nVars + 1);
   is_branch_constraint_.assign(nVars + 1, false);
-  is_indep_.assign(nVars + 1, true);  // default all-indep
   literal_values_.resize(nVars + 1, X_TRI);
   literal_pool_.reserve(filestatus.st_size);
   conflict_clauses_.reserve(2*nCls);

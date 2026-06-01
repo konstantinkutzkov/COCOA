@@ -62,21 +62,6 @@ set(SBVA_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/sbva-build/lib/libsbva.a"
     CACHE FILEPATH "Path to SBVA static library")
 set(CMS5_DEPS ${CMS5_LIB} ${CADIBACK_LIB} ${CADICAL_LIB} ${SBVA_LIB})
 
-# Arjun — used by preprocessor_arjun.cpp (Phase D) for independent-support
-# extraction + count-multiplier-preserving simplification. Points at the
-# static lib already built under ganak's _deps tree (same pattern as CMS5).
-set(ARJUN_DIR "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/arjun-build/include"
-    CACHE PATH "Path to Arjun headers (arjun/arjun.h)")
-set(ARJUN_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/arjun-build/lib/libarjun.a"
-    CACHE FILEPATH "Path to Arjun static library")
-set(APPROXMC_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/approxmc-build/lib/libapproxmc.a"
-    CACHE FILEPATH "Path to ApproxMC static library (Arjun dependency)")
-set(TREEDECOMP_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/treedecomp-build/lib/libtreedecomp.a"
-    CACHE FILEPATH "Path to treedecomp static library (Arjun dependency)")
-# Arjun also pulls MPFR (for its Field types). Provided by Homebrew on macOS.
-find_library(MPFR_LIB mpfr)
-set(ARJUN_DEPS ${ARJUN_LIB} ${APPROXMC_LIB} ${TREEDECOMP_LIB} ${MPFR_LIB})
-
 # CMS5_DIR is scoped to libsharpSAT only (where preprocessor_light.cpp
 # consumes <cryptominisat.h>). Don't put it in the project-wide include
 # path — CMS5 ships its own solver.h that would otherwise shadow ours
@@ -88,8 +73,7 @@ add_executable (sharpSAT src/main.cpp)
 target_link_libraries (sharpSAT libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
     ${GKLIB_DIR}/build/libGKlib.a
-    ${CMS5_DEPS}
-    ${ARJUN_DEPS})
+    ${CMS5_DEPS})
 
 add_executable (test_probe tests/test_probe.cpp)
 target_include_directories (test_probe PRIVATE src)
@@ -189,3 +173,11 @@ target_link_libraries (metis_replay
     ${METIS_DIR}/build/libmetis/libmetis.a
     ${GKLIB_DIR}/build/libGKlib.a
     ${CMS5_DEPS})
+
+# metis_features — reads a CNF, runs METIS_ComputeVertexSeparator on its
+# bipartite incidence graph, and prints machine-parseable key=value
+# features used by the portfolio router (portfolio/preprocess/metis_wrapper.py).
+add_executable (metis_features tools/metis_features.cpp)
+target_link_libraries (metis_features
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a)

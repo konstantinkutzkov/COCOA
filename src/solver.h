@@ -390,21 +390,6 @@ public:
 		stopwatch_.setTimeBound(i);
 	}
 
-	// Provide Arjun's result for projected counting.
-	// `indep_vars_1based` contains 1-indexed variable IDs in the
-	// independent support I (vars that the picker must branch on).
-	// `multiplier` is Arjun's count-factor for eliminated free vars
-	// (the final reported count is search_count * multiplier).
-	//
-	// Must be called before solve() and applied after createfromFile
-	// has populated the variable space (see solve()).
-	void setArjunResult(std::vector<unsigned> indep_vars_1based,
-	                    mpz_class multiplier) {
-		pending_arjun_indep_ = std::move(indep_vars_1based);
-		pending_arjun_multiplier_ = std::move(multiplier);
-		pending_arjun_set_ = true;
-	}
-
 	// SCC-based 2-SAT UNSAT detection on the residual restricted to
 	// `comp`. Returns true iff some variable in `comp` has both
 	// polarities in the same SCC of the binary-implication graph —
@@ -668,21 +653,11 @@ private:
 	// by solve() after preprocessing and before search starts.
 	std::vector<std::tuple<unsigned, unsigned, bool>> pending_redundant_equivs_;
 
-	// Arjun result queued by setArjunResult; consumed by solve() after
-	// preprocessing finishes (so the indep mapping is over the post-PP
-	// variable space). When pending_arjun_set_ is true, solve() will
-	// populate is_indep_ from pending_arjun_indep_ and set
-	// count_multiplier_ = pending_arjun_multiplier_.
-	std::vector<unsigned> pending_arjun_indep_;
-	mpz_class             pending_arjun_multiplier_ = 1;
-	bool                  pending_arjun_set_        = false;
-
 	// Fixed branching order (used when config_.picker_order != NONE).
 	// Computed once at solve start. var_to_order_[v] gives v's position
-	// in the fixed order; UINT_MAX means "not in the order" (e.g.,
-	// non-I vars when projection is on). The picker iterates the
-	// component's active vars and returns the one with the smallest
-	// var_to_order_[v]. See computeFixedBranchOrder() below.
+	// in the fixed order; UINT_MAX means "not in the order". The picker
+	// iterates the component's active vars and returns the one with the
+	// smallest var_to_order_[v]. See computeFixedBranchOrder() below.
 	std::vector<unsigned> fixed_order_vars_;     // ordered list
 	std::vector<unsigned> var_to_order_;         // reverse index
 	void computeFixedBranchOrder();
@@ -1084,6 +1059,13 @@ private:
 	std::vector<float> nd_centrality_score_;
 	void computeNdCentrality();
 
+	// Per-variable TD centroid-distance score loaded from -tdScoreFile
+	// (one float per line, 1-indexed to DIMACS var). Indexed by
+	// VariableIndex (1-based, same as scoreOf's argument). Format and
+	// formula match ganak's tdscore vector / compute_td_score_using_raw.
+	std::vector<float> td_score_;
+	void loadTdScoreFile(const std::string& path);
+
 	// Reactive-METIS measurement accumulators. Populated when
 	// config_.measure_reactive_metis is on; printed at end-of-solve.
 	unsigned long long reactive_metis_calls_   = 0;
@@ -1120,13 +1102,26 @@ private:
 	/////////////////////////////////////////////
 
 	float scoreOf(VariableIndex v) {
-		float score = comp_manager_.scoreOf(v);
-		score += 10.0 * literal(LiteralID(v, true)).activity_score_;
-		score += 10.0 * literal(LiteralID(v, false)).activity_score_;
+		float score = (float)comp_manager_.scoreOf(v)
+		            / (float)config_.picker_freq_div;
+		score += (float)config_.picker_act_mul
+		       * literal(LiteralID(v, true)).activity_score_;
+		score += (float)config_.picker_act_mul
+		       * literal(LiteralID(v, false)).activity_score_;
 		if (config_.nd_centrality_weight > 0.0
 		    && (size_t)v < nd_centrality_score_.size()) {
 			score += (float)(config_.nd_centrality_weight)
 			       * nd_centrality_score_[v];
+		}
+		if (config_.sep_degree_weight > 0.0
+		    && (size_t)v < nd_hierarchy_.centrality_score.size()) {
+			score += (float)(config_.sep_degree_weight)
+			       * (float)nd_hierarchy_.centrality_score[v];
+		}
+		if (config_.td_score_weight > 0.0
+		    && (size_t)v < td_score_.size()) {
+			score += (float)(config_.td_score_weight)
+			       * td_score_[v];
 		}
 //		score += (10*stack_.get_decision_level()) * literal(LiteralID(v, true)).activity_score_;
 //		score += (10*stack_.get_decision_level()) * literal(LiteralID(v, false)).activity_score_;

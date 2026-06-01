@@ -15,8 +15,8 @@
 //   - cleanup (clean-cls, must-renumber)
 //
 // Explicitly NOT used: BVE (set_bve(0)), BVA (set_no_bva()), autarky,
-// BCE, SBVA, gate-based variable elimination. These are sound for
-// projected counting but change the *raw* model count.
+// BCE, SBVA, gate-based variable elimination. These change the *raw*
+// model count, so they are disabled (COCOA counts raw models).
 //
 // On success, writes the simplified CNF in DIMACS form to output_path
 // and returns true. The simplified CNF's model count equals the input

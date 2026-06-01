@@ -110,12 +110,6 @@ struct CanonicalKeyHash {
 // ---------------------------------------------------------------
 class Component;  // forward declaration
 
-// `is_indep` (optional): per-variable independent-support membership.
-// If non-null, an extra "pre-0 iteration" sets a bit in each variable's
-// initial WL label per is_indep[v], so two structurally-equivalent
-// components with different I-distributions get distinct keys (required
-// for sound projected counting under Arjun). Default null = no I-bit,
-// behavior identical to pre-Phase-B code.
 CanonicalKey buildCanonicalKey(
     Component &comp,
     const std::vector<LiteralID> &literal_pool,
@@ -125,8 +119,7 @@ CanonicalKey buildCanonicalKey(
     const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
     unsigned original_lit_pool_size,
     int wl_iterations = 1,
-    const std::vector<uint64_t> *static_wl_labels = nullptr,
-    const std::vector<bool> *is_indep = nullptr);
+    const std::vector<uint64_t> *static_wl_labels = nullptr);
 
 // Identity-based alternative to buildCanonicalKey. Hashes the packed
 // [vars + active long clauses] via chibihash64 with no isomorphism

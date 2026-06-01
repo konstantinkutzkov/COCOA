@@ -89,8 +89,7 @@ CanonicalKey buildCanonicalKey(
     const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
     unsigned original_lit_pool_size,
     int wl_iterations,
-    const std::vector<uint64_t> *static_wl_labels,
-    const std::vector<bool> *is_indep) {
+    const std::vector<uint64_t> *static_wl_labels) {
 
   // Collect active variables
   // Reset s_labels_collision so the post-WL "is it built?" check via
@@ -207,37 +206,18 @@ CanonicalKey buildCanonicalKey(
   }
 
   // Determine singletons and polarity flips (packed into flags byte).
-  // Plus the I-bit (bit 2 = 0x04) when projection is active — this is
-  // the "pre-0 iteration" labeling: two structurally-identical
-  // components with different I-membership distributions will get
-  // distinct initial labels here, which propagates through the WL
-  // refinement to distinct final canonical keys. Default null
-  // is_indep = no I-bit, behavior identical to pre-Phase-B.
+  // Bit 0x04 is reused below as the residual-collision marker (pass 2);
+  // it is never set in this pass.
   s_var_flags.assign(n_vars, 0);
   for (unsigned i = 0; i < n_vars; i++) {
     if (s_pos_count[i] + s_neg_count[i] == 1)
       s_var_flags[i] |= 1;  // singleton
     else if (s_neg_count[i] > s_pos_count[i])
       s_var_flags[i] |= 2;  // flip
-    if (is_indep && (*is_indep)[s_active_vars[i]])
-      s_var_flags[i] |= 4;  // in I
   }
 
   // Pass 1b: Compute variable signatures via tabulation.
-  // When the I-bit is active (s_var_flags[i] & 4), pre-seed the
-  // signature with INDEP_SEED so I-vars and non-I-vars accumulate
-  // distinguishable signatures even if their clause-hash contributions
-  // are identical. Without this seed, two structurally-equivalent
-  // components with different I-distributions would collide on the
-  // canonical_key — wrong for projected counting.
-  //
-  // When is_indep is null (default), no var has bit 4 set, so the
-  // seed loop is a no-op and the signature is identical to pre-Phase-B.
-  const uint64_t INDEP_SEED = 0xC3F2E1D0B0A09080ULL;
   s_sig.assign(n_vars, 0);
-  for (unsigned i = 0; i < n_vars; i++) {
-    if (s_var_flags[i] & 4) s_sig[i] = INDEP_SEED;
-  }
 
   for (const auto &ref : s_clause_refs) {
     unsigned len = 0, np = 0, nn = 0, ns = 0;
@@ -791,11 +771,6 @@ std::vector<uint64_t> computeStaticWLLabels(
 //
 // Cost: O(active_vars + active_long_clauses) — single linear walk,
 // no WL refinement. Tens of nanoseconds in the common case.
-//
-// is_indep handling: NOT needed here. Identity hash uses literal var
-// IDs; two components with the same var IDs necessarily have the same
-// is_indep_[v] for each v, since I-membership is a global var property
-// (set once by Arjun). So I-distribution is implicit in the hash.
 // ---------------------------------------------------------------------
 CanonicalKey buildIdentityKey(
     Component &comp,
@@ -853,9 +828,9 @@ CanonicalKey buildIdentityKey(
 
   // n_in_clauses also includes vars that have at least one active
   // binary partner. Walk var binaries to update.
-  // (Skipped here — under projection counting we mainly care about
-  // CORRECT counts, not the precise free_vars factor. If issues arise,
-  // we extend this to walk binary_links_.)
+  // (Skipped here — the identity hash mainly cares about CORRECT counts,
+  // not the precise free_vars factor. If issues arise, we extend this to
+  // walk binary_links_.)
 
   // Compute hashes (two seeds for the 128-bit half).
   const uint64_t seed_lo = 0xC0FFEE15A1100Cull;

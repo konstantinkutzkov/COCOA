@@ -86,6 +86,41 @@ struct SolverConfiguration {
 
   // TODO component caching cannot be deactivated for now!
   bool perform_component_caching = true;
+  // When true: skip L2 (canonical/identity) cache build, peek, store.
+  // L1 (raw-ID identity hash) still runs. Use on instances where the
+  // canonical key build burns CPU without producing hits (e.g. t1_105:
+  // 80% CPU on canonical build, 15 L2 hits / 4.57M stores in 5 min).
+  bool skip_l2_cache = false;
+
+  // Weight for nd_hierarchy_.centrality_score in scoreOf. Separator vars
+  // get a normalized weighted-degree score [0, 100]; this flag multiplies
+  // that into the picker score (analogous to nd_centrality_weight but
+  // for separator-var importance, computed at preprocessing time from
+  // primal-graph degrees).
+  double sep_degree_weight = 0.0;
+
+  // Per-variable tree-decomposition centroid-distance score, loaded at
+  // startup from -tdScoreFile (one float per line, 1-indexed to DIMACS
+  // var). Produced by tools/compute_tdscore.py which runs flow_cutter_pace17
+  // and applies ganak's compute_td_score_using_raw formula:
+  //   score[v] = 100 * (max_dist - dist[v]) / max_dist
+  // where dist[v] is the BFS distance in the bag tree from the centroid
+  // bag to the nearest bag containing v. Multiplied by td_score_weight in
+  // scoreOf, identical placement to sep_degree_weight. Default 0.0 = off.
+  double td_score_weight = 0.0;
+  std::string td_score_file;
+
+  // Picker term rescaling, mirroring ganak's act_score_divisor and
+  // freq_score_divisor. Defaults preserve our historical scoreOf exactly:
+  //   score = comp_manager_.scoreOf(v) / picker_freq_div                 (was: raw)
+  //         + picker_act_mul * (act_pos + act_neg)                       (was: 10*pos + 10*neg)
+  //         + structural terms (nd/sep/td/cascade)
+  // Ganak's relative magnitudes correspond to picker_freq_div=25,
+  // picker_act_mul≈0.333 (act/3 per polarity sum) — set both to push the
+  // picker into a regime where tdscore can dominate cleanly at
+  // ganak-style td_weight in [7, 60].
+  double picker_freq_div = 1.0;
+  double picker_act_mul  = 10.0;
   bool perform_failed_lit_test = true;
   bool perform_pre_processing = true;
 
@@ -106,25 +141,11 @@ struct SolverConfiguration {
   // among their variables (rather than aux clause-nodes in a bipartite
   // graph). Separators therefore contain only VAR CutNodes, never
   // CLAUSE — which is required when clause branching is disabled (no
-  // way to "consume" a clause separator element) and for the Arjun
-  // integration where branching is further restricted to the
-  // independent support. Default off — preserves existing bipartite
-  // behavior.
+  // way to "consume" a clause separator element). Default off —
+  // preserves existing bipartite behavior.
   //
   // CLI: -metisVars.
   bool metis_vars_only = false;
-
-  // Restrict variable branching to the independent support (I).
-  // When false, every active variable is a branching candidate (total
-  // #SAT semantics). When true, the picker filters out variables with
-  // !is_indep_[v]; the leaf factor counts only free I-vars; the final
-  // count is multiplied by count_multiplier_.
-  //
-  // Phase B introduces this gate; Phase D wires it to Arjun's output.
-  // Stays default-off until Arjun integration is complete + verified.
-  //
-  // CLI: -useIndepRestriction (manual, for testing).
-  bool use_indep_restriction = false;
 
   // Cache hash mode. Two options:
   //   CANONICAL (default): WL-refinement isomorphism-aware key. Slow per
@@ -166,7 +187,7 @@ struct SolverConfiguration {
   // most equivalences).
   // METIS_DEG: run METIS on the var-only short-clause graph (binaries
   //   + length-3 only), collect separator vars, sort by tuple
-  //   (is_indep, in_separator, degree) descending. Branch in that order.
+  //   (in_separator, degree) descending. Branch in that order.
   //   Hypothesis: short-clause structural separators sit at high-impact
   //   positions; ordering by degree within them picks the variables
   //   that BCP-propagate widely first.

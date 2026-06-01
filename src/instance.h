@@ -182,21 +182,6 @@ protected:
   // visible read-path win.
   std::vector<bool> is_branch_constraint_;
 
-  // is_indep_[v] (v 1-indexed): true iff variable v is in the
-  // independent support I. Default all-true (every variable is
-  // independent → branching unrestricted, equivalent to total #SAT).
-  // Phase D (Arjun integration) populates this from Arjun's output;
-  // Phase B (picker / leaf / canonical_key) consults it but only when
-  // config_.use_indep_restriction is set. Same indexing convention as
-  // is_branch_constraint_.
-  std::vector<bool> is_indep_;
-  // count_multiplier_: Arjun's `multiplier_weight` — the factor by
-  // which the search count must be multiplied to recover #SAT(F).
-  // Accounts for variables Arjun eliminated as genuinely-free. Default
-  // 1 = no projection scaling. Set by preprocessor_arjun.cpp (future
-  // Phase D); applied at the end of main.cpp where the final count is
-  // printed.
-  mpz_class count_multiplier_ = 1;
   LiteralIndexedVector<TriValue> literal_values_;
 
   // ------------------------------------------------------------------
@@ -402,7 +387,6 @@ protected:
     guard_var_ = variables_.size();  // new 1-based index = current size
     variables_.push_back(Variable{});
     is_branch_constraint_.resize(variables_.size(), false);
-    is_indep_.resize(variables_.size(), true);  // default: all-indep
     literals_.resize(variables_.size());
     literal_values_.resize(variables_.size(), X_TRI);
     occurrence_lists_.resize(variables_.size());

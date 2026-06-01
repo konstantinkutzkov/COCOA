@@ -229,7 +229,6 @@ std::vector<std::vector<int>> Solver::extractFormulaAsDimacs() {
 void Solver::rebuildFromPreprocessedCNF(const PreprocessorResult &pre_out) {
 	// 1. Reset per-variable state (antecedent, DL, value).
 	is_branch_constraint_.assign(variables_.size(), false);
-	is_indep_.assign(variables_.size(), true);  // default all-indep
 
 	for (unsigned v = 0; v < variables_.size(); v++) {
 		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
@@ -464,6 +463,13 @@ void Solver::solve(const string &file_name) {
 	createfromFile(file_name);
 	initStack(num_variables());
 
+	// TD-score load (from -tdScoreFile). Must happen after createfromFile
+	// so num_variables() is known. Vector is indexed by VariableIndex
+	// (1-based), so we size to num_variables()+1.
+	if (!config_.td_score_file.empty()) {
+		loadTdScoreFile(config_.td_score_file);
+	}
+
 	// Reactive-METIS input dump (diagnostic; off unless flag set).
 	// Must be set BEFORE search begins so all reactive METIS calls are
 	// captured.
@@ -600,52 +606,10 @@ void Solver::solve(const string &file_name) {
 			pending_redundant_equivs_.clear();
 		}
 
-		// Apply pending Arjun result (independent support + multiplier).
-		// Translates input-CNF var IDs through compact_to_orig_ to the
-		// post-preprocessing space, then populates is_indep_ and
-		// count_multiplier_. After this, the picker (under
-		// use_indep_restriction) will only branch on I-vars; the leaf
-		// count gets multiplied by count_multiplier_ before being
-		// reported.
-		if (pending_arjun_set_) {
-			std::vector<unsigned> input_to_compact;
-			if (!compact_to_orig_.empty()) {
-				unsigned max_orig = 0;
-				for (unsigned c = 1; c < compact_to_orig_.size(); c++)
-					max_orig = std::max(max_orig, compact_to_orig_[c]);
-				input_to_compact.assign(max_orig + 1, 0);
-				for (unsigned c = 1; c < compact_to_orig_.size(); c++)
-					input_to_compact[compact_to_orig_[c]] = c;
-			}
-			auto translate = [&](unsigned v_input) -> unsigned {
-				if (input_to_compact.empty()) return v_input;
-				if (v_input >= input_to_compact.size()) return 0;
-				return input_to_compact[v_input];
-			};
-			// Default to non-indep, then mark I-vars.
-			is_indep_.assign(variables_.size(), false);
-			unsigned mapped = 0, dropped = 0;
-			for (unsigned v_in : pending_arjun_indep_) {
-				unsigned v = translate(v_in);
-				if (v == 0 || v >= is_indep_.size()) { dropped++; continue; }
-				is_indep_[v] = true;
-				mapped++;
-			}
-			count_multiplier_ = pending_arjun_multiplier_;
-			config_.use_indep_restriction = true;
-			if (!config_.quiet)
-				cout << "c o [arjun] applied indep support: "
-				     << mapped << " mapped (dropped " << dropped
-				     << "); count_multiplier_ = "
-				     << count_multiplier_.get_str() << "\n";
-			pending_arjun_set_ = false;
-		}
-
 		comp_manager_.initialize(literals_, literal_pool_, original_lit_pool_size_);
 
 		// Compute fixed branching order if requested. Must happen after
-		// comp_manager_.initialize() (so clauseIdToOfs is populated) and
-		// after is_indep_ population (so we restrict to I-vars).
+		// comp_manager_.initialize() (so clauseIdToOfs is populated).
 		if (config_.picker_order != SolverConfiguration::NONE) {
 			computeFixedBranchOrder();
 		}
@@ -1506,10 +1470,6 @@ void Solver::stage0_cheap_scores(Component &comp,
                                  std::vector<double> &cheap,
                                  std::vector<VariableIndex> &candidates) {
 	candidates.clear();
-	// Note: under use_indep_restriction we keep ALL active vars in
-	// candidates here; the picker (pickBranchVariableAdaptive) prefers
-	// I-vars and falls back to any active var when none remain. See
-	// Phase C "DPLL fallback at the indep-support boundary".
 	for (auto it = comp.varsBegin(); *it != varsSENTINEL; ++it) {
 		if (literal_values_[LiteralID(*it, true)] == X_TRI)
 			candidates.push_back(*it);
@@ -1703,21 +1663,11 @@ VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsa
 	// score instead — same asymptotic cost as the legacy
 	// `pickBranchVariable`.
 	if (candidates.size() < min_probe_vars) {
-		// Track best-overall and best-among-I separately; prefer
-		// best-I when projection is on AND any I-var is present
-		// (DPLL fallback to best-overall when no I-var remains).
-		VariableIndex best = 0, best_indep = 0;
-		double best_score = -1.0, best_indep_score = -1.0;
-		const bool restrict_to_indep = config_.use_indep_restriction;
+		VariableIndex best = 0;
+		double best_score = -1.0;
 		for (VariableIndex v : candidates) {
 			if (cheap[v] > best_score) { best_score = cheap[v]; best = v; }
-			if (restrict_to_indep && is_indep_[v]
-			    && cheap[v] > best_indep_score) {
-				best_indep_score = cheap[v];
-				best_indep = v;
-			}
 		}
-		if (restrict_to_indep && best_indep != 0) return best_indep;
 		return best;
 	}
 
@@ -1780,10 +1730,7 @@ VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsa
 	};
 
 	double best_tau = std::numeric_limits<double>::infinity();
-	double best_indep_tau = std::numeric_limits<double>::infinity();
 	VariableIndex best_v = 0;
-	VariableIndex best_indep_v = 0;
-	const bool restrict_to_indep = config_.use_indep_restriction;
 	for (const auto &c : scored) {
 		double a = (double)c.vars_forced_T + epsilon * (double)clamp_delta(c.delta_2c_T);
 		double b = (double)c.vars_forced_F + epsilon * (double)clamp_delta(c.delta_2c_F);
@@ -1792,19 +1739,12 @@ VariableIndex Solver::pickBranchVariableAdaptive(Component &comp, bool &out_unsa
 			best_tau = tau;
 			best_v = c.v;
 		}
-		if (restrict_to_indep && is_indep_[c.v] && tau < best_indep_tau) {
-			best_indep_tau = tau;
-			best_indep_v = c.v;
-		}
 	}
 	if (config_.verbose) {
 		std::cout << "  TIER2_PICK v=" << best_v
 		          << " tau=" << best_tau
 		          << " scored=" << scored.size() << std::endl;
 	}
-	// Prefer I-var; fall back to best_v when no I-var was scored
-	// (DPLL fallback past the indep-support boundary).
-	if (restrict_to_indep && best_indep_v != 0) return best_indep_v;
 	return best_v;
 }
 
@@ -2450,7 +2390,6 @@ void Solver::resetPostPreprocessScratch() {
 	// this is defensive: belt-and-suspenders in case a future refactor
 	// changes that.
 	is_branch_constraint_.assign(variables_.size(), false);
-	is_indep_.assign(variables_.size(), true);  // default all-indep
 	for (unsigned v = 1; v < variables_.size(); v++) {
 		variables_[v].ante = Antecedent(NOT_A_CLAUSE);
 		variables_[v].decision_level = INVALID_DL;
@@ -3348,7 +3287,7 @@ Solver::DerivCacheBranchChoice Solver::deriv_cache_bias_select_(
 
 // ---------------------------------------------------------------------
 // Compute the fixed branching order based on config_.picker_order.
-// Called once at solve start, after preprocessing + Arjun-apply.
+// Called once at solve start, after preprocessing.
 //
 // DEGREE: vars sorted by their incidence count in the post-PP formula
 //         (active binaries + long-clause occurrences), descending. The
@@ -3440,10 +3379,6 @@ void Solver::computeFixedBranchOrder() {
 	}
 
 	// Build the order: list all candidate vars, sort by degree desc.
-	// Under projection, the picker still falls back to non-I if no
-	// I-var is available, so we include ALL vars in the order — non-I
-	// just get lower priority effectively (they're after the I-vars
-	// in the sorted list).
 	fixed_order_vars_.clear();
 	fixed_order_vars_.reserve(n);
 	for (unsigned v = 1; v <= n; v++) {
@@ -3451,21 +3386,13 @@ void Solver::computeFixedBranchOrder() {
 		if (literal_values_[LiteralID(v, true)] != X_TRI) continue;
 		fixed_order_vars_.push_back(v);
 	}
-	// Sort: under projection I-vars come first; under METIS_DEG
-	// in-separator vars come next; within each tier, degree desc
-	// (or asc for DEGREE_ASC).
-	const bool restrict_to_indep = config_.use_indep_restriction;
+	// Sort: under METIS_DEG in-separator vars come first; within each
+	// tier, degree desc (or asc for DEGREE_ASC).
 	const bool ascending = (config_.picker_order == SolverConfiguration::DEGREE_ASC);
 	const bool use_sep = (config_.picker_order == SolverConfiguration::METIS_DEG);
 	std::sort(fixed_order_vars_.begin(), fixed_order_vars_.end(),
-	          [this, restrict_to_indep, ascending, use_sep,
+	          [ascending, use_sep,
 	           &degree, &in_metis_sep](unsigned a, unsigned b) {
-		// Under projection, I-vars come first.
-		if (restrict_to_indep) {
-			const bool ai = a < is_indep_.size() && is_indep_[a];
-			const bool bi = b < is_indep_.size() && is_indep_[b];
-			if (ai != bi) return ai;
-		}
 		// Under METIS_DEG, in-separator vars come before non-separator.
 		if (use_sep) {
 			const bool as = in_metis_sep[a];
