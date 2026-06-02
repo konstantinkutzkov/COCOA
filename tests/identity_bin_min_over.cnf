@@ -1,0 +1,10 @@
+c identity-hash regression: was 35, true count 29 (free-var miscount on binaries)
+p cnf 8 8
+5 8 0
+-8 -6 0
+4 2 0
+7 -1 0
+3 -1 0
+5 -8 0
+3 -4 -7 0
+6 -5 4 0

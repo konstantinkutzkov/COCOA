@@ -1,0 +1,10 @@
+c identity-hash regression: was 192, true count 272 (binary-only var mis-counted as free)
+p cnf 11 8
+-2 1 -5 -4 0
+6 -11 9 0
+-5 4 0
+-11 4 0
+-9 6 0
+-8 5 0
+10 -5 0
+-1 7 0

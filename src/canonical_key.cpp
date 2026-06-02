@@ -775,6 +775,7 @@ std::vector<uint64_t> computeStaticWLLabels(
 CanonicalKey buildIdentityKey(
     Component &comp,
     const std::vector<LiteralID> &literal_pool,
+    const LiteralIndexedVector<Literal> &literals,
     const LiteralIndexedVector<TriValue> &literal_values,
     const std::vector<ClauseOfs> &clause_id_to_ofs,
     const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,
@@ -786,15 +787,23 @@ CanonicalKey buildIdentityKey(
   // Active variables (X_TRI), in component order.
   unsigned n_vars = 0;
   unsigned n_in_clauses = 0;
+  unsigned max_var = 0;
   static std::vector<unsigned char> in_clause;
   in_clause.clear();
+  // Active-component membership marker for the binary walk below (mirrors
+  // buildCanonicalKey's s_var_idx>=0 component-membership test).
+  static std::vector<unsigned char> id_active;
+  id_active.clear();
 
   // First pass: list of active vars
   for (auto v_it = comp.varsBegin(); *v_it != varsSENTINEL; ++v_it) {
     if (literal_values[LiteralID(*v_it, true)] != X_TRI) continue;
     packed.push_back(*v_it);
     n_vars++;
+    if (*v_it > max_var) max_var = *v_it;
     if (*v_it >= in_clause.size()) in_clause.resize(*v_it + 1, 0);
+    if (*v_it >= id_active.size()) id_active.resize(*v_it + 1, 0);
+    id_active[*v_it] = 1;
   }
   packed.push_back(0);  // SENTINEL between vars and clauses
 
@@ -824,13 +833,41 @@ CanonicalKey buildIdentityKey(
       }
     }
   }
-  packed.push_back(0);  // SENTINEL at end
+  packed.push_back(0);  // SENTINEL between long and binary clauses
 
-  // n_in_clauses also includes vars that have at least one active
-  // binary partner. Walk var binaries to update.
-  // (Skipped here — the identity hash mainly cares about CORRECT counts,
-  // not the precise free_vars factor. If issues arise, we extend this to
-  // walk binary_links_.)
+  // Active binary clauses. Mirrors buildCanonicalKey's binary iteration
+  // (same filters) so the identity key reflects binary structure and
+  // n_in_clauses counts binary-connected vars. WITHOUT this, two
+  // components differing only in their binaries hash identically (silent
+  // wrong cache hits), and binary-only vars are mis-classified as free,
+  // inflating the 2^free_vars factor. Both are real wrong-count bugs on
+  // binary-containing formulas; fixed 2026-06-02. Each edge is emitted once
+  // (other_var > v) as the two raw literal ints, in deterministic component
+  // order, so identical components match and binary-differing ones do not.
+  for (auto v_it = comp.varsBegin(); *v_it != varsSENTINEL; ++v_it) {
+    const unsigned v = *v_it;
+    if (literal_values[LiteralID(v, true)] != X_TRI) continue;
+    for (int sign = 0; sign <= 1; sign++) {
+      LiteralID lit(v, sign == 0);
+      if (literal_values[lit] == T_TRI) continue;
+      unsigned orig_count = literals[lit].original_binary_link_count_;
+      unsigned idx = 0;
+      for (auto bt = literals[lit].binary_links_.begin();
+           *bt != SENTINEL_LIT; ++bt, ++idx) {
+        if (idx >= orig_count) break;
+        unsigned other_var = bt->var();
+        if (other_var <= v) continue;  // each edge once, from the lower var
+        if (other_var > max_var || other_var >= id_active.size()
+            || !id_active[other_var]) continue;  // same-component membership
+        if (literal_values[*bt] == T_TRI) continue;  // clause satisfied
+        packed.push_back((uint32_t)lit.toInt());
+        packed.push_back((uint32_t)bt->toInt());
+        if (!in_clause[v])         { in_clause[v] = 1;         n_in_clauses++; }
+        if (!in_clause[other_var]) { in_clause[other_var] = 1; n_in_clauses++; }
+      }
+    }
+  }
+  packed.push_back(0);  // SENTINEL at end
 
   // Compute hashes (two seeds for the 128-bit half).
   const uint64_t seed_lo = 0xC0FFEE15A1100Cull;

@@ -122,15 +122,20 @@ CanonicalKey buildCanonicalKey(
     const std::vector<uint64_t> *static_wl_labels = nullptr);
 
 // Identity-based alternative to buildCanonicalKey. Hashes the packed
-// [vars + active long clauses] via chibihash64 with no isomorphism
-// detection — only literally-identical components match. ~1000x
-// faster per call than the canonical key. Useful when the formula
-// has many literal repetitions in the search tree (Sudoku-like) and
-// WL refinement's symmetry-detection isn't paying off.
+// [vars + active long clauses + active binary clauses] via chibihash64
+// with no isomorphism detection — only literally-identical components
+// match. ~1000x faster per call than the canonical key. Useful when the
+// formula has many literal repetitions in the search tree (Sudoku-like)
+// and WL refinement's symmetry-detection isn't paying off.
 // See solver_config.h::cache_hash_mode.
+//
+// `literals` is required to walk binary clauses: both for the key (so two
+// components differing only in binaries do not collide) and for n_in_clauses
+// (so binary-only vars are not mis-counted as free). See canonical_key.cpp.
 CanonicalKey buildIdentityKey(
     Component &comp,
     const std::vector<LiteralID> &literal_pool,
+    const LiteralIndexedVector<Literal> &literals,
     const LiteralIndexedVector<TriValue> &literal_values,
     const std::vector<ClauseOfs> &clause_id_to_ofs,
     const std::unordered_map<ClauseOfs, unsigned> &removed_clauses,

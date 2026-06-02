@@ -475,7 +475,7 @@ mpz_class Solver::solveComponent(Component &comp,
 			if (verify_precomputed_key) {
 				CanonicalKey fresh = (config_.cache_hash_mode == SolverConfiguration::IDENTITY)
 				    ? buildIdentityKey(
-				        comp, literal_pool_, literal_values_,
+				        comp, literal_pool_, literals_, literal_values_,
 				        comp_manager_.getAnalyzer().clauseIdToOfs(),
 				        removed_clauses_, original_lit_pool_size_)
 				    : buildCanonicalKey(
@@ -521,7 +521,7 @@ mpz_class Solver::solveComponent(Component &comp,
 			OpTimer _t(this, OP_CANONICAL);
 			if (config_.cache_hash_mode == SolverConfiguration::IDENTITY) {
 				cached_key = buildIdentityKey(
-				    comp, literal_pool_, literal_values_,
+				    comp, literal_pool_, literals_, literal_values_,
 				    comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
 				    original_lit_pool_size_);
 			} else {
@@ -1332,7 +1332,7 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				OpTimer _t(this, OP_CANONICAL);
 				if (config_.cache_hash_mode == SolverConfiguration::IDENTITY) {
 					key = buildIdentityKey(
-						*sub, literal_pool_, literal_values_,
+						*sub, literal_pool_, literals_, literal_values_,
 						comp_manager_.getAnalyzer().clauseIdToOfs(), rm,
 						original_lit_pool_size_);
 				} else {
