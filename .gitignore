@@ -1,0 +1,17 @@
+# Build trees (every component builds out-of-source under build/)
+build/
+*/build/
+third_party/*/build/
+*.o
+*.a
+
+# Python
+__pycache__/
+*.pyc
+
+# Portfolio run artifacts
+portfolio/ab_results_*.jsonl
+portfolio/decisions.jsonl
+
+# macOS
+.DS_Store
