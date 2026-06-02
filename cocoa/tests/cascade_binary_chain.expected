@@ -1,0 +1,9 @@
+# cascade_binary_chain — pure binary cascade
+# Models are monotone-step strings F^k T^(5-k), k=0..5 → 6 models.
+model_count                 6
+probe.1=T.success           true
+probe.1=T.vars_forced       5
+probe.1=T.delta_2clauses    -4
+probe.1=F.success           true
+probe.1=F.vars_forced       1
+probe.1=F.delta_2clauses    -1

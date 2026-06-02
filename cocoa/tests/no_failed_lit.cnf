@@ -1,0 +1,11 @@
+c no_failed_lit — "no 3 consecutive equal" over x1..x5, length-3 clauses only.
+c Positive-form clauses forbid F-F-F; negative-form clauses forbid T-T-T.
+c No single-literal probe produces any unit (every single assignment leaves
+c every clause with ≥ 2 non-falsified literals).
+p cnf 5 6
+1 2 3 0
+2 3 4 0
+3 4 5 0
+-1 -2 -3 0
+-2 -3 -4 0
+-3 -4 -5 0

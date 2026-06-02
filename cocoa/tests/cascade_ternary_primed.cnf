@@ -1,0 +1,10 @@
+c cascade_ternary_primed — unit clauses prime length-3 clauses
+c Baseline (after unit propagation): x5=F, x6=F. Each 3-clause already has
+c 2 non-falsified literals, so n_2clauses_baseline = 3.
+c Probe(x1=T) forces x2, x3, x4 via the primed clauses (length-3 → unit).
+p cnf 6 5
+-5 0
+-6 0
+-1 2 5 0
+-1 3 6 0
+-1 4 5 0

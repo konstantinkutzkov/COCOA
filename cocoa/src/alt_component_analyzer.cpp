@@ -1,0 +1,175 @@
+/*
+ * alt_component_analyzer.cpp
+ *
+ *  Created on: Mar 5, 2013
+ *      Author: mthurley
+ */
+
+
+#include "alt_component_analyzer.h"
+
+
+
+void AltComponentAnalyzer::initialize(LiteralIndexedVector<Literal> & literals,
+    vector<LiteralID> &lit_pool,
+    unsigned original_lit_pool_size) {
+
+  max_variable_id_ = literals.end_lit().var() - 1;
+
+  search_stack_.reserve(max_variable_id_ + 1);
+  var_frequency_scores_.resize(max_variable_id_ + 1, 0);
+  variable_occurrence_lists_pool_.clear();
+  variable_link_list_offsets_.clear();
+  variable_link_list_offsets_.resize(max_variable_id_ + 1, 0);
+
+  vector<vector<ClauseOfs> > occs(max_variable_id_ + 1);
+  vector<vector<unsigned> > occ_long_clauses(max_variable_id_ + 1);
+  vector<vector<unsigned> > occ_ternary_clauses(max_variable_id_ + 1);
+
+  vector<unsigned> tmp;
+  max_clause_id_ = 0;
+  unsigned curr_clause_length = 0;
+  auto it_curr_cl_st = lit_pool.begin();
+
+  clause_id_to_ofs_.clear();
+  clause_id_to_ofs_.push_back(0); // dummy for index 0 (clause IDs are 1-based)
+
+  // Cap walk at original_lit_pool_size: long clauses past this offset are
+  // learned and must not enter the analyzer's frozen connectivity graph.
+  // canonical_key.cpp:108-119 enforces the matching invariant for the
+  // cache key side via an explicit abort.
+  auto pool_end = lit_pool.begin() + original_lit_pool_size;
+  if (pool_end > lit_pool.end()) pool_end = lit_pool.end();
+
+  for (auto it_lit = lit_pool.begin(); it_lit < pool_end; it_lit++) {
+    if (*it_lit == SENTINEL_LIT) {
+
+      if (it_lit + 1 >= pool_end)
+        break;
+
+      max_clause_id_++;
+      it_lit += ClauseHeader::overheadInLits();
+      it_curr_cl_st = it_lit + 1;
+      curr_clause_length = 0;
+      clause_id_to_ofs_.push_back(it_curr_cl_st - lit_pool.begin());
+
+    } else {
+      assert(it_lit->var() <= max_variable_id_);
+      curr_clause_length++;
+
+      getClause(tmp,it_curr_cl_st, *it_lit);
+
+      assert(tmp.size() > 1);
+
+      if(tmp.size() == 2) {
+      //if(false){
+        occ_ternary_clauses[it_lit->var()].push_back(max_clause_id_);
+        occ_ternary_clauses[it_lit->var()].insert(occ_ternary_clauses[it_lit->var()].end(),
+            tmp.begin(), tmp.end());
+      } else {
+        occs[it_lit->var()].push_back(max_clause_id_);
+        occs[it_lit->var()].push_back(occ_long_clauses[it_lit->var()].size());
+        occ_long_clauses[it_lit->var()].insert(occ_long_clauses[it_lit->var()].end(),
+            tmp.begin(), tmp.end());
+        occ_long_clauses[it_lit->var()].push_back(SENTINEL_LIT.raw());
+      }
+
+    }
+  }
+
+  ComponentArchetype::initArrays(max_variable_id_, max_clause_id_);
+  // the unified link list
+  unified_variable_links_lists_pool_.clear();
+  unified_variable_links_lists_pool_.push_back(0);
+  unified_variable_links_lists_pool_.push_back(0);
+  for (unsigned v = 1; v < occs.size(); v++) {
+    // BEGIN data for binary clauses
+    // Cap at original_binary_link_count_: learned binaries (from
+    // empty-scope addUIPConflictClause) are appended to binary_links_
+    // past this offset and must not enter the analyzer's frozen
+    // connectivity. canonical_key.cpp:150-154 caps the cache-key side
+    // identically.
+    variable_link_list_offsets_[v] = unified_variable_links_lists_pool_.size();
+    {
+      const auto &bl_pos = literals[LiteralID(v, false)].binary_links_;
+      unsigned orig_pos = literals[LiteralID(v, false)].original_binary_link_count_;
+      for (unsigned i = 0; i < orig_pos && i < bl_pos.size(); i++)
+        if (bl_pos[i] != SENTINEL_LIT)
+          unified_variable_links_lists_pool_.push_back(bl_pos[i].var());
+    }
+    {
+      const auto &bl_neg = literals[LiteralID(v, true)].binary_links_;
+      unsigned orig_neg = literals[LiteralID(v, true)].original_binary_link_count_;
+      for (unsigned i = 0; i < orig_neg && i < bl_neg.size(); i++)
+        if (bl_neg[i] != SENTINEL_LIT)
+          unified_variable_links_lists_pool_.push_back(bl_neg[i].var());
+    }
+
+    unified_variable_links_lists_pool_.push_back(0);
+
+    // BEGIN data for ternary clauses
+    unified_variable_links_lists_pool_.insert(
+        unified_variable_links_lists_pool_.end(),
+        occ_ternary_clauses[v].begin(),
+        occ_ternary_clauses[v].end());
+
+    unified_variable_links_lists_pool_.push_back(0);
+
+    // BEGIN data for long clauses
+    for(auto it = occs[v].begin(); it != occs[v].end(); it+=2){
+      unified_variable_links_lists_pool_.push_back(*it);
+      unified_variable_links_lists_pool_.push_back(*(it + 1) +(occs[v].end() - it));
+    }
+
+    unified_variable_links_lists_pool_.push_back(0);
+
+    unified_variable_links_lists_pool_.insert(
+        unified_variable_links_lists_pool_.end(),
+        occ_long_clauses[v].begin(),
+        occ_long_clauses[v].end());
+  }
+
+
+
+}
+
+
+void AltComponentAnalyzer::recordComponentOf(const VariableIndex var) {
+
+  search_stack_.clear();
+  setSeenAndStoreInSearchStack(var);
+
+  for (auto vt = search_stack_.begin(); vt != search_stack_.end(); vt++) {
+    //BEGIN traverse binary clauses
+    assert(isActive(*vt));
+    unsigned *p = beginOfLinkList(*vt);
+    for (; *p; p++) {
+      if(manageSearchOccurrenceOf(LiteralID(*p,true))){
+        var_frequency_scores_[*p]++;
+        var_frequency_scores_[*vt]++;
+      }
+    }
+    //END traverse binary clauses
+
+    for ( p++; *p ; p+=3) {
+      if(archetype_.clause_unseen_in_sup_comp(*p)){
+        LiteralID litA = *reinterpret_cast<const LiteralID *>(p + 1);
+        LiteralID litB = *(reinterpret_cast<const LiteralID *>(p + 1) + 1);
+        if(isSatisfied(litA)|| isSatisfied(litB))
+          archetype_.setClause_nil(*p);
+        else {
+          var_frequency_scores_[*vt]++;
+          manageSearchOccurrenceAndScoreOf(litA);
+          manageSearchOccurrenceAndScoreOf(litB);
+          archetype_.setClause_seen(*p,isActive(litA) &
+              isActive(litB));
+        }
+      }
+    }
+    //END traverse ternary clauses
+
+    for (p++; *p ; p +=2)
+      if(archetype_.clause_unseen_in_sup_comp(*p))
+        searchClause(*vt,*p, reinterpret_cast<LiteralID *>(p + 1 + *(p+1)));
+  }
+}

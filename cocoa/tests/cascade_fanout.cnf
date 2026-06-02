@@ -1,0 +1,8 @@
+c cascade_fanout — five binary clauses sharing ¬x1
+c Probe(x1=T) forces 6 vars; Probe(x1=F) forces 1. Symmetric Δ = -5.
+p cnf 6 5
+-1 2 0
+-1 3 0
+-1 4 0
+-1 5 0
+-1 6 0

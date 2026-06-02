@@ -1,0 +1,24 @@
+# no_failed_lit — every single-literal probe succeeds with vars_forced = 1.
+# Model count: binary strings of length 5 with no 3 consecutive equal.
+# Recurrence a(n) = a(n-1) + a(n-2), a(1)=2, a(2)=4 → a(5) = 16.
+model_count                 16
+probe.1=T.success           true
+probe.1=T.vars_forced       1
+probe.1=F.success           true
+probe.1=F.vars_forced       1
+probe.2=T.success           true
+probe.2=T.vars_forced       1
+probe.2=F.success           true
+probe.2=F.vars_forced       1
+probe.3=T.success           true
+probe.3=T.vars_forced       1
+probe.3=F.success           true
+probe.3=F.vars_forced       1
+probe.4=T.success           true
+probe.4=T.vars_forced       1
+probe.4=F.success           true
+probe.4=F.vars_forced       1
+probe.5=T.success           true
+probe.5=T.vars_forced       1
+probe.5=F.success           true
+probe.5=F.vars_forced       1

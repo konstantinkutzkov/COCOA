@@ -1,0 +1,15 @@
+c identity-hash regression: was 144, true count 126 (pure-binary component key collision)
+p cnf 11 13
+-11 4 0
+4 9 0
+-8 9 0
+-11 -3 0
+-8 4 0
+-1 -2 0
+4 6 0
+10 6 0
+-6 3 0
+8 5 7 0
+-7 -2 -5 4 0
+7 -11 4 0
+-10 -4 -1 0

@@ -1,0 +1,11 @@
+c Formula with long clauses to test clause branching
+c 10 variables, several long clauses + short constraining clauses
+p cnf 10 8
+1 2 3 4 5 0
+-1 -2 -3 6 7 0
+6 7 8 9 10 0
+-5 -6 0
+1 -7 0
+-8 9 0
+3 -10 0
+-4 2 0
