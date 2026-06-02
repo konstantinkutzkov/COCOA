@@ -15,3 +15,6 @@ portfolio/decisions.jsonl
 
 # macOS
 .DS_Store
+
+# Solver scratch output (written to cwd)
+data.out
