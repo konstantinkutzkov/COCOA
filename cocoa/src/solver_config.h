@@ -165,6 +165,16 @@ struct SolverConfiguration {
   enum CacheHashMode { CANONICAL, IDENTITY };
   CacheHashMode cache_hash_mode = CANONICAL;
 
+  // Calibration: Monte-Carlo cache-effectiveness dives (Solver::diveSample).
+  // When > 0, after the (time-limited, via -t) warm solve, run this many
+  // random dives through the component tree, probing the warmed cache under
+  // the active hash mode, and print DIVE_STATS instead of a model count.
+  // HARD RULE: the output feeds ONLY the hash-mode choice in the portfolio —
+  // it is never combined into a reported count, so a dive bug is benign
+  // (worst case: a suboptimal flag, never a wrong answer). CLI: -calibrateDive.
+  unsigned calibrate_dive = 0;
+  uint64_t calibrate_seed = 0xC0C0AULL;  // CLI: -calibrateSeed (shared seed => differential across modes)
+
   // Picker ordering. When NONE (default), the picker uses its normal
   // scoring (adaptive or plain). When set to a specific ordering, the
   // picker iterates comp's active vars and returns the first one (in

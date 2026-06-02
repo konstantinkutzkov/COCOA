@@ -645,6 +645,34 @@ void Solver::solve(const string &file_name) {
 		// countSATRec sets final_solution_count internally
 		statistics_.num_long_conflict_clauses_ = num_conflict_clauses();
 
+		// Calibration mode: the countSATRec above (run under -t) WARMED the
+		// cache. Now estimate this hash mode's cache effectiveness via
+		// Monte-Carlo dives, print DIVE_STATS, and RETURN before printShort()
+		// — so NO model count is emitted. These numbers feed only the
+		// portfolio's hash-mode choice. See Solver::diveSample.
+		if (config_.calibrate_dive > 0) {
+			DiveStats ds = diveSample(config_.calibrate_dive, config_.calibrate_seed);
+			const char *mode = (config_.cache_hash_mode == SolverConfiguration::IDENTITY)
+			                       ? "identity" : "canonical";
+			double hr   = ds.n_probes ? (double)ds.n_hits / (double)ds.n_probes : 0.0;
+			double swhr = ds.weighted_probes > 0.0
+			                  ? ds.weighted_hits / ds.weighted_probes : 0.0;
+			double us_per_key = ds.n_probes ? ds.keybuild_us / (double)ds.n_probes : 0.0;
+			stopwatch_.stop();
+			cout << "DIVE_STATS"
+			     << " mode=" << mode
+			     << " dives=" << ds.n_dives
+			     << " probes=" << ds.n_probes
+			     << " hits=" << ds.n_hits
+			     << " hit_rate=" << hr
+			     << " size_weighted_hit_rate=" << swhr
+			     << " us_per_key=" << us_per_key
+			     << " cache_entries=" << comp_manager_.contentCache().size()
+			     << "\n";
+			cout.flush();
+			return;
+		}
+
 	} else {
 		statistics_.exit_state_ = SUCCESS;
 		statistics_.set_final_solution_count(0.0);

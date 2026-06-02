@@ -2707,6 +2707,118 @@ vector<Component*> Solver::discoverComponentsOf(Component &super_comp,
 	return result;
 }
 
+// ---------------------------------------------------------------------------
+// Calibration: Monte-Carlo cache-effectiveness dives. See solver.h::DiveStats
+// and solver_config.h::calibrate_dive. ESTIMATOR ONLY — never feeds a count.
+//
+// Each dive samples ONE root-to-leaf path of the real search tree: at every
+// component it probes the (already cache-warmed) L2 cache under the active
+// hash mode, then descends a random child of the *real picker's* chosen
+// variable into one random sub-component. Reuses discoverComponentsOf /
+// pickBranchVariable / setLiteralIfFree / BCP / buildKey / contentCache().peek
+// exactly as the real solver does, and restores the trail + decision stack
+// before returning — solveComponent itself is never entered or modified.
+// ---------------------------------------------------------------------------
+Solver::DiveStats Solver::diveSample(unsigned n_dives, uint64_t seed) {
+	DiveStats st;
+	st.n_dives = n_dives;
+
+	// Self-contained xorshift64* RNG (no <random> dependency; deterministic
+	// for a given seed so two modes can share dives and the surplus differences).
+	uint64_t rng = seed ? seed : 0xC0C0AULL;
+	auto next_rand = [&rng]() -> uint64_t {
+		uint64_t x = rng;
+		x ^= x >> 12; x ^= x << 25; x ^= x >> 27;
+		rng = x;
+		return x * 0x2545F4914F6CDD1DULL;
+	};
+
+	const bool identity_mode =
+	    (config_.cache_hash_mode == SolverConfiguration::IDENTITY);
+
+	// Marks to restore to after every dive.
+	const size_t root_trail  = literal_stack_.size();
+	const size_t root_levels = stack_.size();
+	const unsigned safety_depth = num_variables() + 2;
+
+	auto build_key = [&](Component &c) -> CanonicalKey {
+		return identity_mode
+		    ? buildIdentityKey(c, literal_pool_, literals_, literal_values_,
+		                       comp_manager_.getAnalyzer().clauseIdToOfs(),
+		                       removed_clauses_, original_lit_pool_size_)
+		    : buildCanonicalKey(c, literal_pool_, literals_, literal_values_,
+		                        comp_manager_.getAnalyzer().clauseIdToOfs(),
+		                        removed_clauses_, original_lit_pool_size_,
+		                        config_.wl_iterations,
+		                        static_wl_labels_.empty() ? nullptr : &static_wl_labels_);
+	};
+
+	for (unsigned d = 0; d < n_dives; ++d) {
+		// Decompose the root WITHOUT probing it: countSATRec decomposes the
+		// root and calls solveComponent on its SUBS — that is where the cache
+		// is first consulted. Pick one root sub-component to start the path.
+		mpz_class tf = 1;
+		Component &root = comp_manager_.superComponentOf(stack_.top());
+		vector<Component*> subs = discoverComponentsOf(root, tf);
+		Component *cur = nullptr;
+		if (!subs.empty()) {
+			unsigned pick = (unsigned)(next_rand() % subs.size());
+			cur = subs[pick];
+			for (unsigned j = 0; j < subs.size(); ++j)
+				if (j != pick) delete subs[j];
+		}
+
+		for (unsigned step = 0; cur != nullptr && step < safety_depth; ++step) {
+			// --- probe the L2 cache for the current component ---
+			auto t0 = std::chrono::steady_clock::now();
+			CanonicalKey key = build_key(*cur);
+			st.keybuild_us += std::chrono::duration<double, std::micro>(
+			    std::chrono::steady_clock::now() - t0).count();
+			st.n_probes++;
+			st.weighted_probes += key.num_vars;
+			mpz_class out;
+			if (comp_manager_.contentCache().peek(key, out)) {
+				st.n_hits++;
+				st.weighted_hits += key.num_vars;
+				break;  // component is "closed" by the cache; path ends here
+			}
+
+			// --- not cached: descend a random child of the picker's var ---
+			VariableIndex v = pickBranchVariable(*cur);
+			if (v == 0) break;                       // leaf: no branchable var
+			LiteralID lit(v, (next_rand() & 1ULL) != 0);
+			if (!isActive(lit)) break;               // defensive (picker => active)
+
+			size_t lit_save = literal_stack_.size();
+			// Decision frame so setLiteralIfFree records the right level
+			// (mirrors branchOnLiteral; super_component_ field is inert here).
+			stack_.push_back(StackLevel(1, lit_save,
+			                            comp_manager_.component_stack_size()));
+			setLiteralIfFree(lit);
+			if (!BCP(lit_save)) break;               // conflict: path ends
+
+			mpz_class tf2 = 1;
+			vector<Component*> subs2 = discoverComponentsOf(*cur, tf2);
+			if (subs2.empty()) break;                // fully decided: leaf
+			unsigned pick2 = (unsigned)(next_rand() % subs2.size());
+			delete cur;                              // free the component we leave
+			cur = subs2[pick2];
+			for (unsigned j = 0; j < subs2.size(); ++j)
+				if (j != pick2) delete subs2[j];
+		}
+		if (cur != nullptr) delete cur;
+
+		// --- restore trail + decision stack to the root marks ---
+		while (literal_stack_.size() > root_trail) {
+			unSet(literal_stack_.back());
+			literal_stack_.pop_back();
+		}
+		while (stack_.size() > root_levels)
+			stack_.pop_back();
+	}
+	return st;
+}
+
 VariableIndex Solver::pickBranchVariable(Component &comp) {
 	VariableIndex best = 0;
 	float best_score = -1.0f;

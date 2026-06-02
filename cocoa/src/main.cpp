@@ -330,6 +330,12 @@ int main(int argc, char *argv[]) {
       if (m == "canonical") theSolver.config().cache_hash_mode = SolverConfiguration::CANONICAL;
       else if (m == "identity") theSolver.config().cache_hash_mode = SolverConfiguration::IDENTITY;
       else { cout << "-hashMode: unknown mode '" << m << "' (canonical|identity)\n"; return -1; }
+    } else if (strcmp(argv[i], "-calibrateDive") == 0) {
+      if (argc <= i + 1) { cout << "-calibrateDive needs n_dives\n"; return -1; }
+      theSolver.config().calibrate_dive = (unsigned)atoi(argv[i + 1]); i++;
+    } else if (strcmp(argv[i], "-calibrateSeed") == 0) {
+      if (argc <= i + 1) { cout << "-calibrateSeed needs a seed\n"; return -1; }
+      theSolver.config().calibrate_seed = (uint64_t)strtoull(argv[i + 1], nullptr, 10); i++;
     } else if (strcmp(argv[i], "-pickerOrder") == 0) {
       if (argc <= i + 1) { cout << "-pickerOrder needs degree|metis|td\n"; return -1; }
       string m = argv[i + 1]; i++;

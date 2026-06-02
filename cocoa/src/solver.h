@@ -390,6 +390,26 @@ public:
 		stopwatch_.setTimeBound(i);
 	}
 
+	// --- Calibration: cache-effectiveness estimation via Monte-Carlo dives ---
+	// Aggregate stats from a diveSample() run. Used ONLY to choose the hash
+	// mode in the portfolio; never folded into a model count.
+	struct DiveStats {
+		uint64_t n_dives        = 0;
+		uint64_t n_probes       = 0;   // components keyed across all dives
+		uint64_t n_hits         = 0;   // cache hits among probes
+		double   weighted_probes = 0;  // Σ num_vars over all probed components
+		double   weighted_hits   = 0;  // Σ num_vars over HIT components (work-saved proxy)
+		double   keybuild_us     = 0;  // total key-build time in this mode (cost proxy)
+	};
+	// Run `n_dives` random dives from the (already cache-warmed) root: at each
+	// component probe the L2 cache under config_.cache_hash_mode, then descend
+	// ONE random child of the real picker's chosen variable. Reuses the real
+	// decompose/picker/BCP/key/cache primitives and restores all solver state
+	// (trail + decision stack) before returning. Caller must have warmed the
+	// cache first (a time-limited countSATRec). Estimator only — see the HARD
+	// RULE on config_.calibrate_dive.
+	DiveStats diveSample(unsigned n_dives, uint64_t seed);
+
 	// SCC-based 2-SAT UNSAT detection on the residual restricted to
 	// `comp`. Returns true iff some variable in `comp` has both
 	// polarities in the same SCC of the binary-implication graph —
