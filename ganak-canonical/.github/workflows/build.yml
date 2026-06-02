@@ -1,0 +1,159 @@
+name: build
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "*" ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: true
+
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15, macos-15-intel]
+        build_type: [Release]
+        shared_libs: [ON, OFF]
+
+    steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Setup ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: ${{ matrix.os }}-${{ matrix.build_type }}-${{ matrix.shared_libs }}
+        max-size: 500M
+
+    - name: Install gmp for Mac
+      if: contains(matrix.os, 'macos')
+      run: |
+        wget https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
+        tar xf gmp-6.3.0.tar.xz
+        cd gmp-6.3.0
+        ./configure --enable-static --enable-cxx --enable-shared --with-pic
+        make -j8
+        sudo make install
+        cd ..
+
+    - name: Install zlib for Mac dynamic
+      if: contains(matrix.os, 'macos') && matrix.shared_libs == 'ON'
+      run: |
+        wget https://zlib.net/fossils/zlib-1.3.1.tar.gz
+        tar xzvf zlib-1.3.1.tar.gz
+        cd zlib-1.3.1
+        ./configure
+        make -j8
+        sudo make install
+        cd ..
+
+    - name: Install zlib for Mac static
+      if: contains(matrix.os, 'macos') && matrix.shared_libs == 'OFF'
+      run: |
+        wget https://zlib.net/fossils/zlib-1.3.1.tar.gz
+        tar xzvf zlib-1.3.1.tar.gz
+        cd zlib-1.3.1
+        ./configure --static
+        make -j8
+        sudo make install
+        cd ..
+
+    - name: Install mpfr for Mac
+      if: contains(matrix.os, 'macos')
+      run: |
+        wget https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.1.tar.xz
+        tar xf mpfr-4.2.1.tar.xz
+        cd mpfr-4.2.1
+        ./configure --enable-static --enable-cxx --enable-shared
+        make -j8
+        sudo make install
+        cd ..
+
+    - name: Install dependencies for Linux
+      if: contains(matrix.os, 'ubuntu')
+      run: sudo apt-get update && sudo apt-get install -yq help2man libgmp-dev libmpfr-dev
+
+    - name: Install flint
+      run: |
+        wget https://github.com/flintlib/flint/releases/download/v3.2.0-rc1/flint-3.2.0-rc1.tar.gz
+        tar xzf flint-3.2.0-rc1.tar.gz
+        cd flint-3.2.0-rc1
+        ./configure --enable-static --enable-shared
+        make -j8
+        sudo make install
+        cd ..
+
+    - uses: actions/checkout@v4
+      with:
+        path: project
+        submodules: 'true'
+
+    - name: Build project
+      run: |
+        cd project
+        mkdir -p build && cd build
+        cmake \
+        -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+        -DBUILD_SHARED_LIBS=${{ matrix.shared_libs }} \
+        -DENABLE_TESTING=OFF \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -S ..
+        cmake --build . --config ${{matrix.build_type}} -v
+
+    - name: Test
+      run: ctest -C ${{matrix.build_type}} --verbose
+
+    - name: run it to check it executes
+      run: |
+        echo "Running version command"
+        ./project/build/ganak --version
+        echo $?
+        echo "Running help command"
+        ./project/build/ganak --help
+        echo $?
+
+
+    - name: Upload Artifact - Linux
+      if: contains(matrix.os, 'ubuntu') && matrix.shared_libs == 'OFF' && !contains(matrix.os, 'arm')
+      uses: actions/upload-artifact@v4
+      with:
+        name: ganak-linux-amd64
+        path: |
+          project/build/ganak
+          project/build/lib/*
+          project/build/include/*
+
+    - name: Upload Artifact - Linux arm
+      if: contains(matrix.os, 'ubuntu') && matrix.shared_libs == 'OFF' && contains(matrix.os, 'arm')
+      uses: actions/upload-artifact@v4
+      with:
+        name: ganak-linux-arm64
+        path: |
+          project/build/ganak
+          project/build/lib/*
+          project/build/include/*
+
+    - name: Upload Artifact - Mac Intel
+      if: matrix.os == 'macos-15-intel' && matrix.shared_libs == 'OFF'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ganak-mac-x86_64
+        path: |
+          project/build/ganak
+          project/build/lib/*
+          project/build/include/*
+
+    - name: Upload Artifact - Mac Arm
+      if: matrix.os == 'macos-15' && matrix.shared_libs == 'OFF'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ganak-mac-arm64
+        path: |
+          project/build/ganak
+          project/build/lib/*
+          project/build/include/*

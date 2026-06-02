@@ -1,0 +1,236 @@
+/******************************************
+Copyright (C) 2023 Authors of GANAK, see AUTHORS file
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
+
+#pragma once
+
+#include <vector>
+#include <cassert>
+#include <iostream>
+#include <iomanip>
+#include <algorithm>
+#include <gmpxx.h>
+#include <cstdint>
+#include "lit.hpp"
+#include "common.hpp"
+#include "Vec.hpp"
+
+namespace GanakInt {
+
+using ClauseIndex = uint32_t;
+using ClauseOfs = uint32_t;
+using CacheEntryID = uint32_t;
+using TriValue = uint8_t;
+
+constexpr uint32_t sentinel = 0;
+constexpr uint32_t LBD_MAX = 100;
+constexpr int32_t INVALID_DL = -1;
+constexpr uint8_t F_TRI = 0;
+constexpr uint8_t T_TRI = 1;
+constexpr uint8_t X_TRI = 2;
+
+[[nodiscard]] inline bool tri_is_true(TriValue v)    { return v == T_TRI; }
+[[nodiscard]] inline bool tri_is_false(TriValue v)   { return v == F_TRI; }
+[[nodiscard]] inline bool tri_is_unknown(TriValue v) { return v == X_TRI; }
+constexpr Lit NOT_A_LIT(0, false);
+constexpr auto SENTINEL_LIT = NOT_A_LIT;
+
+struct ClOffsBlckL {
+  ClOffsBlckL() = default;
+  ClOffsBlckL(ClauseOfs _ofs, Lit l) : ofs(_ofs), blckLit(l) {}
+  ClauseOfs ofs;
+  Lit blckLit;
+
+  bool operator==(const ClOffsBlckL& other) const = default;
+};
+
+struct BinCl {
+  BinCl() = default;
+  BinCl(uint32_t val) = delete;
+  BinCl(int val) = delete;
+  explicit BinCl(Lit _lit, bool _red) {
+    v = _lit.raw() << 1 | static_cast<uint32_t>(_red);
+  }
+  Lit lit() const { return Lit::toLit(v >> 1); }
+  bool red() const { return v&(1U); }
+  bool irred() const { return !red(); }
+  uint32_t v = std::numeric_limits<uint32_t>::max();
+
+};
+
+class LitWatchList {
+public:
+  vec<BinCl> binaries;
+  vec<ClOffsBlckL> watch_list_;
+  double activity = 0.0;
+
+  void del_c(ClauseOfs offs) {
+    auto it = std::find_if(watch_list_.begin(), watch_list_.end(),
+      [offs](const ClOffsBlckL& w) { return w.ofs == offs; });
+    assert(it != watch_list_.end() && "should have found it!");
+    *it = watch_list_.back();
+    watch_list_.pop_back();
+  }
+
+  inline void add_cl(ClauseIndex offs, Lit blocked_lit) {
+    watch_list_.push_back(ClOffsBlckL(offs, blocked_lit));
+  }
+
+  void add_bin(Lit lit, bool red) {
+    binaries.push_back(BinCl(lit, red));
+  }
+};
+
+enum class AnteType { clause, lit, decision };
+
+class Antecedent {
+  uint32_t val = 0;
+  AnteType type = AnteType::decision;
+
+public:
+  Antecedent() = default;
+
+  explicit Antecedent(const ClauseOfs cl_ofs) {
+     val = cl_ofs;
+     type = AnteType::clause;
+   }
+  explicit Antecedent(const Lit idLit) {
+    val = idLit.raw();
+    type = AnteType::lit;
+  }
+
+  bool isAClause() const { return type == AnteType::clause; }
+  bool isALit() const { return type == AnteType::lit; }
+  bool isNull() const {return type == AnteType::decision;}
+  bool isAnt() const {return !isNull();}
+
+  ClauseOfs as_cl() const {
+    SLOW_DEBUG_DO(assert(isAClause()));
+    return val;
+  }
+
+  Lit as_lit() const {
+    SLOW_DEBUG_DO(assert(isALit()));
+    Lit idLit;
+    idLit.copyRaw(val);
+    return idLit;
+  }
+};
+
+inline std::ostream& operator<<(std::ostream& os, const Antecedent& ante)
+{
+  std::stringstream s;
+  if (ante.isNull()) {
+    s << "DEC      " << std::setw(10) << "";
+  } else if (ante.isAClause()) {
+    s << "CL offs: " << std::setw(10) << ante.as_cl();
+  } else if (ante.isALit()) {
+    s << "Lit:     " << std::setw(10) << ante.as_lit();
+  } else {assert(false);}
+  os << s.str();
+  return os;
+}
+
+struct Cube {
+  Cube() = default;
+  Cube(const Cube& o) : cnf(o.cnf), cnt(o.cnt->dup()), enabled(o.enabled), symm(o.symm), lbd(o.lbd) {}
+  Cube(Cube&& o) noexcept = default;
+  // Unified copy+move assignment via copy-and-swap: avoids code duplication and is exception-safe
+  Cube& operator=(Cube o) noexcept {
+    using std::swap;
+    swap(cnf, o.cnf);
+    swap(cnt, o.cnt);
+    swap(enabled, o.enabled);
+    swap(symm, o.symm);
+    swap(lbd, o.lbd);
+    return *this;
+  }
+  Cube(const std::vector<Lit>& _cnf, const FF& _cnt, bool _symm = false) : cnf(_cnf), cnt(_cnt->dup()), symm(_symm) {}
+  std::vector<Lit> cnf;
+  FF cnt = nullptr;
+  bool enabled = true;
+  bool symm = false;
+  uint32_t lbd = LBD_MAX;
+};
+
+inline std::ostream& operator<<(std::ostream& os, const Cube& c) {
+  os << "CNF: " << c.cnf
+    /* << " cnt: " << *c.cnt */
+    << " enabled: " << static_cast<int>(c.enabled) << " symm: " << static_cast<int>(c.symm) << " lbd: " << c.lbd;
+  return os;
+}
+
+struct VarData {
+  Antecedent ante;
+  int32_t decision_level = INVALID_DL;
+  uint32_t sublevel;
+  bool last_polarity = false;
+};
+
+class Clause {
+public:
+  Clause(bool _red, uint32_t _sz):
+    sz(_sz), red(_red)  {}
+
+  void set_used() {
+    used = 1;
+    total_used++;
+  }
+  uint32_t sz;
+  uint32_t total_used = 0;
+  uint32_t pos = 2; // cached watch-replacement search position (Gent 2013)
+  uint8_t lbd = 0;
+  uint8_t used:1 = 1;
+  uint8_t red:1 = 0;
+  uint8_t freed:1 = 0;
+  uint8_t reloced:1 = 0;
+  uint8_t vivified:1 = 0;
+  auto size() const { return sz; }
+  void resize(const uint32_t sz2) {sz = sz2;}
+  void update_lbd(uint32_t _lbd) {
+    if (_lbd > LBD_MAX) return;
+    if (_lbd < lbd) lbd = _lbd;
+  }
+  Lit const* data() const {
+    return reinterpret_cast<Lit const*>(reinterpret_cast<char const*>(this) + sizeof(Clause));
+  }
+  Lit* data() {
+    return reinterpret_cast<Lit*>(reinterpret_cast<char*>(this) + sizeof(Clause));
+  }
+  Lit* begin() { return data(); }
+  Lit* end() { return begin()+sz; }
+  Lit& operator[](uint32_t at) { return *(data()+at); }
+  const Lit* begin() const { return data(); }
+  const Lit* end() const { return begin()+sz; }
+  const Lit& operator[](uint32_t at) const { return *(data()+at); }
+};
+
+inline std::ostream& operator<<(std::ostream& os, const Clause& cl) {
+  for(const auto& l: cl) os << l << " ";
+  os << "0"
+    << " (red: " << static_cast<int>(cl.red) << " lbd: " << static_cast<int>(cl.lbd)
+    << " used: " << static_cast<int>(cl.used) << " total_used: " << cl.total_used
+    << " vivified: " << static_cast<int>(cl.vivified)
+    << " freed: " << static_cast<int>(cl.freed);
+  return os;
+}
+
+}

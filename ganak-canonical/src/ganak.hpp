@@ -1,0 +1,94 @@
+/******************************************
+Copyright (C) 2023 Authors of GANAK, see AUTHORS file
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
+
+#pragma once
+
+#include <cstdint>
+#include "counter_config.hpp"
+#include <cryptominisat5/solvertypesmini.h>
+#include "lit.hpp"
+#include <memory>
+#include <vector>
+#include <map>
+#include <set>
+
+struct CDat;
+
+class Ganak {
+public:
+  Ganak(GanakInt::CounterConfiguration& conf, std::unique_ptr<CMSat::FieldGen>& fg);
+  ~Ganak();
+  void new_vars(const uint32_t n);
+  bool add_irred_cl(const std::vector<GanakInt::Lit>& lits);
+
+  void set_indep_support(const std::set<uint32_t>& indeps);
+  void set_generators(const std::vector<std::map<GanakInt::Lit, GanakInt::Lit>>& _gens);
+
+  std::unique_ptr<CMSat::Field> count(uint8_t bits_threads = 0, int num_threads = 1, const bool debug_threads = false);
+  bool add_red_cl(const std::vector<GanakInt::Lit>& lits, int lbd = -1);
+  bool get_is_approximate() const;
+  void set_optional_indep_support(const std::set<uint32_t>& indeps);
+  void set_lit_weight(const GanakInt::Lit l, const std::unique_ptr<CMSat::Field>& w);
+  void print_indep_distrib() const;
+  uint64_t get_num_cache_lookups() const;
+  uint64_t get_max_cache_elems() const;
+
+private:
+  std::unique_ptr<CDat> cdat;
+};
+
+
+inline std::vector<GanakInt::Lit> cms_to_ganak_cl(const std::vector<CMSat::Lit>& cl) {
+  std::vector<GanakInt::Lit> ganak_cl; ganak_cl.reserve(cl.size());
+  for(const auto& l: cl) ganak_cl.push_back(GanakInt::Lit(l.var()+1, !l.sign()));
+  return ganak_cl;
+}
+
+template<class T, class T2>
+void setup_ganak(const T2& simp_cnf, T& counter) {
+  simp_cnf.check_cnf_sampl_sanity();
+  counter.new_vars(simp_cnf.nVars());
+
+  // indep support
+  std::set<uint32_t> tmp;
+  for(auto const& s: simp_cnf.get_sampl_vars()) tmp.insert(s+1);
+  counter.set_indep_support(tmp);
+
+  // Opt indep support
+  if (simp_cnf.get_opt_sampl_vars_set()) {
+    tmp.clear();
+    for(auto const& s: simp_cnf.get_opt_sampl_vars()) tmp.insert(s+1);
+  }
+  counter.set_optional_indep_support(tmp);
+
+  // Weights
+  if (simp_cnf.get_weighted()) {
+    for(const auto& t: simp_cnf.get_weights()) {
+      counter.set_lit_weight(GanakInt::Lit(t.first+1, true), t.second.pos);
+      counter.set_lit_weight(GanakInt::Lit(t.first+1, false), t.second.neg);
+    }
+  }
+
+  // Clauses
+  for(const auto& cl: simp_cnf.get_clauses()) counter.add_irred_cl(cms_to_ganak_cl(cl));
+  for(const auto& cl: simp_cnf.get_red_clauses()) counter.add_red_cl(cms_to_ganak_cl(cl));
+}
