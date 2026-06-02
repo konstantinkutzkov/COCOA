@@ -30,11 +30,11 @@ from classifier.thresholds import SEP_RATIO_MAX, BALANCE_MIN  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# --- knobs (tunable; agreed defaults) ---
-ARJUN_BUDGET_S = 30.0      # wall budget for the Arjun reduction probe
+# --- knobs (tunable; PROVISIONAL defaults — not yet calibrated, do not commit blind) ---
 METIS_TIMEOUT_S = 30.0
 INDEP_FRACTION_MAX = 0.50  # "substantial": independent support |I| <= 50% of vars
-VAR_REDUCTION_MIN = 0.50   # fallback (e.g. on Arjun timeout): vars halved within budget
+ARJUN_STALL_S = 5.0        # W: bail if |I| hasn't dropped in this long
+ARJUN_CAP_S = 60.0         # T: hard wall backstop on the probe
 
 COCOA = "sharpsat-separator"
 GANAK = "ganak-canonical"
@@ -53,24 +53,23 @@ def small_separator(metis: dict) -> tuple[bool, str]:
 
 
 def substantial_reduction(arj: dict) -> tuple[bool, str]:
-    """Arjun reduction is substantial if the counting problem at least halves.
+    """Substantial iff Arjun's independent-support fraction |I|/n is small enough.
 
-    Primary signal (Arjun completed): independent-support fraction |I|/nvars.
-    Fallback (Arjun timed out): variable reduction achieved within the budget.
+    |I| (Arjun's `new size`/`sampl` token) is reported live throughout the run, so
+    we have a valid estimate no matter WHY the probe stopped (success/stall/cap/finished).
+    |I| is monotone non-increasing, so the min seen is a sound upper bound on what
+    Arjun reached — if it is already small enough, letting Arjun run longer would
+    only shrink it further, so the verdict can't flip from substantial to not.
     """
     ov = arj.get("orig_vars") or 0
     indep = arj.get("indep_size")
-    best_vars = arj.get("best_vars") or ov
-    var_red = (1.0 - best_vars / ov) if ov > 0 else 0.0
-
-    if arj.get("completed") and indep is not None and ov > 0:
-        frac = indep / ov
-        ok = frac <= INDEP_FRACTION_MAX
-        return ok, f"indep_fraction={frac:.3f} (|I|={indep}/{ov}, <= {INDEP_FRACTION_MAX}); var_red={var_red:.2f}"
-    # timed out (or no |I|): lean on the achieved variable reduction
-    ok = var_red >= VAR_REDUCTION_MIN
-    tag = "timed_out" if arj.get("timed_out") else "no_indep"
-    return ok, f"{tag}: var_reduction={var_red:.3f} (>= {VAR_REDUCTION_MIN}); best_vars={best_vars}/{ov}"
+    frac = arj.get("indep_frac")
+    reason = arj.get("stop_reason")
+    if frac is None or indep is None or ov <= 0:
+        return False, f"no |I| signal (stop_reason={reason})"
+    ok = frac <= INDEP_FRACTION_MAX
+    return ok, (f"indep_fraction={frac:.3f} (|I|={indep}/{ov}, <= {INDEP_FRACTION_MAX}); "
+                f"stop_reason={reason}")
 
 
 def _decision(solver, reason, stage, metis=None, arjun=None) -> dict:
@@ -90,14 +89,14 @@ def _arjun_summary(arj: dict | None) -> dict | None:
         return None
     # Trim the trajectory in the log to first+last few points (keep it small).
     traj = arj.get("trajectory") or []
-    return {k: arj[k] for k in ("orig_vars", "orig_cls", "best_vars", "best_cls",
-                                "simp_vars", "simp_cls", "indep_size", "multiplier",
-                                "wall_s", "completed", "timed_out") if k in arj} \
+    return {k: arj[k] for k in ("orig_vars", "indep_size", "indep_frac",
+                                "stop_reason", "wall_s") if k in arj} \
         | {"traj_points": len(traj),
            "traj_head": traj[:3], "traj_tail": traj[-3:]}
 
 
-def select_solver(cnf: str, arjun_budget_s: float = ARJUN_BUDGET_S,
+def select_solver(cnf: str, arjun_stall_s: float = ARJUN_STALL_S,
+                  arjun_cap_s: float = ARJUN_CAP_S,
                   metis_timeout_s: float = METIS_TIMEOUT_S) -> dict:
     """Run the two structure-based rules lazily and return a decision dict."""
     # --- rule 1: small METIS separator -> COCOA ---
@@ -110,6 +109,8 @@ def select_solver(cnf: str, arjun_budget_s: float = ARJUN_BUDGET_S,
         metis = {"metis_status": "timeout"}
     except metis_wrapper.MetisError as e:
         metis = {"metis_status": "error", "error": str(e), **(e.partial or {})}
+    except Exception as e:  # noqa: BLE001 — any unexpected probe failure degrades
+        metis = {"metis_status": "error", "error": str(e)}
 
     if metis.get("metis_status") == "too_small":
         return _decision(COCOA, "metis_too_small (trivial); COCOA default", "metis", metis)
@@ -119,7 +120,14 @@ def select_solver(cnf: str, arjun_budget_s: float = ARJUN_BUDGET_S,
         return _decision(COCOA, f"small separator: {det}", "metis", metis)
 
     # --- rule 2: Arjun substantially reduces -> Ganak (lazy: only reached here) ---
-    arj = arjun_wrapper.run(cnf, time_budget_s=arjun_budget_s)
+    # Probe is TRIAGE only: Ganak re-runs its own Arjun if routed here (no reuse).
+    try:
+        arj = arjun_wrapper.run(cnf, stall_s=arjun_stall_s, cap_s=arjun_cap_s,
+                                success_indep_frac=INDEP_FRACTION_MAX)
+    except arjun_wrapper.ArjunHelperMissing as e:
+        # Mirror the METIS degrade: no probe -> can't claim reduction -> UNDECIDED.
+        return _decision(None, f"neither: sep({det}); arjun helper missing: {e} -> UNDECIDED",
+                         "undecided", metis, {"stop_reason": "helper_missing"})
     subst, det2 = substantial_reduction(arj)
     if subst:
         return _decision(GANAK, f"not-small-sep ({det}); substantial Arjun reduction: {det2}",
@@ -133,7 +141,10 @@ def select_solver(cnf: str, arjun_budget_s: float = ARJUN_BUDGET_S,
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Step-1 solver selection (METIS sep / Arjun reduction).")
     ap.add_argument("cnf")
-    ap.add_argument("--arjun-budget", type=float, default=ARJUN_BUDGET_S)
+    ap.add_argument("--arjun-stall", type=float, default=ARJUN_STALL_S,
+                    help="W: bail if |I| hasn't dropped in this many seconds")
+    ap.add_argument("--arjun-cap", type=float, default=ARJUN_CAP_S,
+                    help="T: hard wall backstop on the Arjun probe")
     ap.add_argument("--log", default=str(_REPO_ROOT / "portfolio" / "selection_log.jsonl"))
     args = ap.parse_args(argv)
 
@@ -141,7 +152,7 @@ def main(argv: list[str]) -> int:
         os.environ["PORTFOLIO_METIS_FEATURES_BIN"] = str(
             _REPO_ROOT / "cocoa" / "build" / "metis_features")
 
-    d = select_solver(args.cnf, arjun_budget_s=args.arjun_budget)
+    d = select_solver(args.cnf, arjun_stall_s=args.arjun_stall, arjun_cap_s=args.arjun_cap)
     d["cnf"] = args.cnf
     try:
         with open(args.log, "a") as fh:
@@ -157,10 +168,11 @@ def main(argv: list[str]) -> int:
               f"sep_ratio={m.get('metis_sep_ratio')} balance={m.get('metis_balance')}")
     if d["arjun"]:
         a = d["arjun"]
-        print(f"  arjun : orig_vars={a.get('orig_vars')} best_vars={a.get('best_vars')} "
-              f"|I|={a.get('indep_size')} completed={a.get('completed')} "
-              f"timed_out={a.get('timed_out')} wall={a.get('wall_s')}s "
-              f"traj_pts={a.get('traj_points')}")
+        frac = a.get("indep_frac")
+        frac_s = f"{frac:.3f}" if isinstance(frac, (int, float)) else "n/a"
+        print(f"  arjun : orig_vars={a.get('orig_vars')} |I|={a.get('indep_size')} "
+              f"frac={frac_s} stop={a.get('stop_reason')} "
+              f"wall={a.get('wall_s')}s traj_pts={a.get('traj_points')}")
     print(f"  --> {sel}   ({d['reason']})")
     return 0
 
