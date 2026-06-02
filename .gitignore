@@ -12,6 +12,7 @@ __pycache__/
 # Portfolio run artifacts
 portfolio/ab_results_*.jsonl
 portfolio/decisions.jsonl
+portfolio/calibration_log*.jsonl
 
 # macOS
 .DS_Store
