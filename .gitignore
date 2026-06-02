@@ -13,6 +13,7 @@ __pycache__/
 portfolio/ab_results_*.jsonl
 portfolio/decisions.jsonl
 portfolio/calibration_log*.jsonl
+portfolio/selection_log*.jsonl
 
 # macOS
 .DS_Store

@@ -39,7 +39,7 @@ def _helper_path() -> str:
         return p
     here = os.path.dirname(os.path.abspath(__file__))
     default = os.path.normpath(os.path.join(
-        here, "..", "..", "sharpsat-separator", "build", "metis_features"
+        here, "..", "..", "cocoa", "build", "metis_features"
     ))
     return default
 
@@ -103,8 +103,7 @@ def run(cnf_path: str, timeout_s: float = 30.0) -> Dict[str, object]:
     if not os.path.exists(bin_path) or not os.access(bin_path, os.X_OK):
         raise MetisHelperMissing(
             f"metis_features helper not found / not executable: {bin_path}. "
-            f"Build it with: cd sharpsat-separator/build && cmake --build . "
-            f"--target metis_features"
+            f"Build it with: cmake --build cocoa/build --target metis_features"
         )
 
     try:

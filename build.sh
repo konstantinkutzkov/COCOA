@@ -44,9 +44,10 @@ cmake -S "$ROOT/ganak-canonical" -B "$ROOT/ganak-canonical/build" \
 cmake --build "$ROOT/ganak-canonical/build" -j"$JOBS"
 
 # 4) cocoa — links METIS/GKlib (third_party) + ganak-canonical's static CMS deps.
-say "4/4 cocoa (sharpSAT)"
+#    Also builds metis_features (the separator-size probe the portfolio router uses).
+say "4/4 cocoa (sharpSAT + metis_features)"
 cmake -S "$ROOT/cocoa" -B "$ROOT/cocoa/build" -DCMAKE_BUILD_TYPE=Release
-cmake --build "$ROOT/cocoa/build" --target sharpSAT -j"$JOBS"
+cmake --build "$ROOT/cocoa/build" --target sharpSAT metis_features -j"$JOBS"
 
 say "Build complete"
 echo "  cocoa solver : $ROOT/cocoa/build/sharpSAT"
