@@ -1,0 +1,6 @@
+# Portfolio driver Python dependencies.
+#
+# Intentionally minimal. v1 of the portfolio is pure stdlib.
+# Add deps here only when a specific commit needs them.
+#
+# (No actual packages yet — placeholder for forward compatibility.)
