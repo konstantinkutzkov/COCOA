@@ -65,6 +65,15 @@ struct NDHierarchy {
   // For each original clause offset: leaf partition index
   std::unordered_map<unsigned, int> clause_leaf;
 
+  // Weighted-degree centrality score for separator vars only, normalized to
+  // [0, 100]. Leaf vars get 0. Score = (primal-graph degree of v in the
+  // weighted incidence graph) / max_degree_across_separators * 100. Captures
+  // "how many cross-component clauses does this separator var participate in"
+  // — analog of ganak's tdscore but computed from our nd-tree's
+  // separator/leaf labels rather than from a tree decomposition centroid.
+  // Indexed by 1-based variable id. Populated at the end of build().
+  std::vector<double> centrality_score;
+
   int root() const { return 0; }  // dynamic tree: root allocated first
 
   // Build hierarchy from a CNF formula's incidence graph.
@@ -92,10 +101,9 @@ struct NDHierarchy {
   // their variables (one undirected edge per pair) instead of via aux
   // clause-nodes in a bipartite graph. The resulting separators
   // contain only VAR CutNodes — never CLAUSE — so they can be consumed
-  // purely by variable branching. Required for the Arjun integration
-  // (no clause branching post-Arjun) and useful for testing var-only
-  // separator strategies on existing instances. Default false
-  // preserves the bipartite behavior.
+  // purely by variable branching. Useful when clause branching is
+  // disabled and for testing var-only separator strategies on existing
+  // instances. Default false preserves the bipartite behavior.
   void build(int n_vars,
              const std::vector<std::pair<unsigned, std::vector<unsigned>>> &long_clauses,
              const std::vector<std::pair<unsigned, unsigned>> &binary_pairs,

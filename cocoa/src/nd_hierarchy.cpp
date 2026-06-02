@@ -485,6 +485,63 @@ void NDHierarchy::build(
           cl_len_buckets[0], cl_len_buckets[1], cl_len_buckets[2],
           cl_len_buckets[3], cl_len_buckets[4], cl_len_buckets[5],
           cl_len_buckets[6], cl_len_buckets[7], cl_len_buckets[8]);
+
+  // Weighted-degree centrality focused on ROOT separator vars only.
+  // Reasoning: on dense instances most vars become separator vars in
+  // SOME internal node (e.g., 263 of 318 on t1_105). Scoring all of them
+  // dilutes the signal. The root separator is the cut whose removal
+  // produces the LARGEST disconnection, so its vars are where centrality
+  // information matters most. Other separator vars get 0.
+  //
+  // For each root separator var v: score = number of edges in the primal
+  // graph from v to vars NOT in the root separator (i.e., to vars in the
+  // residual graph that the root separator disconnects). High score
+  // means v participates in many cross-residual-component clauses.
+  // Normalized to [0, 100].
+  centrality_score.assign(n_vars + 1, 0.0);
+  if (!separator.empty()) {
+    // Build the root separator var set.
+    std::vector<bool> is_root_sep(n_vars + 1, false);
+    unsigned n_root_sep = 0;
+    for (const auto &cn : separator[root()]) {
+      if (cn.kind == CutNode::VAR
+          && cn.id >= 1 && cn.id <= (unsigned)n_vars) {
+        is_root_sep[cn.id] = true;
+        n_root_sep++;
+      }
+    }
+    // Compute weighted degree for each root sep var: count edges from
+    // v's primal-graph neighbors that are NOT in is_root_sep. Multi-edges
+    // in full_adj naturally weight by clause count.
+    double max_deg = 0.0;
+    unsigned n_scored = 0;
+    for (int v = 1; v <= n_vars; v++) {
+      if (!is_root_sep[v]) continue;
+      int gidx = v - 1;
+      if (gidx < 0 || gidx >= (int)full_adj.size()) continue;
+      double deg = 0.0;
+      for (int u_gidx : full_adj[gidx]) {
+        // Edges to clause-aux nodes (bipartite mode, gidx >= n_vars)
+        // count toward "reach" too; vars-only mode has no aux nodes.
+        if (u_gidx >= n_vars) {
+          deg += 1.0;
+          continue;
+        }
+        int u_var = u_gidx + 1;
+        if (!is_root_sep[u_var]) deg += 1.0;
+      }
+      centrality_score[v] = deg;
+      if (deg > max_deg) max_deg = deg;
+      n_scored++;
+    }
+    if (max_deg > 0.0) {
+      for (size_t v = 1; v < centrality_score.size(); v++) {
+        centrality_score[v] = centrality_score[v] * 100.0 / max_deg;
+      }
+    }
+    fprintf(stderr, "NDCentrality: root_sep_vars=%u scored=%u max_deg=%.1f\n",
+            n_root_sep, n_scored, max_deg);
+  }
 }
 
 vector<CutNode> NDHierarchy::lookupSeparator(
