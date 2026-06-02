@@ -41,7 +41,7 @@ import versions as versions_mod  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_BINS = {
-    "PORTFOLIO_SHARPSAT_BIN": _REPO_ROOT / "sharpsat-separator" / "build" / "sharpSAT",
+    "PORTFOLIO_SHARPSAT_BIN": _REPO_ROOT / "cocoa" / "build" / "sharpSAT",
     "PORTFOLIO_GANAK_BIN":    _REPO_ROOT / "ganak-canonical" / "build" / "ganak",
 }
 # Which env var each solver's binary comes from (mirror of the wrappers).

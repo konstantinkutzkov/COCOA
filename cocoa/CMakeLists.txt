@@ -39,26 +39,28 @@ ENDIF(UNIX)
 find_library(GMP_LIB gmp)
 find_library(GMPXX_LIB gmpxx)
 
-# METIS graph partitioning library (for separator finding)
-set(METIS_DIR "${CMAKE_SOURCE_DIR}/../METIS" CACHE PATH "Path to METIS source")
-set(GKLIB_DIR "${CMAKE_SOURCE_DIR}/../GKlib" CACHE PATH "Path to GKlib source")
+# METIS graph partitioning library (for separator finding).
+# Vendored under the package's third_party/ so a source checkout is self-contained.
+set(METIS_DIR "${CMAKE_SOURCE_DIR}/../third_party/METIS" CACHE PATH "Path to METIS source")
+set(GKLIB_DIR "${CMAKE_SOURCE_DIR}/../third_party/GKlib" CACHE PATH "Path to GKlib source")
 include_directories(${METIS_DIR}/include ${GKLIB_DIR}/include)
 add_definitions(-DIDXTYPEWIDTH=32 -DREALTYPEWIDTH=32)
 
-# CryptoMiniSat5 — used by preprocessor_light.cpp for count-preserving
-# CNF simplification (Arjun-light). Points at the static lib already
-# built under ganak's _deps tree to avoid a second build.
-set(CMS5_DIR "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cryptominisat5-src/src"
+# CryptoMiniSat5 — used by preprocessor_light.cpp (count-preserving CNF
+# simplification) and sat_check.cpp. Points at the static lib already built
+# under the sibling ganak-canonical component's _deps tree, so the package
+# builds CMS5 exactly once (build ganak-canonical before cocoa — see build.sh).
+set(CMS5_DIR "${CMAKE_SOURCE_DIR}/../ganak-canonical/build/_deps/cryptominisat5-src/src"
     CACHE PATH "Path to CryptoMiniSat5 headers")
-set(CMS5_BUILD_INCLUDE "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cryptominisat5-build/include"
-    CACHE PATH "Path to CryptoMiniSat5 build-time headers (cryptominisat5/...) — required by Arjun")
-set(CMS5_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cryptominisat5-build/lib/libcryptominisat5.a"
+set(CMS5_BUILD_INCLUDE "${CMAKE_SOURCE_DIR}/../ganak-canonical/build/_deps/cryptominisat5-build/include"
+    CACHE PATH "Path to CryptoMiniSat5 build-time headers (cryptominisat5/...)")
+set(CMS5_LIB "${CMAKE_SOURCE_DIR}/../ganak-canonical/build/_deps/cryptominisat5-build/lib/libcryptominisat5.a"
     CACHE FILEPATH "Path to CryptoMiniSat5 static library")
-set(CADICAL_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cadical-build/libcadical.a"
+set(CADICAL_LIB "${CMAKE_SOURCE_DIR}/../ganak-canonical/build/_deps/cadical-build/libcadical.a"
     CACHE FILEPATH "Path to Cadical static library")
-set(CADIBACK_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/cadiback-build/libcadiback.a"
+set(CADIBACK_LIB "${CMAKE_SOURCE_DIR}/../ganak-canonical/build/_deps/cadiback-build/libcadiback.a"
     CACHE FILEPATH "Path to Cadiback static library")
-set(SBVA_LIB "${CMAKE_SOURCE_DIR}/../ganak/build/_deps/sbva-build/lib/libsbva.a"
+set(SBVA_LIB "${CMAKE_SOURCE_DIR}/../ganak-canonical/build/_deps/sbva-build/lib/libsbva.a"
     CACHE FILEPATH "Path to SBVA static library")
 set(CMS5_DEPS ${CMS5_LIB} ${CADIBACK_LIB} ${CADICAL_LIB} ${SBVA_LIB})
 

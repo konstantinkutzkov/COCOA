@@ -15,14 +15,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-export PORTFOLIO_SHARPSAT_BIN="${PORTFOLIO_SHARPSAT_BIN:-$REPO_ROOT/sharpsat-separator/build/sharpSAT}"
+export PORTFOLIO_SHARPSAT_BIN="${PORTFOLIO_SHARPSAT_BIN:-$REPO_ROOT/cocoa/build/sharpSAT}"
 # The ganak-canonical fork serves both the identity (native) and canonical
 # hash profiles; vanilla ganak/build/ganak does NOT understand --cachehash.
 export PORTFOLIO_GANAK_BIN="${PORTFOLIO_GANAK_BIN:-$REPO_ROOT/ganak-canonical/build/ganak}"
 
 if [ ! -x "$PORTFOLIO_SHARPSAT_BIN" ]; then
   echo "ERROR: sharpSAT binary not found or not executable: $PORTFOLIO_SHARPSAT_BIN" >&2
-  echo "  Build it (cd sharpsat-separator/build && cmake --build . --target sharpSAT) or set PORTFOLIO_SHARPSAT_BIN." >&2
+  echo "  Build it (./build.sh, or cd cocoa/build && cmake --build . --target sharpSAT) or set PORTFOLIO_SHARPSAT_BIN." >&2
   exit 2
 fi
 if [ ! -x "$PORTFOLIO_GANAK_BIN" ]; then
