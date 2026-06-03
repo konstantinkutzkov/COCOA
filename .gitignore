@@ -15,6 +15,7 @@ portfolio/decisions.jsonl
 portfolio/calibration_log*.jsonl
 portfolio/selection_log*.jsonl
 portfolio/sweep_log*.jsonl
+portfolio/hash_study_log*.jsonl
 
 # macOS
 .DS_Store
