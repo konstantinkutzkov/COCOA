@@ -106,12 +106,15 @@ def sweep(insts, budget, round1, round2, ref_timeout, jsonl_path):
             else:
                 verdict = f"MISMATCH(ganak-ref) ✗✗✗ ref={ref}"
 
+        # `decided` = the config the race committed to (winner if it finished, else
+        # the leader it ran to budget). On timeout this shows a decision WAS made.
+        decided = r.get("decided") or r.get("winner") or r.get("leader")
         rec = {"ts": _now(), "inst": f"t1_{n}", "route": r.get("step1_solver"),
-               "winner": r.get("winner"), "status": r.get("status"),
+               "decided": decided, "winner": r.get("winner"), "status": r.get("status"),
                "round": r.get("round"), "wall_s": wall, "count": got,
                "verdict": verdict}
         jf.write(json.dumps(rec, default=str) + "\n"); jf.flush()
-        _say(f"  ==> t1_{n}: route={r.get('step1_solver')} winner={r.get('winner')} "
+        _say(f"  ==> t1_{n}: route={r.get('step1_solver')} decided={decided} "
              f"status={r.get('status')} wall={wall}s  VERDICT: {verdict}")
         rows.append((n, r.get("step1_solver"), r.get("winner"),
                      r.get("status"), wall, verdict))

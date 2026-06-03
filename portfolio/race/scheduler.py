@@ -78,8 +78,8 @@ def _finish(p: ManagedProc, started: list, where: str, log) -> dict:
         if q is not p:
             q.kill()
     p.kill()
-    return {"status": "solved", "winner": p.arch.name, "count": cnt,
-            "round": where, "active_wall_s": round(p.active_wall(), 1)}
+    return {"status": "solved", "winner": p.arch.name, "decided": p.arch.name,
+            "count": cnt, "round": where, "active_wall_s": round(p.active_wall(), 1)}
 
 
 def _kill_all(started: list):
@@ -159,9 +159,11 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
         if out == FINISHED:
             return _finish(leader, started, "round3", log)
 
-    log(f"[done] no completion within budget; leader={leader.arch.name}")
+    log(f"[done] DECISION = {leader.arch.name} (best progress); ran it to the budget "
+        f"but it did NOT finish — {_fmt(leader.latest())}. Needs more budget.")
     _kill_all(started)
-    return {"status": "timeout", "leader": leader.arch.name, "count": None,
+    return {"status": "timeout", "leader": leader.arch.name,
+            "decided": leader.arch.name, "count": None,
             "leader_sample": leader.latest()}
 
 
