@@ -20,10 +20,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from select_solver import select_solver, COCOA, GANAK    # noqa: E402
 from race.scheduler import run_race, _stdout              # noqa: E402
-from race.archetypes import STRONG                        # noqa: E402
+from race.archetypes import STRONG, GANAK_FALLBACK        # noqa: E402
 
 COCOA_ARCHS = [a for a in STRONG if a.engine == "cocoa"]
 GANAK_ARCHS = [a for a in STRONG if a.engine == "ganak"]
+
+# COCOA-routed instances whose best config is still crawling (<1% pct_lin) after a
+# full round fall back to battle-tested native Ganak (validated on t1_101).
+FALLBACK_PCT = 1.0
 
 
 def run_pipeline(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
@@ -34,16 +38,20 @@ def run_pipeline(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
     log(f"[step1] {os.path.basename(cnf)} -> {solver or 'UNDECIDED'}  "
         f"({d['reason'][:100]})")
 
+    fallback = None
     if solver == COCOA:
         archs = COCOA_ARCHS
+        fallback = GANAK_FALLBACK            # crawling COCOA -> battle-tested Ganak
     elif solver == GANAK:
         archs = GANAK_ARCHS
     else:
         archs = STRONG
-    log(f"[step2] race {len(archs)} archetype(s): {[a.name for a in archs]}")
+    log(f"[step2] race {len(archs)} archetype(s): {[a.name for a in archs]}"
+        + (f"  (+Ganak fallback if best <{FALLBACK_PCT}%)" if fallback else ""))
 
     res = run_race(cnf, budget_s=budget_s, round1_s=round1_s, round2_s=round2_s,
-                   archetypes=archs, progress_interval=progress_interval, log=log)
+                   archetypes=archs, progress_interval=progress_interval, log=log,
+                   fallback_archetype=fallback, fallback_pct=FALLBACK_PCT)
     res["step1_solver"] = solver
     res["cnf"] = os.path.basename(cnf)
     return res

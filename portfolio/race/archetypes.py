@@ -72,10 +72,18 @@ STRONG = [
               ("-unifiedPicker", "-decomposeAfterK", "1000",
                "-cascadeW", "10", "-cascadeDepth", "9")),
     # Ganak hash defaults to canonical; the dive picks identity-vs-canonical
-    # before the race (see project notes). --verb 1 turns on periodic progress.
+    # before the race (see project notes). --maxcache 26000 = 26 GB (user req).
     Archetype("ganak-canonical", "ganak",
-              ("--cachehash", "canonical", "--wliter", "2", "--verb", "1")),
+              ("--cachehash", "canonical", "--wliter", "2", "--maxcache", "26000", "--verb", "1")),
 ]
+
+# Battle-tested NATIVE Ganak for the COCOA-struggle fallback: deterministic exact
+# (--prob 0), 26 GB cache. On t1_101 (all 5 COCOA configs timed out at 180s) this
+# solves in 73s — faster than --cachehash canonical (85s) there. Used when a
+# COCOA-routed instance's best config is still crawling (<1% pct_lin) after a full
+# round: we kill COCOA (free the RAM Ganak needs) and hand it the rest of the budget.
+GANAK_FALLBACK = Archetype("ganak-native", "ganak",
+                           ("--prob", "0", "--maxcache", "26000", "--verb", "1"))
 
 # Optional fillers (slots 7-8), off by default — diminishing returns.
 FILLERS = [
