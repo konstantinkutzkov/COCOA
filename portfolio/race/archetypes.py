@@ -71,10 +71,11 @@ STRONG = [
     Archetype("cocoa-nosep-cascade", "cocoa",
               ("-unifiedPicker", "-decomposeAfterK", "1000",
                "-cascadeW", "10", "-cascadeDepth", "9")),
-    # Ganak hash defaults to canonical; the dive picks identity-vs-canonical
-    # before the race (see project notes). --maxcache 26000 = 26 GB (user req).
-    Archetype("ganak-canonical", "ganak",
-              ("--cachehash", "canonical", "--wliter", "2", "--maxcache", "26000", "--verb", "1")),
+    # Native deterministic Ganak (--prob 0, 26 GB). Validated faster than canonical
+    # 5/5 on solvable instances (race/hash_study.py, 2026-06-03); the COCOA dive does
+    # NOT transfer to Ganak's hash choice, so we just use native everywhere.
+    Archetype("ganak-native", "ganak",
+              ("--prob", "0", "--maxcache", "26000", "--verb", "1")),
 ]
 
 # Battle-tested NATIVE Ganak for the COCOA-struggle fallback: deterministic exact
@@ -95,6 +96,10 @@ FILLERS = [
     # "identity" analog before promoting this out of fillers.
     Archetype("ganak-identity", "ganak",
               ("--cachehash", "diffpacked", "--verb", "1")),
+    # canonical-hash Ganak: an A/B candidate only. Native beat it 5/5 on tested
+    # instances; kept as a filler pending evidence it ever wins (hard long runs).
+    Archetype("ganak-canonical", "ganak",
+              ("--cachehash", "canonical", "--wliter", "2", "--maxcache", "26000", "--verb", "1")),
 ]
 
 
