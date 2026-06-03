@@ -19,7 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from select_solver import select_solver, COCOA, GANAK    # noqa: E402
-from race.scheduler import run_race                       # noqa: E402
+from race.scheduler import run_race, _stdout              # noqa: E402
 from race.archetypes import STRONG                        # noqa: E402
 
 COCOA_ARCHS = [a for a in STRONG if a.engine == "cocoa"]
@@ -28,7 +28,7 @@ GANAK_ARCHS = [a for a in STRONG if a.engine == "ganak"]
 
 def run_pipeline(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
                  round2_s: float = 180.0, progress_interval: float = 15.0,
-                 log=print) -> dict:
+                 log=_stdout) -> dict:
     d = select_solver(cnf)
     solver = d["solver"]
     log(f"[step1] {os.path.basename(cnf)} -> {solver or 'UNDECIDED'}  "

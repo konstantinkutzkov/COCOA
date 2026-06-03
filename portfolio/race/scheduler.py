@@ -31,6 +31,11 @@ from race.comparator import within_better, pick_leader   # noqa: E402
 FINISHED, PAUSED, BUDGET, DIED = "finished", "paused", "budget", "died"
 
 
+def _stdout(*a):
+    """Flushing logger so output streams live to a redirected file (no buffering)."""
+    print(*a, flush=True)
+
+
 def _fmt(s: dict) -> str:
     if s.get("engine") == "cocoa":
         return (f"pct_lin={s.get('pct_lin', '-')} closed_bits={s.get('closed_bits', '-')} "
@@ -40,10 +45,14 @@ def _fmt(s: dict) -> str:
 
 
 def _run_window(p: ManagedProc, window_s: float, deadline: float,
+                log=_stdout, tag: str = "run", log_every: float = 30.0,
                 poll: float = 0.1) -> str:
     """Run an already-started/resumed proc until it finishes, the window elapses,
-    or the global deadline hits. Caller is responsible for SIGSTOP on PAUSED."""
+    or the global deadline hits. Caller is responsible for SIGSTOP on PAUSED.
+    Emits a live progress line every `log_every`s so a stuck/odd config is visible
+    mid-window (not only at window end)."""
     start = time.monotonic()
+    last_log = start
     while True:
         if p.has_count():
             return FINISHED
@@ -55,6 +64,10 @@ def _run_window(p: ManagedProc, window_s: float, deadline: float,
             return BUDGET
         if now - start >= window_s:
             return PAUSED
+        if now - last_log >= log_every:
+            log(f"    [{tag}~live] {p.arch.name}: {_fmt(p.latest())} "
+                f"(active {p.active_wall():.0f}s)")
+            last_log = now
         time.sleep(poll)
 
 
@@ -76,7 +89,7 @@ def _kill_all(started: list):
 
 def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
              round2_s: float = 180.0, archetypes=None,
-             progress_interval: float = 15.0, log=print) -> dict:
+             progress_interval: float = 15.0, log=_stdout) -> dict:
     archetypes = archetypes or default_set()
     deadline = time.monotonic() + budget_s
     started: list[ManagedProc] = []
@@ -90,7 +103,8 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
         p = ManagedProc(arch, cnf, progress_interval)
         p.start()
         started.append(p)
-        out = _run_window(p, round1_s, deadline)
+        log(f"  [r1] {arch.name} running (window {round1_s:.0f}s)...")
+        out = _run_window(p, round1_s, deadline, log, "r1")
         if out == FINISHED:
             return _finish(p, started, "round1", log)
         if out == DIED:
@@ -122,7 +136,8 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
             if time.monotonic() >= deadline:
                 break
             p.cont()
-            out = _run_window(p, round2_s, deadline)
+            log(f"  [r2] {p.arch.name} resumed (window {round2_s:.0f}s)...")
+            out = _run_window(p, round2_s, deadline, log, "r2")
             if out == FINISHED:
                 return _finish(p, started, "round2", log)
             p.stop()
@@ -138,7 +153,9 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
     # ---- ROUND 3: leader to completion ----
     if time.monotonic() < deadline:
         leader.cont()
-        out = _run_window(leader, deadline - time.monotonic() + 1.0, deadline)
+        log(f"  [r3] {leader.arch.name} resumed to completion "
+            f"({deadline - time.monotonic():.0f}s left)...")
+        out = _run_window(leader, deadline - time.monotonic() + 1.0, deadline, log, "r3")
         if out == FINISHED:
             return _finish(leader, started, "round3", log)
 
