@@ -22,3 +22,4 @@ portfolio/hash_study_log*.jsonl
 
 # Solver scratch output (written to cwd)
 data.out
+portfolio/trajectory_log*.jsonl

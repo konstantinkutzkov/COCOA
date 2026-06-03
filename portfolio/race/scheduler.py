@@ -25,7 +25,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from race.archetypes import default_set                 # noqa: E402
 from race.procctl import ManagedProc                     # noqa: E402
-from race.comparator import within_better, pick_leader, _f  # noqa: E402
+from race.comparator import pick_leader, select_frontrunners, _f  # noqa: E402
 
 # run_window outcomes
 FINISHED, PAUSED, BUDGET, DIED = "finished", "paused", "budget", "died"
@@ -94,9 +94,9 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
     archetypes = archetypes or default_set()
     deadline = time.monotonic() + budget_s
     started: list[ManagedProc] = []
-    champ: dict[str, ManagedProc] = {}   # engine -> best-so-far (suspended)
+    survivors: list[ManagedProc] = []    # all configs that ran round 1 (suspended)
 
-    # ---- ROUND 1: per-engine king-of-the-hill ----
+    # ---- ROUND 1: scout every config; select frontrunners after ----
     for arch in archetypes:
         if time.monotonic() >= deadline:
             log(f"[r1] budget exhausted, skipping {arch.name}")
@@ -113,36 +113,29 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
             p.kill()
             continue
         p.stop()
-        log(f"[r1] {arch.name}: {_fmt(p.latest())} (active {p.active_wall():.0f}s)")
-        eng = arch.engine
-        if eng not in champ:
-            champ[eng] = p
-        elif within_better(eng, p.latest(), champ[eng].latest()):
-            champ[eng].kill()
-            champ[eng] = p
-        else:
-            p.kill()
+        log(f"[r1] {arch.name}: {_fmt(p.latest())} closed_bits={p.closed_bits():.1f} "
+            f"vel={p.closed_bits_velocity():.3f} (active {p.active_wall():.0f}s)")
+        survivors.append(p)
         if out == BUDGET:
             break
 
-    frontrunners = list(champ.values())
-    if not frontrunners:
-        log("[done] no frontrunners (all died / no budget)")
+    if not survivors:
+        log("[done] no survivors (all died / no budget)")
         _kill_all(started)
         return {"status": "no_result", "count": None}
 
-    # ---- COCOA-struggle fallback ----
-    # If the sole (COCOA) frontrunner is still crawling after its full round, the
-    # small-separator routing over-predicted: hand off to battle-tested Ganak.
-    # We KILL all COCOA procs first (Ganak is memory-hungry, needs the RAM) and do
-    # NOT keep COCOA as a fallback — if it was crawling, resuming it won't save us.
-    if (fallback_archetype is not None and len(frontrunners) == 1
-            and frontrunners[0].arch.engine == "cocoa"
+    # ---- COCOA-struggle fallback (COCOA-routed only: no Ganak in the race) ----
+    # If the best COCOA config is still crawling (pct_lin < threshold) after its
+    # round, the small-separator routing over-predicted: hand off to battle-tested
+    # Ganak. KILL all COCOA procs first (Ganak needs the RAM); NO COCOA fallback-back.
+    cocoa_surv = [p for p in survivors if p.arch.engine == "cocoa"]
+    ganak_surv = [p for p in survivors if p.arch.engine == "ganak"]
+    if (fallback_archetype is not None and cocoa_surv and not ganak_surv
             and time.monotonic() < deadline):
-        fr = frontrunners[0]
-        pct = _f(fr.latest().get("pct_lin"))
+        best = max(cocoa_surv, key=lambda p: _f(p.latest().get("pct_lin")))
+        pct = _f(best.latest().get("pct_lin"))
         if pct < fallback_pct:
-            log(f"[fallback] best COCOA {fr.arch.name} at pct_lin={pct:.3g}% < "
+            log(f"[fallback] best COCOA {best.arch.name} at pct_lin={pct:.3g}% < "
                 f"{fallback_pct}% after a full round -> killing COCOA (free RAM), "
                 f"switching to battle-tested {fallback_archetype.name}.")
             for q in started:
@@ -159,6 +152,14 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 120.0,
             return {"status": "timeout", "leader": fallback_archetype.name,
                     "decided": fallback_archetype.name, "count": None,
                     "leader_sample": gp.latest()}
+
+    # ---- select round-2 frontrunners (top-2 COCOA by level+velocity, or
+    #      best-COCOA + Ganak hedge for cross-engine), KILL the rest ----
+    frontrunners = select_frontrunners(survivors, log)
+    log(f"[frontrunners] {[p.arch.name for p in frontrunners]}")
+    for p in survivors:
+        if p not in frontrunners:
+            p.kill()
 
     # ---- ROUND 2: extend each frontrunner ----
     if len(frontrunners) > 1:

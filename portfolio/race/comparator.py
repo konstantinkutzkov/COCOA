@@ -30,10 +30,12 @@ def _f(x, default=0.0) -> float:
 
 
 def within_key(engine: str, sample: dict) -> tuple:
-    """Higher tuple == more progress, WITHIN one engine."""
+    """Higher tuple == more progress, WITHIN one engine. COCOA ranks by closed_bits
+    (structure resolved) FIRST — pct_lin flatlines at ~0 on deep-tail instances and
+    can't discriminate; closed_bits can (see project_progress_signal_and_ganak)."""
     if engine == "cocoa":
-        return (_f(sample.get("pct_lin")),
-                _f(sample.get("closed_bits")),
+        return (_f(sample.get("closed_bits")),
+                _f(sample.get("pct_lin")),
                 _f(sample.get("decisions")))
     # ganak: no completion fraction — rough "work done" proxy.
     return (_f(sample.get("cache_entries_k")),
@@ -43,6 +45,37 @@ def within_key(engine: str, sample: dict) -> tuple:
 
 def within_better(engine: str, a: dict, b: dict) -> bool:
     return within_key(engine, a) > within_key(engine, b)
+
+
+def select_frontrunners(procs: list, log=lambda *_: None) -> list:
+    """Pick the round-2 frontrunners from the round-1 survivors (ManagedProcs).
+
+    COCOA-only race -> the TWO best COCOA configs:
+      #1 = highest closed_bits (current leader),
+      #2 = highest closed_bits VELOCITY (rising challenger that may overtake);
+      tiebreak (same config wins both) -> runner-up by closed_bits.
+    This is the fix for COCOA-routed races culling to one config and skipping
+    round 2 — it keeps a leader AND an accelerator so crossing trajectories play out.
+
+    Cross-engine race (COCOA + Ganak) -> best COCOA (by closed_bits) + the single
+    Ganak hedge (finish-only; no live progress to rank it by)."""
+    cocoa = [p for p in procs if p.arch.engine == "cocoa"]
+    ganak = [p for p in procs if p.arch.engine == "ganak"]
+    if ganak:
+        fronts = []
+        if cocoa:
+            fronts.append(max(cocoa, key=lambda p: p.closed_bits()))
+        fronts.append(ganak[0])
+        return fronts
+    if len(cocoa) <= 2:
+        return list(cocoa)
+    f1 = max(cocoa, key=lambda p: p.closed_bits())            # leader by level
+    f2 = max(cocoa, key=lambda p: p.closed_bits_velocity())   # rising by velocity
+    if f2 is f1:                                              # same -> runner-up by level
+        f2 = max([p for p in cocoa if p is not f1], key=lambda p: p.closed_bits())
+    log(f"[frontrunners] #1 {f1.arch.name} (closed_bits={f1.closed_bits():.1f}) + "
+        f"#2 {f2.arch.name} (vel={f2.closed_bits_velocity():.3f} b/s)")
+    return [f1, f2]
 
 
 # ----------------------------------------------------------------------------
@@ -72,17 +105,16 @@ def pick_leader(frontrunners: list, log=lambda *_: None):
     if ganak is None:
         return cocoa
 
-    cs = cocoa.latest()
-    cp, cb = _f(cs.get("pct_lin")), _f(cs.get("closed_bits"))
+    cb = _f(cocoa.latest().get("closed_bits"))
+    cvel = cocoa.closed_bits_velocity()
     gs = ganak.latest()
     g_cubes, g_confl = _f(gs.get("cubes_resolved")), _f(gs.get("confl_s"))
 
-    cocoa_dead = (cp <= 0.0 and cb <= 0.0)
+    cocoa_dead = (cvel <= 1e-9)          # closed_bits frozen (reactive-style thrash)
     ganak_churning = (g_cubes > 0.0 or g_confl > 0.0)
     if cocoa_dead and ganak_churning:
-        log(f"[leader] CROSS-ENGINE (v1): COCOA flat (pct_lin={cp:.3g}, "
-            f"closed_bits={cb:.3g}); Ganak churning -> ganak")
+        log(f"[leader] CROSS-ENGINE: COCOA frozen (closed_bits_vel={cvel:.3g}, "
+            f"closed_bits={cb:.1f}); Ganak churning -> ganak")
         return ganak
-    log(f"[leader] CROSS-ENGINE (v1, UNVALIDATED): default COCOA "
-        f"(pct_lin={cp:.3g}, closed_bits={cb:.3g})")
+    log(f"[leader] CROSS-ENGINE: default COCOA (closed_bits={cb:.1f}, vel={cvel:.3g})")
     return cocoa

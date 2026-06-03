@@ -87,8 +87,44 @@ def scenario_C() -> bool:
     return ok
 
 
+def scenario_D() -> bool:
+    print("\n--- Scenario D: select_frontrunners (leader by level + accelerator by velocity + tiebreak) ---")
+    from types import SimpleNamespace
+    from race.comparator import select_frontrunners
+
+    class FP:  # fake proc with controlled level/velocity
+        def __init__(s, name, eng, lvl, vel):
+            s.arch = SimpleNamespace(name=name, engine=eng); s._l = lvl; s._v = vel
+        def closed_bits(s): return s._l
+        def closed_bits_velocity(s): return s._v
+
+    # 5 COCOA: plain leads on level but decelerating; nosep-cascade trails but accelerating
+    p = [FP("plain", "cocoa", 100, 0.03), FP("reactive", "cocoa", 60, 0.0),
+         FP("adaptive", "cocoa", 90, 0.02), FP("adaptive-nosep", "cocoa", 50, 0.01),
+         FP("nosep-cascade", "cocoa", 55, 0.42)]
+    got = sorted(x.arch.name for x in select_frontrunners(p))
+    ok1 = got == sorted(["plain", "nosep-cascade"])
+    print(f"  COCOA-only -> {got}  (expect plain[level]+nosep-cascade[vel])  PASS={ok1}")
+
+    # tiebreak: plain has BOTH highest level and highest velocity -> #2 = runner-up by level
+    p2 = [FP("plain", "cocoa", 100, 0.9), FP("adaptive", "cocoa", 90, 0.02), FP("reactive", "cocoa", 60, 0.0)]
+    got2 = sorted(x.arch.name for x in select_frontrunners(p2))
+    ok2 = got2 == sorted(["plain", "adaptive"])
+    print(f"  tiebreak   -> {got2}  (plain wins both -> runner-up adaptive)  PASS={ok2}")
+
+    # cross-engine: COCOA + Ganak -> best COCOA (by level) + the Ganak hedge
+    p3 = [FP("plain", "cocoa", 100, 0.03), FP("adaptive", "cocoa", 80, 0.5), FP("ganak-native", "ganak", 0, 0)]
+    got3 = sorted(x.arch.name for x in select_frontrunners(p3))
+    ok3 = got3 == sorted(["plain", "ganak-native"])
+    print(f"  cross-eng  -> {got3}  (best COCOA plain + ganak)  PASS={ok3}")
+
+    ok = ok1 and ok2 and ok3
+    print(f"  PASS={ok}")
+    return ok
+
+
 def main() -> int:
-    results = [scenario_A(), scenario_B(), scenario_C()]
+    results = [scenario_A(), scenario_B(), scenario_C(), scenario_D()]
     n_ok = sum(results)
     print(f"\n===== dry-run: {n_ok}/{len(results)} scenarios PASS =====")
     return 0 if n_ok == len(results) else 1

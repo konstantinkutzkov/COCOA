@@ -51,6 +51,7 @@ class ManagedProc:
         self.proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
         self._sample: dict = {"engine": arch.engine}
+        self._traj: list[tuple] = []   # (t, closed_bits) per PROGRESS sample (COCOA)
         self._count: str | None = None
         self._timed_out = False
         self._in_solutions = False
@@ -149,6 +150,30 @@ class ManagedProc:
         with self._lock:
             return dict(self._sample)
 
+    def closed_bits(self) -> float:
+        """Current closed_bits LEVEL (how far along structurally). 0 if unknown."""
+        with self._lock:
+            try:
+                return float(self._sample.get("closed_bits"))
+            except (TypeError, ValueError):
+                return 0.0
+
+    def closed_bits_velocity(self) -> float:
+        """RECENT closed_bits slope (bits/s) over the back half of the run — so an
+        accelerating config (rising slope) scores above a decelerating one. 0 if
+        too few samples. closed_bits jumps fast at the start (BCP), so we measure
+        from the midpoint of the recorded trajectory, not t=0."""
+        with self._lock:
+            traj = list(self._traj)
+        if len(traj) < 2:
+            return 0.0
+        mid = traj[len(traj) // 2]
+        last = traj[-1]
+        dt = last[0] - mid[0]
+        if dt <= 0:
+            return 0.0
+        return (last[1] - mid[1]) / dt
+
     # --- reader ---
     def _read(self):
         try:
@@ -170,6 +195,11 @@ class ManagedProc:
                 for k in ("t", "pct_lin", "closed_bits", "decisions", "l2_hits"):
                     if k in d:
                         self._sample[k] = d[k]
+                # record the closed_bits trajectory for velocity (recent slope)
+                try:
+                    self._traj.append((float(d["t"]), float(d["closed_bits"])))
+                except (KeyError, ValueError):
+                    pass
         elif "# END" in line:
             self._in_solutions = False
             with self._lock:
