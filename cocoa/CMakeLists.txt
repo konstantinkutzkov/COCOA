@@ -167,6 +167,14 @@ target_link_libraries (test_scc_removed_clauses libsharpSAT ${GMP_LIB} ${GMPXX_L
     ${GKLIB_DIR}/build/libGKlib.a
     ${CMS5_DEPS})
 
+# Soundness test for the -cs cache memory cap: ContentCache byte-bounded
+# eviction must keep memory bounded and NEVER corrupt a surviving entry's
+# count (evicted entries simply miss and recompute the same value).
+# Header-only (content_cache.h) -- needs GMP only, no libsharpSAT/METIS.
+add_executable (test_cache_evict tests/test_cache_evict.cpp)
+target_include_directories (test_cache_evict PRIVATE src)
+target_link_libraries (test_cache_evict ${GMP_LIB} ${GMPXX_LIB})
+
 # Standalone METIS replay tool — reads a dump produced by sharpSAT's
 # -dumpReactiveMetisInputs flag and replays each input through METIS to
 # characterise failure modes. See tools/metis_replay.cpp.

@@ -72,7 +72,7 @@ public:
 
   void store(const CanonicalKey &key, const mpz_class &count) {
     assert(count >= 0 && "Cached count must be non-negative");
-    if (max_entries > 0 && cache_.size() >= max_entries)
+    if (max_bytes_ > 0 && cur_bytes_ >= max_bytes_)
       evict();
     // Flag a store-over-existing with a different value: this can only
     // trigger if a caller forgets to lookup before store. Belt-and-
@@ -88,7 +88,9 @@ public:
       std::cerr.flush();
       std::abort();
     }
+    bool is_new = (existing == cache_.end());
     cache_[key] = count;
+    if (is_new) cur_bytes_ += l2_entry_bytes(key, count);
     stats_stores++;
     stats_store_vars_sum += key.num_vars;
     if (key.num_vars > stats_max_store_size) stats_max_store_size = key.num_vars;
@@ -118,22 +120,28 @@ public:
 
   void l1_store(const IdKey &k, const mpz_class &count) {
     assert(count >= 0 && "L1 count must be non-negative");
-    // Same eviction policy as L2 — if we're over capacity, drop half.
-    if (l1_max_entries > 0 && l1_cache_.size() >= l1_max_entries) {
-      size_t to_remove = l1_cache_.size() / 2;
-      auto it = l1_cache_.begin();
-      for (size_t i = 0; i < to_remove && it != l1_cache_.end(); i++)
-        it = l1_cache_.erase(it);
-    }
+    // Byte-bounded: trigger the same combined L1+L2 eviction when over budget.
+    if (max_bytes_ > 0 && cur_bytes_ >= max_bytes_)
+      evict();
+    bool is_new = (l1_cache_.find(k) == l1_cache_.end());
     l1_cache_[k] = count;
+    if (is_new) cur_bytes_ += l1_entry_bytes(k, count);
     stats_l1_stores++;
   }
 
   size_t l1_size() const { return l1_cache_.size(); }
 
-  // Configuration
-  size_t max_entries = 1000000;
-  size_t l1_max_entries = 1000000;
+  // Configuration: cache memory budget in BYTES (0 = unbounded). Default
+  // ~20 GB -- conservative headroom under the competition's 32 GB HARD
+  // limit, since this byte count is an ESTIMATE and non-cache structures
+  // also use RAM. Kept well above normal usage, so it only bites genuinely
+  // heavy instances (and not so low it cripples cache-dependent ones). The
+  // solver overrides it from the -cs flag (which writes statistics_
+  // .maximum_cache_size_bytes_) when -cs is supplied. The cap covers BOTH
+  // levels (L1 identity + L2 canonical) via cur_bytes_.
+  uint64_t max_bytes_ = 20000ULL * 1000000ULL;
+  uint64_t cur_bytes_ = 0;
+  unsigned long stats_evictions = 0;
 
   // Statistics
   unsigned long stats_hits = 0;
@@ -171,13 +179,42 @@ private:
   std::unordered_map<CanonicalKey, mpz_class, CanonicalKeyHash> cache_;
   std::unordered_map<IdKey, mpz_class, IdKeyHasher> l1_cache_;
 
+  // Estimated heap footprint of one cache entry: key + mpz limbs + a fixed
+  // NODE_OVERHEAD approximating the unordered_map node pointer, malloc
+  // header, and bucket slot. Rough by design (calibrate vs RSS before
+  // trusting a high -cs); good enough to keep us off the OOM ceiling.
+  static constexpr size_t NODE_OVERHEAD = 48;
+  static size_t mpz_heap_bytes(const mpz_class &c) {
+    return sizeof(mpz_class) + (size_t)mpz_size(c.get_mpz_t()) * sizeof(mp_limb_t);
+  }
+  static size_t l2_entry_bytes(const CanonicalKey &key, const mpz_class &c) {
+    (void)key;
+    return sizeof(CanonicalKey) + mpz_heap_bytes(c) + NODE_OVERHEAD;
+  }
+  static size_t l1_entry_bytes(const IdKey &k, const mpz_class &c) {
+    (void)k;
+    return sizeof(IdKey) + mpz_heap_bytes(c) + NODE_OVERHEAD;
+  }
+
+  // Memory-bounded eviction: drop ~50% of BOTH levels and decrement the
+  // running byte estimate. SOUND — the cache is pure memoization, so an
+  // eviction only forces recomputation, never a wrong count. Eviction is
+  // by unordered_map iteration order (~arbitrary); a true LRU would need
+  // per-entry generation counters (future refinement).
   void evict() {
-    if (cache_.size() > 0) {
-      auto it = cache_.begin();
-      size_t to_remove = cache_.size() / 2;
-      for (size_t i = 0; i < to_remove && it != cache_.end(); i++)
-        it = cache_.erase(it);
+    size_t l2rm = cache_.size() / 2;
+    auto it = cache_.begin();
+    for (size_t i = 0; i < l2rm && it != cache_.end(); i++) {
+      cur_bytes_ -= l2_entry_bytes(it->first, it->second);
+      it = cache_.erase(it);
     }
+    size_t l1rm = l1_cache_.size() / 2;
+    auto jt = l1_cache_.begin();
+    for (size_t i = 0; i < l1rm && jt != l1_cache_.end(); i++) {
+      cur_bytes_ -= l1_entry_bytes(jt->first, jt->second);
+      jt = l1_cache_.erase(jt);
+    }
+    stats_evictions++;
   }
 };
 

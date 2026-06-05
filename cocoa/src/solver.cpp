@@ -608,6 +608,13 @@ void Solver::solve(const string &file_name) {
 
 		comp_manager_.initialize(literals_, literal_pool_, original_lit_pool_size_);
 
+		// Wire the -cs memory cap into the component cache. statistics_
+		// .maximum_cache_size_bytes_ is 0 when -cs was NOT given -> keep the
+		// cache's built-in ~20 GB default. Eviction is soundness-safe (pure
+		// memoization: forces recompute on a miss, never a wrong count).
+		if (statistics_.maximum_cache_size_bytes_ > 0)
+			comp_manager_.contentCache().max_bytes_ = statistics_.maximum_cache_size_bytes_;
+
 		// Compute fixed branching order if requested. Must happen after
 		// comp_manager_.initialize() (so clauseIdToOfs is populated).
 		if (config_.picker_order != SolverConfiguration::NONE) {
