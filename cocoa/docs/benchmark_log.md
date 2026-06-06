@@ -1313,7 +1313,7 @@ Same build, same load (~2.6). 60 s timeout per run. Goal: probe the **(small, lo
 All non-timeout sharpSAT runs produce the count that ganak's `c s exact arb int` line confirms:
 - t1_025 → `134746112245856`
 - t1_027 → `1115259056499565`
-- t1_041 → `5516767…943259892051805732864` (long; matches ganak's exact arbitrary-int line precisely)
+- t1_041 → `5516767…443259892051805732864` (long; matches ganak's exact arbitrary-int line precisely) [tail corrected 2026-06-04: prior `…943…` was a transcription typo; re-verified vs ganak --prob 0]
 
 ### What the rule predicted vs what we measured
 
@@ -2012,3 +2012,500 @@ Same direction as t1_045: fewer duplicate stores, more hits, faster wall. Count 
 
 t1_065 (37 778 931 862 957 161 709 568), t1_071 (4 562 956 847 836 …), t1_011 (536 870 912 306), t1_041 (5 516 767 … 943 259 892 051 805 732 864), t1_049 (8 695 763 196 077 742), t1_045 (132 951 278 067 432) — all identical to historical entries, no regressions from the fix.
 
+
+---
+
+## 2026-06-03 — Portfolio pipeline validation sweep (step-1 router + step-2 race)
+
+End-to-end portfolio pipeline (`COCOA/portfolio/pipeline.py`, commit `efee5f9`):
+step 1 routes to an engine family (small METIS separator → COCOA; substantial
+Arjun reduction → Ganak; else UNDECIDED), step 2 races curated config archetypes
+and resumes the frontrunner(s) via SIGSTOP/SIGCONT. Counting soundness checked
+**differentially**: pipeline count vs an independent reference (`ganak --prob 0`,
+or a documented ground-truth). Any mismatch = soundness bug.
+
+Build: COCOA Release (`cocoa/build/sharpSAT`, `ganak-canonical/build/ganak`).
+Env: clean CPU (verified no stray solvers), load ~1.8, Apple Silicon.
+
+### Batches 1+2 — primary instances, budget 90 s (round1 15 / round2 15)
+
+| inst | route | winner config | status | wall | count check |
+|---|---|---|---|---:|---|
+| t1_065 | COCOA | cocoa-plain | solved | 1 s | ✓ known |
+| t1_071 | COCOA | cocoa-plain | solved | 0 s | ✓ known |
+| t1_011 | COCOA | cocoa-plain | solved | 12 s | ✓ known |
+| t1_041 | COCOA | **cocoa-reactive** | solved | 16 s | ✓ known (plain stuck pct_lin 2e-11) |
+| t1_159 | Ganak | ganak-canonical | solved | 2 s | ✓ known |
+| t1_025 | COCOA | cocoa-plain | solved | 4 s | ✓ ganak-ref (134746112245856) |
+| t1_027 | COCOA | cocoa-plain | solved | 3 s | ✓ ganak-ref (1115259056499565) |
+| t1_073 | COCOA | cocoa-plain | solved | 0 s | ✓ ganak-ref |
+| t1_005 | COCOA | cocoa-plain | solved | 6 s | unverified (ref timeout) |
+| t1_053 | COCOA | **cocoa-adaptive-nosep** | solved | 78 s | unverified (ref timeout) |
+| t1_023 | COCOA | — | timeout | 90 s | — |
+| t1_001 | COCOA | — | timeout | 90 s | — |
+| t1_003 | COCOA | — | timeout | 90 s | — |
+| t1_021 | COCOA | — | timeout | 90 s | — |
+| t1_059 | COCOA | — | timeout | 90 s | — |
+| t1_047 | UNDECIDED | — | timeout | 90 s | — |
+| t1_149 | UNDECIDED | — | timeout | 96 s | — |
+| t1_163 | UNDECIDED | — | timeout | 90 s | — |
+
+**Headline: 0 count mismatches across all 10 solved instances** (8 independently
+verified; 2 solved-but-reference-also-timed-out). 8 time out at the 90 s scout
+budget — the genuinely hard ones (need the full ~3600 s budget).
+
+Observations:
+- Routing: mostly COCOA; Ganak on t1_159 (Arjun 256→117); UNDECIDED on t1_047/149/163.
+- The race auto-selects non-default configs: **cocoa-reactive** wins t1_041
+  (plain stuck), **cocoa-adaptive-nosep** wins t1_053.
+- Every solved instance SHORT-CIRCUITED (a config finished within a round window),
+  so the comparator/leader-pick is not yet exercised in producing a count.
+- t1_023 (density-1 structured, t1_041 family) timed out — likely needs reactive
+  but didn't short-circuit in the 15 s window; a comparator/window case to study.
+
+### Batch 3 — public-set scout (previously-untested), budget 180 s (round1 20 / round2 15)
+
+Decompressed from `MC2025_Public/mc2025_track1_public/` → `temp_cnf/mc2025_public/`.
+
+| inst | size | route | winner config | status | wall | count check |
+|---|---|---|---|---|---:|---|
+| t1_067 | 150 v / 800 c | COCOA | cocoa-plain | solved | 0 s | ✓ ganak-ref (1267650600228229401496703205376) |
+| t1_069 | 880 v / 2504 c | COCOA | cocoa-plain | solved | 6 s | ✓ ganak-ref (856…840, 114 digits) |
+| t1_167 | 270 v / 18224 c | **UNDECIDED** | **cocoa-adaptive** | solved | 58 s | ✓ ganak-ref (244826150) |
+| t1_101 | 729 v / 3174 c | COCOA | (nosep-cascade leader) | timeout | 180 s | — |
+| t1_007 | 1441 v / 2575 c | COCOA | (plain leader) | timeout | 180 s | — |
+| t1_013 | 1542 v / 4125 c | COCOA | (nosep-cascade leader) | timeout | 180 s | — |
+
+**0 mismatches** (3 solved, all ganak-ref verified). Notes:
+- **t1_167** = first comparator-EXERCISED solve: routed UNDECIDED, raced all 6,
+  `cocoa-adaptive` short-circuited at 58 s (dense instance, 270 v / 18k clauses).
+- t1_101/007/013 timed out at the 180 s scout budget but DID exercise the
+  within-COCOA leader-pick (101/013 → nosep-cascade, 007 → plain). t1_013 gave a
+  clean leader signal: nosep-cascade pct_lin 50.67 @20 s vs all others <18.
+- These need the full ~3600 s budget; logged for the multi-day runs.
+
+### Harness: streaming visibility (2026-06-03)
+
+`race/sweep.py` + `scheduler.py` now stream every solver-option window result and
+every instance verdict live (flushed; run with `python -u`) and append a durable
+per-instance JSONL (`portfolio/sweep_log.jsonl`), so soundness problems are caught
+as they arrive rather than at the end of a buffered run.
+
+### closed_bits-velocity two-frontrunner policy + t1_013 (commit 9f54ed4)
+
+COCOA progress is now judged by **closed_bits** (structure resolved) and its
+**velocity** (recent back-half slope), NOT pct_lin — pct_lin flatlines at ~0 on
+deep-tail instances (t1_001: every config 1e-18…1e-43) even while progressing.
+Round 2 now fires WITHIN COCOA: round 1 scouts all configs, then keeps two
+frontrunners — #1 highest closed_bits (leader), #2 highest closed_bits velocity
+(rising challenger; tiebreak → runner-up by level). Fixes the old per-engine cull
+that kept one COCOA config and skipped round 2.
+
+**t1_013** (COCOA-routed, sep_ratio 0.007), budget 600 s, round1/2 = 30 s:
+
+| config | closed_bits | velocity | pct_lin@30s |
+|---|---:|---:|---:|
+| cocoa-plain | 1195.2 | 0.571 | 0.003 |
+| cocoa-reactive | 1181.7 | 0.078 | ~0 |
+| cocoa-adaptive | 1207.5 | 0.000 | 18.3 |
+| cocoa-adaptive-nosep | 1207.1 | 0.000 | 13.3 |
+| **cocoa-nosep-cascade** | **1209.1** | 0.008 | **53.8** |
+
+Frontrunners = nosep-cascade (#1 level) + plain (#2 velocity); round 2 fired;
+leader = nosep-cascade. Round 3 → **TIMEOUT at 600 s** (no count): pct_lin climbed
+53.9% → 61.9% through hard plateaus (flat at 60.05% for ~90 s) while closed_bits
+barely moved (1209.26 → 1209.31) — slow-but-finishing deep tail, needs >600 s.
+`ganak --prob 0` also timed out (180 s) → hard for BOTH engines (treewidth
+correlation). Validates the policy: correct leader pick + honest "needs more
+budget" reporting (no more `winner=None`). nosep-cascade is the right config here
+(binary-heavy → drop separators).
+
+---
+
+## 2026-06-04 — Step-1 router: whole-ND-tree branching cost (nd_cost) replaces sep_ratio
+
+**PROVISIONAL — this needs more work before the gate is trustworthy (see caveat below).**
+
+New tool `cocoa/tools/nd_cost.cpp` (→ `build/nd_cost <cnf>`) builds the full
+nested-dissection hierarchy (`NDHierarchy::build`, the exact recursive METIS
+bisection the solver uses) and reports `nd_log2_cost` = L(root) in bits, where
+`cost(C)=2^{|Sep(C)|}·Σ cost(child)`, leaf cost `2^{n_vars(leaf)}`, evaluated in
+log2 (overflows otherwise). No depth weight needed — the nested `2^{sep}` already
+weights deep separators by reach. Ignores caching/BCP.
+
+Router wired (`portfolio/select_solver.py` rule 1 → `cocoa_feasible(nd)` =
+`nd_log2_cost ≤ NDCOST_MAX_BITS`, **B=90**). Replaces the single-root-cut
+`sep_ratio ≤ 0.2` gate, which a small ROOT separator passed even when the
+instance was high-treewidth deeper.
+
+### Calibration sweep (`portfolio/nd_calibrate.py`, 23 base t1_*, sub-50 ms each)
+
+| band | instances (`nd_log2_cost`) | reality |
+|---|---|---|
+| low 18–40 | t1_003(17.9✓solved), t1_065(20), t1_071(38); **t1_021(28.8 timeout), t1_059(34.7 timeout)** | mostly COCOA |
+| mid 50–77 | t1_041(52.5), **t1_049(61.9 beats ganak)**, t1_047(67.2 solves), t1_013(73.8 timeout), **t1_045(75.3 win)**, t1_001(76.9 timeout) | **MIXED, inseparable by cost** |
+| catastrophic ≥100 | t1_007(101.6), t1_159/163(118), t1_011(208), t1_149(256) | hopeless, high confidence |
+
+### Why B=90 is high, and the caveat
+
+The cost **ignores caching/anonymization — COCOA's main lever** — so it
+overestimates exactly the dense cache-friendly wins (t1_049 = 61.9 yet beats
+ganak; t1_045 win sits between t1_001/t1_013 timeouts). So today it is only a
+reliable **high-end filter**: reject the ≥100 tail (wide empty gap 76.9→101.6),
+keep everything ≤90 on COCOA where step-2's race + fallback does the real
+selection. To make it a real "will COCOA win" predictor: (1) caching-aware cost
+correction; (2) calibrate against solve-TIME, not the 600 s-timeout bucket;
+(3) revisit bipartite-vs-vars_only for binary-heavy instances (t1_059).
+
+Improvement over the old gate is real in both directions: rejects small-root-but-
+deep-hard instances it wrongly took (t1_007/011/149/159/163), and accepts
+cache-friendly large-root wins it wrongly rejected (t1_049: sep_ratio 0.51 →
+UNDECIDED before, cost 61.9 ≤ 90 → COCOA now).
+
+---
+
+## 2026-06-04 — First end-to-end run of the band-driven pipeline (t1_005)
+
+First validation of the new architecture (step 1 = features only; step 2 =
+band-driven `race_plan`; no binary COCOA/Ganak gate). Fresh, previously-untested
+instance.
+
+**t1_005** (378 vars, `nd_log2_cost=17.8` → band **low**):
+- **Step 1** (features only): `nd_band=low`, Arjun **skipped** (low band, as designed).
+- **Step 2**: band=low → raced `[cocoa-plain, cocoa-adaptive]` (sep configs), patient
+  Ganak fallback (`<1.0%`).
+- **Winner: cocoa-plain** (`-sep 5 -cb 3`), round-1 short-circuit, **5.7 s active**.
+- **Count: 6526525587659843842641540018917626900729839747072** —
+  **VERIFIED** identical to `ganak --prob 0`.
+
+Findings:
+- The whole new path — features → band → band-selected race → solve → count — worked
+  first time, no bugs, no leaked processes.
+- Confirms the **low band → precomputed sep** rule: t1_005 is an 8th low-band sep win
+  (cross-tab was 7/7; now 8/8). The low-band signal remains the reliable part.
+- Live monitoring via the Monitor tool streamed each transition ([step1]/[step2]/
+  [r1]/[FINISH]) as it happened — the corrected reporting mechanism (Monitor on the
+  log, not ScheduleWakeup) works.
+
+---
+
+## 2026-06-04 — Band-driven pipeline run #2: t1_041 (mid band, Arjun signal)
+
+Second end-to-end run of the new architecture; first **mid-band** + first time the
+**Arjun signal** fired live.
+
+**t1_041** (1920 vars, `nd_log2_cost=52.5` → band **mid**, `worst_leaf=1`, `root_sep=0`):
+- **Step 1**: `nd_band=mid`, **`arjun_substantial=True`** → bumped the Ganak-handoff
+  threshold `fallback_pct` 2.0 → **5.0** (×2.5), as `race_plan` specifies.
+- **Step 2**: band=mid → raced `[cocoa-plain, cocoa-reactive, cocoa-nosep-cascade]`.
+  - `cocoa-plain` scouted its full 120 s window, **stuck at pct_lin ≈ 0** (5.4e-9),
+    5.5 M decisions — confirms plain is the wrong config for t1_041.
+  - `cocoa-reactive` then **finished in 1.1 s active** (round-1 short-circuit).
+- **Winner: cocoa-reactive** (`-sep 5 -cb 3 -wlIter 2 -reactiveMetis -reactiveMetisMin 10
+  -reactiveMetisSkip 4 -unifiedPicker -decomposeAfterK 1000 -cascadeW 0`).
+- **Count VERIFIED**: 458-digit value `…057082925443259892051805732864`, **identical to
+  `ganak --prob 0`**. (Caught + fixed a transcription typo in the old line-1316 abbrev:
+  `…943…` → `…443…`.)
+
+Findings:
+- Confirms the **mid band → diverse-trio race** correctly surfaces the **reactive**
+  regime as the winner — the first non-sep live win.
+- The **Arjun signal works end-to-end** (raised the handoff threshold). Worth noting the
+  latent tension: a *true* COCOA win (t1_041=reactive) had `arjun_substantial=True`, so
+  had reactive needed > round-1 budget, the raised 5% threshold could have prematurely
+  bailed to Ganak. Here reactive short-circuited first, so it didn't bite — but it's a
+  case to watch as we run more Arjun-substantial mid-band instances.
+- Verify-before-claiming paid off: the count tail looked off vs the doc, an independent
+  ganak run settled it (doc typo, solver sound).
+
+---
+
+## 2026-06-04 — Band-driven pipeline run #3: t1_011 (HIGH band — the caching exception)
+
+The decisive test of the "no binary gate" decision. t1_011 is why the B=90 gate was
+removed: cost 208 bits (2nd-highest in the set) yet a fast precomputed-sep win because
+caching annihilates its deep-but-repetitive tree.
+
+**t1_011** (6559 vars, `nd_log2_cost=208.3` → band **high**, `worst_leaf=1`, `root_sep=0`):
+- **Step 1**: `nd_band=high`, `arjun_substantial=True` → `fallback_pct` 5.0 → **10.0** (×2.5).
+- **Step 2**: band=high → raced `[cocoa-plain, cocoa-nosep-cascade]` (short sep probe + nosep).
+- **Winner: cocoa-plain** (`-sep 5 -cb 3`), **11.6 s active**, round-1 short-circuit.
+- **Count: 536870912306** — matches the known-verified reference exactly. ✓
+
+Findings:
+- **The high-band short-sep-probe earns its place.** Keeping `cocoa-plain` in the high
+  band rescued exactly the caching win that a hard cost-gate (B=90) would have wrongly
+  routed to Ganak. This is the live confirmation of the cross-tab lesson and of the
+  decision to make nd_cost a step-2 *signal*, not a verdict.
+- All 3 runs now solved + verified across all three bands: low→sep (t1_005), mid→reactive
+  (t1_041), high→sep-via-caching (t1_011). The band-driven race picked the right regime
+  each time.
+
+---
+
+## 2026-06-04 — Per-config progress trajectories on t1_049 (answering "good progress over time")
+
+`race/trajectory.py` t1_049 (mid band, 90 vars), 5 COCOA configs × 60 s, 10 s sampling.
+No config solved in 60 s (t1_049 is a long grind); this is a PROGRESS characterization.
+
+pct_lin (%) over time:
+| config | t10 | t20 | t30 | t40 | t50 | t60 |
+|---|---|---|---|---|---|---|
+| cocoa-adaptive       | 1.12 | 3.66 | 3.83 | 3.86 | 4.42 | —    |
+| cocoa-adaptive-nosep | 1.12 | 3.66 | 3.83 | 3.86 | 4.42 | 5.43 |
+| cocoa-plain          | 0.34 | 0.76 | 1.10 | 1.38 | 1.55 | —    |
+| cocoa-reactive       | 0.14 | 0.36 | 0.67 | 0.78 | 1.05 | 1.15 |
+| cocoa-nosep-cascade  | 0.01 | 0.03 | 0.04 | 0.06 | 0.12 | 0.18 |
+
+closed_bits is compressed (all 77–86 by t10 — weak discriminator); pct_lin spreads 100×.
+
+How to evaluate "good progress over time" (data-grounded):
+- closed_bits = EARLY signal (structure resolved, jumps then plateaus); pct_lin = OVER-TIME
+  signal (separates configs). Good progress = sustained positive pct_lin velocity.
+- Thrashing = decisions climb but pct_lin flat (nosep-cascade: 15 M decisions, pct_lin ≈ 0).
+- A plateau is ambiguous for one sample (adaptive t30–40 looked stalled, then t50 jumped
+  4.42 — a pause between deep-tail steps). Need the NEXT sample to call pause vs stall.
+
+Findings:
+1. **`-sep` is a no-op on t1_049** — cocoa-adaptive ≡ cocoa-adaptive-nosep bit-for-bit
+   (root_sep=46 poor → hierarchy rejected by size-gate; `-adaptive` is the whole story).
+2. **cocoa-adaptive is the best config (~3× plain) — and it's MISSING from race_plan("mid")
+   = [plain, reactive, nosep-cascade].** The old "plain wins t1_049" was just the
+   benchmarked config. So the mid race currently misses t1_049's best config.
+
+Action (to discuss): add cocoa-adaptive to the mid set (or use root_sep: large root_sep
+mid-band → prefer adaptive over plain). Also: closed_bits-first ranking is weak when the
+range is compressed; pct_lin is the more sensitive signal on instances like t1_049.
+
+---
+
+## 2026-06-04 — t1_023 clean run validates the redesigned step-2 (6->3->1 + forecast)
+
+t1_023 (low band, cost 27.6). Full 1h budget (3600s), new scheme. Result: TIMEOUT,
+decided=ganak-native, count=None — UNSOLVED by both engines (hard-for-both, like t1_001/007).
+
+Flow validated end-to-end (all as designed):
+- 6 configs x 60s round 1; NO early bail (the old round-1 fallback bug is gone).
+- frontrunners = top-3: adaptive(cb94.8)+plain(cb94.7) by level + unified-sep(vel0.066) accelerator.
+- round 2 = 3 x 120s; leader = cocoa-plain (cb 96.5).
+- [forecast] cocoa-plain -> GANAK (power-law on r: B=-0.236, R2=0.999, proj 14.4% @budget).
+- [handoff] -> ganak-native got the FULL 2880s (~48min), 14.8-16.6GB. Timed out.
+
+Forecaster post-mortem: the power-law-on-r=log2(100/pct_lin) is too pessimistic (projects 14%);
+pct_lin is ~linear (~0.127%/10s) and a linear fit projects ~40% (finish ~129min) — still >1h,
+so Ganak was the right call here, but the model over-pessimizes borderline cases. DECISION:
+switch to linear-regression-on-pct_lin + a caching JUMP BONUS (big closed_bits increments ->
+shrink ETA), since cache hits cause jumps and compound. NOT yet implemented.
+
+## 2026-06-04 — t1_073 clean solve (new pipeline, round-1 short-circuit)
+t1_073 (band=low, cost 33.9; tiny root cut sepsize=3/1140 vars). 6-config set;
+cocoa-plain solved round-1 in 0.3s active. count ...356703232000 VERIFIED vs ganak --prob 0.
+Forecaster not involved (short-circuit). Confirms new selection routes + short-circuits fine.
+
+## 2026-06-04 — t1_003 clean solve + VERIFIED
+t1_003: 264 vars, 1474 clauses (98.6% BINARY: 1453 len-2 + 1 unit + few mid + 11 len-12).
+Structure: binary-heavy but LOW treewidth — metis one-shot cut=19, but ND root_sep=1,
+worst_leaf=2, max_path=13, cost=17.9 (LOW band). cocoa-plain (sep+canonical) solved
+round-1 in 30.8s active. count 1028511699317580344617598976 VERIFIED vs ganak --prob 0
+(ganak: 174K cache entries, ~7500 confl/s; slow only due to its own distill/cadiback preproc).
+Lesson reinforced: binary fraction does NOT decide sep-vs-nosep; treewidth does. t1_003 is
+binary-heavy + narrow -> separator WINS (contrast noSep-for-binary-heavy which needs tw/n>~25%).
+
+## 2026-06-04 — toolchain verification: t1_065 + t1_073 both reproduce (new pipeline, round-1 short-circuit)
+
+Quick end-to-end toolchain check before any long benchmark. Env: CPU idle (no stray
+solver procs), both builds Release (verified CMakeCache.txt), macOS. Invocation:
+`python3 -u pipeline.py <cnf> --budget 3600` (round1=60s, round2=120s defaults);
+winning config cocoa-plain = `-sep 5 -cb 3`, canonical hash (binary default, sound).
+Both LOW band so cocoa-plain raced first and short-circuited in round 1 — forecaster
+not involved.
+
+- t1_065: band=low, cost=20.0, root_sep=4, sepsize=4/112 vars, balance=0.49. cocoa-plain
+  solved round-1 in **0.1s active**. count `37778931862957161709568` — VERIFIED against
+  BOTH documented ground truth and an independent `ganak --prob 0` run.
+- t1_073: band=low, cost=33.9, root_sep=3, sepsize=3/1140 vars, balance=0.499. cocoa-plain
+  solved round-1 in **0.2s active**. count `...356703232000` (170 digits) — VERIFIED against
+  `ganak --prob 0` (exact match).
+
+No count mismatches. Confirms step-1 routing + step-2 round-1 short-circuit work end-to-end
+on the current build. (Re-confirms the earlier 2026-06-04 t1_073 solve; 0.2s vs 0.3s active.)
+
+## 2026-06-04 — verification-gap closures: t1_005 + t1_053 now VERIFIED
+
+Both were "solved but unverified (ref timeout)" in the Batches 1+2 scout. Re-run at full
+`--budget 3600` with a patient independent `ganak --prob 0` cross-check. Env: CPU idle,
+Release builds, macOS.
+
+- t1_005 (band=low, cost 17.8, root_sep=0, sepsize=14/378): cocoa-plain solved round-1 in
+  **5.6s** active. count `6526525587659843842641540018917626900729839747072` — VERIFIED vs
+  ganak --prob 0 (exact). [previously unverified]
+- t1_053 (band=low/boundary, cost 40.0, root_sep=20, sepsize=31/222): **exercised the round-1
+  scout** — cocoa-plain (pct_lin→62.8%) and cocoa-adaptive (→76%) didn't finish their 60s
+  windows; cocoa-unified-sep + cocoa-reactive FROZE at pct_lin 0.195% / closed_bits 213.0
+  (vel 0); **cocoa-nosep-cascade** finished at **43.3s** active. count
+  `95452062829869061511655876` — VERIFIED vs ganak --prob 0 (exact). [previously unverified]
+  Reconfirms the nosep-family win (prior sweep: cocoa-adaptive-nosep) — separator configs
+  stall on t1_053, no-separator configs win.
+
+## 2026-06-05 — t1_101 (public): first full-budget run — COCOA→Ganak handoff validated end-to-end
+
+t1_101 (729 v / 3174 c, public set), full `--budget 3600`. First on-this-build exercise of the
+round-2 forecast + Ganak-handoff path; it fired correctly. Env: CPU idle, Release builds, macOS.
+
+- step1: nd_cost band=**LOW** (cost 23.3, root_sep=8, sepsize=108/729). NOTE nd_cost UNDER-estimates
+  this one — low cost yet COCOA can't crack it (mirror image of t1_011: high cost, secretly easy).
+  Arjun not substantial.
+- Round 1 (6×60s), closed_bits: nosep-cascade **583.1** (pct_lin 0.053%) > unified-sep 568.4 >
+  reactive 556.0 > adaptive-nosep 555.5 > plain 511.0 > adaptive 473.6. Frontrunners = nosep-cascade,
+  unified-sep, plain (velocity accelerator).
+- Round 2 (3×120s): nosep-cascade stayed leader (cb 583.1, plateaued); unified-sep **DEAD** (7.8M
+  decisions, closed_bits frozen at 568.42); plain glacial (cb 511→513).
+- Leader = cocoa-nosep-cascade. **Forecast → GANAK** (B=−0.02 ≈ flat, ETA inf, proj pct_lin@budget 0.1%).
+- Handoff: COCOA killed (free RAM), **ganak-native (`--prob 0 --maxcache 26000`) solved in 74.1s**.
+
+count `4503632` — **VERIFIED**: ganak-native (`--prob 0`) and `ganak --cachehash canonical` agree
+(Ganak-only since COCOA can't finish; cross-checked across cache paths). Small count (4.5M) yet
+COCOA-hard — a clean COCOA-blind-spot / Ganak-strength case. The forecaster's known pessimism was
+moot here (Ganak is genuinely the right engine).
+
+## 2026-06-05 — t1_007 (high band): first full-budget run — TIMEOUT, hard-for-both now MEASURED
+
+t1_007 (1441 v / 2575 c), first-ever full `--budget 3600` run (all prior data was ≤180s scouts).
+Result: **TIMEOUT**, decided=ganak-native, count=None — UNSOLVED by both engines at 3600s. Env:
+CPU idle at start, Release builds, macOS, `caffeinate -i` guarding (no idle-sleep mid-run).
+
+- step1: band=**HIGH** (cost 101.6). METIS root cut sepsize=30/1441 (ratio 2.1%) — *small root, deep
+  tree*: ND root_sep=0, max_path=99. **arjun_substantial=TRUE** (Ganak-favorable signal).
+- Round 1 (6×60s) closed_bits: plain 586.0 (pct_lin 0.195%) > adaptive 585.0 > nosep-cascade 584.0 >
+  unified-sep 583.1 > reactive 583.0 > adaptive-nosep 562.0. All pct_lin < 0.2%.
+- Round 2 (3×120s): leader cocoa-plain stayed flat (cb 586.00→586.03, pct_lin 0.195→0.1996% on +22M
+  decisions = 30.7M total). Forecast → GANAK (B=−0.00, ETA inf, proj 0.2%@budget).
+- ganak-native (`--prob 0`, 26 GB) ran the remaining ~2822s (~47 min); RSS grew 5.9→11+ GB (actively
+  counting, never emitted a parseable stat block) and did NOT finish → budget timeout.
+
+Epistemic update: this is the **first measured full-budget evidence** that t1_007 is hard-for-both
+(the prior "hopeless" label was only an nd_cost-band prediction + ≤180s scouts). Caveats: (1)
+timeout at 3600s ≠ unsolvable — Ganak was still progressing (RSS climbing), may need more budget/RAM
+or a different engine; (2) **arjun_substantial=TRUE did NOT yield a Ganak win** here — the
+Ganak-favorable reduction signal over-promised on this instance (data point against over-trusting it).
+No count to verify.
+
+## 2026-06-05 — t1_013 (mid band): full-budget run — forecast→Ganak→TIMEOUT
+
+t1_013 (1542 v / 4125 c), full `--budget 3600`. Result: **TIMEOUT**, decided=ganak-native, count=None.
+Env: CPU idle at start, Release builds, macOS, `caffeinate -i` guarding. Almost certainly the instance
+the earlier 600s-budget entry called "hard for both / nosep-cascade slow-but-finishing" (cb ~1209).
+
+- step1: band=MID (cost 73.8). arjun_substantial=False.
+- Round 1 (6×60s) closed_bits: **nosep-cascade 1209.1 (pct_lin 53.88%)** > adaptive 1207.5 (18.26%) >
+  plain 1207.1 (13.53%) ≈ adaptive-nosep 1207.1 (13.28%) > unified-sep 1187.6 (~1e-5) > reactive 1185.7.
+  nosep-cascade JUMPED 0→53.88% in 60s (config-specific, not BCP noise — every other early burst ≤18%).
+- Frontrunner quirk: the #3 "accelerator" slot (closed_bits VELOCITY) went to unified-sep (pct_lin
+  1.8e-5) over plain & adaptive-nosep (both ~13.5%) — the ~13–54% configs all plateaued (vel 0) while
+  unified-sep had a tiny nonzero slope. The velocity-accelerator discarded two far-further-along configs.
+- Round 2 (3×120s): leader nosep-cascade crept 53.88%→55.95% (cb 1209.11→1209.16); adaptive flat
+  (18.26→18.31%); unified-sep negligible (0.39%).
+- Leader = nosep-cascade (55.95%). FORECAST → GANAK: power-law B=−0.11, ETA 15984s (~4.4h), proj
+  pct_lin@budget 65.9%. Handoff → ganak-native ran ~2822s (~47 min), never finished → budget timeout.
+
+Forecaster data point (factual, for the pending rewrite — user is driving it): the leader was at
+**55.95% pct_lin** and was handed to Ganak, which timed out. A constant-rate (linear) read of the SAME
+back-half data projects ETA ~31–42 min (inside budget); the power-law's deceleration assumption +
+back-half-only fit (which discards the 0→54% jump) produced the 4.4h ETA. Unknown whether nosep-cascade
+would have finished round 3 (it was plateauing ~56%), but the handoff swapped a 56% COCOA leader for a
+0% Ganak timeout. No count to verify.
+
+## 2026-06-05 — t1_045: end-to-end framework SUCCESS (first durably-logged trajectory)
+
+t1_045 (90 v, mid band cost 75.3), full `--budget 3600`. **SOLVED** — winner cocoa-adaptive-nosep,
+round 3, active **2031.9s (~34 min)**, count `132951278067432` = **VERIFIED vs known ground truth**.
+Env: CPU idle at start, Release builds, macOS. Durable: `portfolio/runlogs/t1_045.log` + the full
+leader trajectory (48 pts, 0→97%) in `trajectory_log.jsonl` (first run captured under the always-log rule).
+
+The framework got it right end-to-end:
+- **step1:** nd_cost band=MID kept it on COCOA despite a BAD METIS root cut (sep_ratio 0.567, balance
+  0.128) — the old `sep_ratio ≤ 0.2` gate would have mis-routed this to Ganak.
+- **race:** adaptive family ranked top; `-sep 5 -cb 3` proved a NO-OP (adaptive ≡ adaptive-nosep — the
+  ND hierarchy is rejected, so `-adaptive` is the whole story); leader = adaptive-nosep (edged adaptive
+  by 0.0001 cb).
+- **forecast** (β=2, MARGIN=0.8 at run time): base_eta ~105 min (linear rate ≫ margin) but the jump
+  bonus B=6.15 → final ETA ~15 min → KEPT COCOA. **The bonus was load-bearing** — without it, or with a
+  narrow 10%-margin gate, t1_045 mis-hands to Ganak. The counterexample proving the bonus is needed
+  (earlier "not load-bearing" was a sampling artifact of the batch instances).
+- **round 3:** super-linear tail collapse (86% → 97% → done in the last ~6 min — exactly the
+  acceleration the bonus credited), solved at 2032s active.
+
+Post-run forecaster knob changes (future runs only): β 2→1, MARGIN 0.8→0.9 — both still keep t1_045
+(at β=1, final ETA ~28 min ≤ 0.9×budget). First real calibration data point; trajectory saved.
+
+## 2026-06-05 — t1_009 (public, untried): COCOA 37.5s vs Ganak hours — the edge is ND+cache, NOT Arjun
+
+t1_009 (5388 v / 12825 c, public set, first run). band=MID (nd_cost 94.1, root_sep 0), arjun_substantial=TRUE.
+**SOLVED by cocoa-adaptive** (`-sep 5 -cb 3 -adaptive -wlIter 2`), round-1 short-circuit, active **37.5s**,
+count **382252120612**. Durable: `runlogs/t1_009*.log` + `trajectory_log.jsonl`.
+
+**Verification of `382252120612`:**
+- COCOA `-l2Strict` (cache hit requires full clause-multiset match → cannot false-hit) → SAME count ⇒ the
+  WL/canonical cache made no wrong reuse here (rules out a canonical-cache bug for this instance).
+- Same config family produced t1_045's exact known count earlier (exact counting confirmed). Native ganak
+  (identity hash, cross-codebase) is the fully-independent check but is hopelessly slow here (below).
+
+**Ganak comparison (investigated why COCOA wins):**
+- native `ganak --prob 0` (identity hash): **>45 min, UNFINISHED** (killed). ~70×+ slower.
+- `ganak --cachehash canonical` (WITH Arjun): also slow. Arjun cut support 5388→~1758, but the residual had
+  **tree-decomposition width 234** → ganak's TD-guided count is expensive.
+- `ganak --cachehash canonical --arjun 0` (NO Arjun): **>13 min, UNFINISHED** (killed). Even without Arjun,
+  ganak's TD of the connected core (2092 vars, after 3297 disconnected components) has **treewidth ~240** —
+  same as with Arjun.
+- **CONCLUSION: Arjun is NOT the culprit.** COCOA's edge is its DECOMPOSITION METHOD — METIS nested-dissection
+  (5015 tiny leaves, worst = 1 var) + the WL canonical component cache collapsing isomorphic pieces
+  (2⁹⁴-naive → ~30k decisions) — vs ganak's tree-decomposition (treewidth ~240), which the canonical cache
+  can't rescue. COCOA runs no Arjun, so it sees the raw structure the cache feeds on.
+- `arjun_substantial=TRUE` **over-promised again** (3rd time; cf. t1_007) — it did NOT mean Ganak-favorable.
+
+**Soundness:** the count is from the real exact solver (mpz `# solutions` block), NOT the `-calibrateDive`
+estimator (flag-gated, emits no count, used only by `calibrate.py`; the race never passes it).
+
+---
+
+## t1_089 (public, untried) — COCOA forecaster FALSE-POSITIVE, killed → native Ganak
+
+**Instance:** 480 vars / 2040 clauses, nd_cost **204 (HIGH band)**, arjun_substantial=True.
+**Pipeline:** full 6-config race → frontrunners [nosep-cascade #1 (cb level), plain #2 (level), unified-sep #3 (velocity)] → leader **cocoa-nosep-cascade** (`-unifiedPicker -decomposeAfterK 1000 -cascadeW 10 -cascadeDepth 9`).
+
+**Round trajectory — the front-load trap:**
+- r1 (60s): nosep-cascade **3.125%** — clear leader (others ~0.67%).
+- r2 (→180s): **5.615%** — climb *looked* sustained (3.1→5.6), so the forecaster fired the jump-bonus.
+- **Forecast @ r2-end → COCOA r3:** `eta 1362s ≤ 0.9×2879s; base 4328s /(1+B=2.18), rate=0.0218%/s, proj@budget=68.4%`. The linear base alone (proj **68.4%**) already says WON'T finish; the **bonus B=2.18 flipped it to "finishes"**.
+- r3 reality: **plateau.** 5.6% → **7.13%** over ~23 min, decelerating to a steady **~0.04%/min** crawl (trough 0.009/min). At that rate 93% remaining ≈ **30+ hours**.
+- **Killed at active 1561s / pct_lin 7.13% / cb 476.19**, ~25 min budget unspent (user call).
+
+**VERDICT — forecaster false-positive.** The one-shot forecast at 180s had ONLY front-loaded samples (the fast r1→r2 climb, ~1.3%/min); the bonus over-credited those early jumps, and the slow post-jump regime did not exist in the data yet. → Motivates the agreed **round-3 re-check**: re-run `predict()` at ~5 min into r3 on the richer (post-jump) trajectory and hand to Ganak if eta>margin. Design agreed; **NOT yet implemented.**
+
+**Handoff:** killed COCOA (frees RAM), launched **native Ganak** `--prob 0 --maxcache 26000 --verb 1` (sound; faster-than-canonical 5/5 fallback) → runlogs/ganak_089.log. Decomposition finished in 19.7s — but that's the smaller formula (480v vs 5388v), NOT tractability: **treewidth = 163** (vs t1_009's 238 — high either way). Counting then ran **1h 11m at 100% CPU, RSS flat ~238 MB** (CPU-bound search, not cache-filling) with **NO count** → killed (user). **t1_089 UNSOLVED by both engines:** COCOA plateaued at 7%, Ganak's tw-163 tree-decomposition count is infeasible in budget. Lesson (per user): a *small* formula (480v) can still be hard — treewidth is the wall, and tw 163 stops both paradigms (contrast t1_009, where COCOA's ND + WL-cache crushed Ganak's tw-238 TD; here neither wins).
+
+---
+
+## t1_015 (public, untried) — whole-portfolio WALL; predict_cb wired & validated
+
+**Instance:** 4794v/13936c, HIGH band. All 6 configs converge to closed_bits ≈ **4785** (~0.96 bits short of n_root=4786, ≈ 50–51% pct_lin) and **freeze** — the last ~1 bit is intractable for COCOA. Not config-specific: high-decision plain (millions of decisions) and low-decision adaptive both stall at the same wall → genuine **Ganak case**.
+
+**Leader-pick test:** the current scheme picked the *frozen* plain (closed_bits level) over the *climbing* adaptive. Killed plain, ran adaptive solo: it climbed 43.7→50.0% (cb→4785.00) then **walled too** (15 min frozen at 50.0008%, l2_hits stalled). "adaptive cracks it" — falsified.
+
+**Forecaster replay (minute-by-minute on adaptive's trajectory):**
+- **predict_cb (closed_bits):** ETA climbs as cb stays flat (596→3032s) → flips to **ganak at t≈540s (~9 min)**. Correct, timely handoff.
+- **old predict (pct_lin):** stays `cocoa` throughout (eta 69→480s) — fooled by the early 0→50% warm-up jump + bonus → **false-positive**, would ride to a no-count timeout.
+
+**Wired:** `predict_cb` now drives the scheduler's round-2 handoff (procctl `closed_bits_traj()`/`n_root_estimate()` + scheduler swap; 37 unit tests + dryrun 4/4). Remaining: a round-3 *monitoring re-check* to catch climb-then-wall leaders (t1_089-class) that pass the r2-end check then freeze.
+
+---
+
+## t1_123 (public, untried) — SOLVED by cocoa-plain (round-1 short-circuit; new funnel)
+
+**HIGH band, arjun_substantial=True** — yet **cocoa-plain solved it in 23.3s** (round-1 short-circuit). The band over-predicted difficulty (sep-probe caught the structure, per the high-band note). **COUNT = 752061**, ganak-verified: native Ganak independently computed 752061 in 58.7s (cross-engine agreement; cocoa-plain 23.3s). Like t1_067, it short-circuited, so the ETA-narrowing funnel + monitoring handoff were not exercised — the new funnel's fast-finish path is confirmed correct on a 2nd real instance.
+
+---
+
+## t1_175 (public, untried) — SOLVED by cocoa-adaptive-nosep via the ETA funnel (NEW selection)
+
+**HIGH band, NO separator** (root sep_ratio=0.73, sepsize=240/330, balance=0.0, nd_cost=317 bits, only 11 leaves), arjun_substantial=False. **Deep-tail**: pct_lin ~0 for most configs at round 1, so the new ETA funnel ranked by predict_cb's **closed_bits** forecaster (the exact case where the old pct_lin model gave 10^thousands garbage). Round-1 keep-4 by ETA = [adaptive-nosep, adaptive, nosep-cascade, plain] (cut unified-sep cb225, reactive cb222); **adaptive-nosep finished in round 2 at 68.4s**. **COUNT = 1048488033**, ganak-verified (native, 50.8s; cocoa-adaptive-nosep 68.4s). First real instance where the funnel narrowing mattered (no round-1 short-circuit) — it kept the eventual winner and solved.

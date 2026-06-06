@@ -46,21 +46,21 @@ def scenario_A() -> bool:
 
 
 def scenario_B() -> bool:
-    print("\n--- Scenario B: full 3 rounds, leader resumes & finishes ---")
-    # Nobody finishes in rounds 1-2 (mock work ~70 units/s; r1+r2 = 3s active =>
-    # ~210 units). The fastest COCOA (champion) + the ganak are the frontrunners;
-    # the leader resumes in round 3 and finishes at finish_work=330 (~4.7s active).
+    print("\n--- Scenario B: funnel 6->4->2->1 by ETA, leader finishes in monitoring ---")
+    # Nobody finishes during the 3 scouting rounds (1.5s each = 4.5s active). The funnel
+    # ranks by predict_cb ETA and narrows to the fastest COCOA (cocoa-B); ganak (no live
+    # ETA) sorts last and is cut. The leader then finishes in monitoring (~4.7s active).
     archs = [
         _mock("cocoa-A", "cocoa", 0.002, "none", 111),   # never finishes
-        _mock("cocoa-B", "cocoa", 0.02, 330, 777),       # fastest COCOA; finishes in round 3
+        _mock("cocoa-B", "cocoa", 0.02, 330, 777),       # fastest COCOA; finishes in monitoring
         _mock("cocoa-C", "cocoa", 0.001, "none", 222),
         _mock("ganak-Z", "ganak", 0.003, "none", 333),
     ]
     r = run_race("dummy.cnf", budget_s=60, round1_s=1.5, round2_s=1.5,
                  archetypes=archs, progress_interval=0.25)
     ok = (r["status"] == "solved" and r["winner"] == "cocoa-B"
-          and str(r["count"]) == "777" and r["round"] == "round3")
-    print(f"  -> {r}\n  PASS={ok}  (must reach round3, not short-circuit)")
+          and str(r["count"]) == "777" and r["round"] == "monitor")
+    print(f"  -> {r}\n  PASS={ok}  (funnel 6->4->2->1, leader finishes in monitoring)")
     return ok
 
 
@@ -88,7 +88,7 @@ def scenario_C() -> bool:
 
 
 def scenario_D() -> bool:
-    print("\n--- Scenario D: select_frontrunners (leader by level + accelerator by velocity + tiebreak) ---")
+    print("\n--- Scenario D: select_frontrunners (top-2 by closed_bits level + #3 accelerator) ---")
     from types import SimpleNamespace
     from race.comparator import select_frontrunners
 
@@ -98,19 +98,20 @@ def scenario_D() -> bool:
         def closed_bits(s): return s._l
         def closed_bits_velocity(s): return s._v
 
-    # 5 COCOA: plain leads on level but decelerating; nosep-cascade trails but accelerating
+    # 5 COCOA: top-2 by level = plain(100), adaptive(90); #3 accelerator by velocity
+    # among the rest = nosep-cascade(0.42).
     p = [FP("plain", "cocoa", 100, 0.03), FP("reactive", "cocoa", 60, 0.0),
          FP("adaptive", "cocoa", 90, 0.02), FP("adaptive-nosep", "cocoa", 50, 0.01),
          FP("nosep-cascade", "cocoa", 55, 0.42)]
     got = sorted(x.arch.name for x in select_frontrunners(p))
-    ok1 = got == sorted(["plain", "nosep-cascade"])
-    print(f"  COCOA-only -> {got}  (expect plain[level]+nosep-cascade[vel])  PASS={ok1}")
+    ok1 = got == sorted(["plain", "adaptive", "nosep-cascade"])
+    print(f"  COCOA-only -> {got}  (expect plain,adaptive [level] + nosep-cascade [vel])  PASS={ok1}")
 
-    # tiebreak: plain has BOTH highest level and highest velocity -> #2 = runner-up by level
+    # <=3 candidates -> return all of them (nothing to narrow)
     p2 = [FP("plain", "cocoa", 100, 0.9), FP("adaptive", "cocoa", 90, 0.02), FP("reactive", "cocoa", 60, 0.0)]
     got2 = sorted(x.arch.name for x in select_frontrunners(p2))
-    ok2 = got2 == sorted(["plain", "adaptive"])
-    print(f"  tiebreak   -> {got2}  (plain wins both -> runner-up adaptive)  PASS={ok2}")
+    ok2 = got2 == sorted(["plain", "adaptive", "reactive"])
+    print(f"  <=3 keep all -> {got2}  PASS={ok2}")
 
     # cross-engine: COCOA + Ganak -> best COCOA (by level) + the Ganak hedge
     p3 = [FP("plain", "cocoa", 100, 0.03), FP("adaptive", "cocoa", 80, 0.5), FP("ganak-native", "ganak", 0, 0)]

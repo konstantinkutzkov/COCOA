@@ -16,6 +16,7 @@ import os
 import re
 import signal
 import subprocess
+import math
 import threading
 import time
 
@@ -51,7 +52,7 @@ class ManagedProc:
         self.proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
         self._sample: dict = {"engine": arch.engine}
-        self._traj: list[tuple] = []   # (t, closed_bits) per PROGRESS sample (COCOA)
+        self._traj: list[tuple] = []   # (active_s, pct_lin, closed_bits) per PROGRESS (COCOA)
         self._count: str | None = None
         self._timed_out = False
         self._in_solutions = False
@@ -159,20 +160,54 @@ class ManagedProc:
                 return 0.0
 
     def closed_bits_velocity(self) -> float:
-        """RECENT closed_bits slope (bits/s) over the back half of the run — so an
-        accelerating config (rising slope) scores above a decelerating one. 0 if
-        too few samples. closed_bits jumps fast at the start (BCP), so we measure
-        from the midpoint of the recorded trajectory, not t=0."""
+        """RECENT closed_bits slope (bits/s) over the BACK HALF of the run, via
+        least-squares — so a config progressing in stepwise bursts (plateau then
+        jump, as observed in the t1_049 trajectory study) gets its true sustained
+        rate, not a two-point slope that lands mid-plateau. Back half skips the BCP
+        startup transient. 0 if too few samples.
+
+        v = sum_{k in B}(t_k - t_bar)(c_k - c_bar) / sum_{k in B}(t_k - t_bar)^2,
+        where B = samples with index >= floor(N/2) (the back half).
+        """
+        with self._lock:
+            traj = list(self._traj)            # list of (active_s, pct_lin, closed_bits)
+        n = len(traj)
+        if n < 3:
+            # too few for a back-half fit; fall back to a 2-point slope
+            if n == 2 and traj[1][0] > traj[0][0]:
+                return (traj[1][2] - traj[0][2]) / (traj[1][0] - traj[0][0])
+            return 0.0
+        back = traj[n // 2:]
+        m = len(back)
+        t_bar = sum(p[0] for p in back) / m
+        c_bar = sum(p[2] for p in back) / m
+        num = sum((p[0] - t_bar) * (p[2] - c_bar) for p in back)
+        den = sum((p[0] - t_bar) ** 2 for p in back)
+        return num / den if den > 0 else 0.0
+
+    def pct_lin_traj(self) -> list:
+        """[(active_seconds, pct_lin_percent)] — the OLD forecaster's input series."""
+        with self._lock:
+            return [(p[0], p[1]) for p in self._traj]
+
+    def closed_bits_traj(self) -> list:
+        """[(active_seconds, closed_bits)] — predict_cb's input series (well-conditioned;
+        non-degenerate where pct_lin flatlines to ~0 on deep-tail instances)."""
+        with self._lock:
+            return [(p[0], p[2]) for p in self._traj]
+
+    def n_root_estimate(self) -> float:
+        """Target closed_bits where pct_lin=100%, for predict_cb. The solver doesn't emit
+        it on PROGRESS lines, so recover it from pct_lin% = 100*2^(closed_bits - n_root):
+        n_root = closed_bits - log2(pct/100), at the MAX-pct_lin sample (least relative
+        noise in log2). inf if no positive-pct sample yet -> predict_cb yields ganak (safe)."""
         with self._lock:
             traj = list(self._traj)
-        if len(traj) < 2:
-            return 0.0
-        mid = traj[len(traj) // 2]
-        last = traj[-1]
-        dt = last[0] - mid[0]
-        if dt <= 0:
-            return 0.0
-        return (last[1] - mid[1]) / dt
+        best = max(((p[1], p[2]) for p in traj if p[1] > 0.0), default=None)
+        if best is None:
+            return math.inf
+        pct, cb = best
+        return cb - math.log2(pct / 100.0)
 
     # --- reader ---
     def _read(self):
@@ -195,9 +230,13 @@ class ManagedProc:
                 for k in ("t", "pct_lin", "closed_bits", "decisions", "l2_hits"):
                     if k in d:
                         self._sample[k] = d[k]
-                # record the closed_bits trajectory for velocity (recent slope)
+                # Record (ACTIVE time, pct_lin, closed_bits). We index by the
+                # proc's active_wall(), NOT the solver's reported t, so SIGSTOP
+                # freezes between rounds don't leave gaps/jumps on the time axis
+                # the velocity + forecaster regress against.
                 try:
-                    self._traj.append((float(d["t"]), float(d["closed_bits"])))
+                    self._traj.append((self.active_wall(),
+                                       float(d["pct_lin"]), float(d["closed_bits"])))
                 except (KeyError, ValueError):
                     pass
         elif "# END" in line:
