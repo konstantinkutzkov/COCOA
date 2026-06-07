@@ -2525,3 +2525,31 @@ estimator (flag-gated, emits no count, used only by `calibrate.py`; the race nev
 **Ganak handoff → SOLVED:** ganak-native (--prob 0, 26 GB) solved in **283.6s** (cache_K 4k→19k, ~2600 confl/s — found structure immediately where COCOA's caching couldn't). **COUNT = 164260022470**, authoritative (ganak --prob 0 deterministic exact; COCOA produced no count, so nothing to cross-check — a separate run reproduces it bit-for-bit). Total wall ~33 min of 60.
 
 **Validates end-to-end:** 8-config scout + ETA funnel + monitoring/overshoot handoff + memory gate all worked on a real untried instance — a doomed COCOA grind correctly converted to a Ganak solve.
+
+---
+
+## t1_017 (public, untried) — SOLVED via Ganak handoff; FIRST live ARIMA-gated handoff
+
+**Instance:** 3092v/8080c, **MID band** (nd_cost log2=98.8, **root_sep=0**, max_path=95, worst_leaf=2, **n_leaves=1544** — highly decomposable; metis sep_ratio=0.004/sepsize=13), **arjun_substantial=True**.
+
+**Funnel (8→4→2→1, predict_cb):** the two adaptive configs led from round 1 (cb=2903 vs ~2877 for the grinding cluster) and were tied throughout — `cocoa-adaptive` (`-sep 5`) and `cocoa-adaptive-nosep` were **indistinguishable** (root_sep=0 → the static separator adds nothing; the adaptive picker does the work). 8→4 kept [adaptive, adaptive-nosep, reactive, cache-max]; 4→2 kept the two adaptives; leader = **cocoa-adaptive**. sep-cascade/nosep-cascade stuck at cb=2687 (cut round 1 — cascade doesn't fit a clean decomposition).
+
+**MONITORING — first live `predict_cb_arima` handoff (per-10s trace in runlogs/forecast_mc2025_track1_017.jsonl):** leader walled at cb≈2905 (~40 bits short of n_root≈2946, pct≈5e-11). active 190–220s: ARIMA gave a fair chance — eta finite and *climbing* 933→1062s (mu eroding 0.044→0.038), over=F. active 230s: cb flatlined → **stuck-floor fired** (<0.5 bits over the last 90s) → eta=inf, over=T; streak built 1→10 over 230–321s → **handoff at active 321s (~140s into monitoring, ~110s after the wall — vs the old predict_cb's ~240s on t1_031)**.
+
+**Ganak handoff → SOLVED:** ganak-native (--prob 0, 26 GB) solved in **4.7s** (arjun_substantial=True → heavy Arjun reduction). **COUNT = 3599131006304977231013044472083344916502383519383776808287612890357947726830001874874457511028743967475520422712474089947410146888355312205154237392283185971200000**, authoritative (ganak --prob 0 exact; COCOA produced no count).
+
+**Validates:** ARIMA's stuck-floor + streak fired correctly on a real wall — faster and more principled than the old slope model, with the full 10s forecast trace captured. Prediction miss worth noting: "high decomposability → COCOA cache win" was wrong; `arjun_substantial=True` was the better signal (Ganak-favorable), and the handoff caught it.
+
+---
+
+## t1_019 (public, untried) — SOLVED via Ganak handoff; ARIMA's DISCRIMINATING test (creep→keep, wall→bail)
+
+**Instance:** 1875v/4775c, **MID band** (nd_cost log2=66.6, root_sep=0, sepsize=6, worst_leaf=2, **n_leaves=941** — decomposable), **arjun_substantial=True**. First run with **ARIMA driving the round-2/3 funnel cuts** (not just monitoring) + the explicit 3-min fair-chance handoff guard.
+
+**Funnel:** round-1 cut (8→4) by predict_cb → [adaptive-nosep, adaptive, cache-max, plain]; **round-2 cut (4→2) by ARIMA** → [adaptive-nosep, adaptive]; **round-3 cut (2→1) by ARIMA** → leader **cocoa-adaptive-nosep** (the no-sep adaptive config; root_sep=0 so the separator is moot, as on t1_017).
+
+**MONITORING — the discriminating case (unlike t1_017's immediate wall):** leader CREPT first, then walled. active 180–330s: cb 1828→1830, eta ~870–907s, over=F, streak=0 — ARIMA correctly **KEPT** COCOA on slow-but-real progress (no premature bail; the keep-phase ETA ~870s was optimistic/stale-mu and wrong, but the decision is floor-driven, not ETA-driven). active ~341s: cb flatlined at 1830.1x → **stuck-floor fired** (eta=inf), streak 1→10 → **handoff at active 431s (~250s into monitoring)** — longer than t1_017's ~140s because the creep earned a fair chance.
+
+**Ganak handoff → SOLVED in 15.1s.** **COUNT = 124330809073498638182336606522714496740835436618714014267086565149873565679807050547200**, authoritative (ganak --prob 0 exact).
+
+**Verdict:** the forecaster did its job well on the case that actually tests it — it distinguished slow-progress (keep) from walled (bail), gave a fair chance, then bailed correctly (Ganak's 15s solve confirms). Routing note (not a forecaster issue): pct_lin≈1.6e-9 throughout + arjun_substantial=True → this was a Ganak instance from step 1; ~18 min elapsed before a 15s solve. Worth considering routing arjun_substantial=True to Ganak sooner.
