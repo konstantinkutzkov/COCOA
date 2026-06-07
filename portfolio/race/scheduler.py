@@ -29,8 +29,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from race.archetypes import default_set                 # noqa: E402
 from race.procctl import ManagedProc                     # noqa: E402
-from race.forecast import predict_cb as forecast_cb        # noqa: E402  (funnel ranking)
-from race.forecast import predict_cb_arima                  # noqa: E402  (monitoring handoff)
+from race.forecast import predict_cb as forecast_cb        # noqa: E402  (round-1 funnel cut)
+from race.forecast import predict_cb_arima, ARIMA_STUCK_WINDOW_S   # noqa: E402  (round-2+ cut & handoff)
 
 # run_window outcomes
 FINISHED, PAUSED, BUDGET, DIED, HANDOFF = "finished", "paused", "budget", "died", "handoff"
@@ -44,6 +44,12 @@ FINISHED, PAUSED, BUDGET, DIED, HANDOFF = "finished", "paused", "budget", "died"
 R3_OVERSHOOT = 1.25
 R3_CONSECUTIVE = 10
 R3_RECHECK_EVERY = 10.0
+# A frontrunner gets a guaranteed minimum of this much ACTIVE running before it can be
+# handed off to Ganak (the "3-minute fair chance"). Already satisfied by the round arithmetic
+# (60s x 3 rounds = 180s by the time monitoring begins), but made explicit so it holds even
+# if round durations change. Scouting counts -- the config ran solo (king-of-the-hill) in each
+# window, so it is real dedicated work on the instance.
+R3_MIN_ACTIVE_S = 180.0
 
 # Selection funnel: after each scouting round, keep this many configs (8 -> 4 -> 2 -> 1),
 # ranked by predict_cb ETA. Three 1-min rounds = the COCOA-only evaluation window.
@@ -187,23 +193,34 @@ def _handoff_to_ganak(fallback, cnf, pi, deadline, started, log, reason) -> dict
 
 
 def _select_by_eta(survivors, keep_n, deadline, log) -> list:
-    """Rank survivors by predict_cb ETA (lower = closer to finishing); keep the best
-    keep_n. Degenerate/infinite ETAs (deep-tail: closed_bits barely moving) sort last,
-    tie-broken by closed_bits LEVEL. RANKING ONLY -- no Ganak handoff here. Non-COCOA
+    """Rank survivors by ETA (lower = closer to finishing); keep the best keep_n.
+    Forecaster is chosen by data span: once a config has >= ARIMA_STUCK_WINDOW_S (90s) of
+    trajectory it uses predict_cb_arima -- so the round-2 cut (survivors have ~120s / 12
+    samples) and the round-3 cut (~180s) rank by ARIMA, while the round-1 cut (only 60s,
+    below ARIMA's floor) falls back to predict_cb. All survivors at a given cut have the
+    same span, so one forecaster is used per cut. Infinite ETAs (stuck / deep-tail) sort
+    last, tie-broken by closed_bits LEVEL. RANKING ONLY -- no Ganak handoff here. Non-COCOA
     procs (a Ganak racer, cross-engine tests only) have no live ETA and sort last."""
     t_rem = max(deadline - time.monotonic(), 1.0)
     scored = []
+    used = "predict_cb"
     for p in survivors:
         if p.arch.engine == "cocoa":
-            eta = forecast_cb(p.closed_bits_traj(), p.n_root_estimate(),
-                              p.active_wall(), t_rem)["eta_s"]
+            traj = p.closed_bits_traj()
+            span = (traj[-1][0] - traj[0][0]) if len(traj) >= 2 else 0.0
+            if span >= ARIMA_STUCK_WINDOW_S:
+                fc = predict_cb_arima(traj, p.n_root_estimate(), p.active_wall(), t_rem)
+                used = "ARIMA"
+            else:
+                fc = forecast_cb(traj, p.n_root_estimate(), p.active_wall(), t_rem)
+            eta = fc["eta_s"]
             key = eta if (eta is not None and eta != float("inf")) else float("inf")
         else:
             key = float("inf")
         scored.append((key, -p.closed_bits(), p))
     scored.sort(key=lambda s: (s[0], s[1]))
     kept = [s[2] for s in scored[:keep_n]]
-    log(f"[select] keep {keep_n}/{len(survivors)} by predict_cb ETA -> "
+    log(f"[select] keep {keep_n}/{len(survivors)} by {used} ETA -> "
         f"{[k.arch.name for k in kept]}")
     return kept
 
@@ -333,7 +350,8 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
                         "t_rem_s": round(t_rem, 1),
                         "over": bool(over), "streak": _streak[0],
                     })
-                return _handoff_on and over and _streak[0] >= R3_CONSECUTIVE
+                return (_handoff_on and over and _streak[0] >= R3_CONSECUTIVE
+                        and p.active_wall() >= R3_MIN_ACTIVE_S)   # 3-min fair chance floor
         leader.cont()
         log(f"  [monitor] {leader.arch.name} resumed to completion "
             f"({deadline - time.monotonic():.0f}s left)...")
