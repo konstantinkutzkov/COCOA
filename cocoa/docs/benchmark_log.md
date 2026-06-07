@@ -2509,3 +2509,19 @@ estimator (flag-gated, emits no count, used only by `calibrate.py`; the race nev
 ## t1_175 (public, untried) — SOLVED by cocoa-adaptive-nosep via the ETA funnel (NEW selection)
 
 **HIGH band, NO separator** (root sep_ratio=0.73, sepsize=240/330, balance=0.0, nd_cost=317 bits, only 11 leaves), arjun_substantial=False. **Deep-tail**: pct_lin ~0 for most configs at round 1, so the new ETA funnel ranked by predict_cb's **closed_bits** forecaster (the exact case where the old pct_lin model gave 10^thousands garbage). Round-1 keep-4 by ETA = [adaptive-nosep, adaptive, nosep-cascade, plain] (cut unified-sep cb225, reactive cb222); **adaptive-nosep finished in round 2 at 68.4s**. **COUNT = 1048488033**, ganak-verified (native, 50.8s; cocoa-adaptive-nosep 68.4s). First real instance where the funnel narrowing mattered (no round-1 short-circuit) — it kept the eventual winner and solved.
+
+---
+
+## t1_031 (public, untried) — SOLVED via Ganak handoff (FIRST run of the 8-config set + memory gate)
+
+**Instance:** 450v/12923c, **HIGH band** (nd_cost log2=312, root_sep=148, max_path=311, worst_leaf=30, **n_leaves=18**; metis root cut sep_ratio=0.49/balance=0.26/sepsize=219), arjun_substantial=False. The dense / low-decomposability corner — big root separator, few leaves → caching-hostile, Ganak-favorable structure.
+
+**First end-to-end run of the new 8-config covering set** (adds cocoa-sep-cascade + cocoa-cache-max) + the round-1 memory-admission gate (R1_MEM_SKIP_GB=20) + per-round RSS logging.
+
+**Scout (funnel 8→4→2→1):** narrowed to the two cascade configs, leader = **cocoa-sep-cascade** (a NEW config — earns its slot on this binary-heavy/cascade structure). RSS after r3 = 2.1 GB across 2 configs; the 20 GB admission gate never fired — confirms the "hard, low-cache instances stay small" finding (COCOA barely cached here; Ganak later did).
+
+**Monitoring (cocoa-sep-cascade):** climbed closed_bits 404→**417** (incl. a real 414→417 jump at active ~721s) then **walled** at 416.999 for ~240s — ~50M decisions, pct_lin stuck ~4.65e-8% (deep tail, n_root≈448, ~31 bits short). **Handoff fired** at ~1696s elapsed (10 consecutive 10s forecasts of ETA > 1.25× remaining). NOTE: handoff took ~240s from the wall vs the 100s streak minimum — the extra ~140s is RATE_ALPHA=0.9's EWMA still "remembering" the pre-wall climb (~66s half-life). Candidate tuning knob (lower RATE_ALPHA → snappier bail) traded against stepwise-progress patience; here it cost ~4 min but did NOT change the outcome.
+
+**Ganak handoff → SOLVED:** ganak-native (--prob 0, 26 GB) solved in **283.6s** (cache_K 4k→19k, ~2600 confl/s — found structure immediately where COCOA's caching couldn't). **COUNT = 164260022470**, authoritative (ganak --prob 0 deterministic exact; COCOA produced no count, so nothing to cross-check — a separate run reproduces it bit-for-bit). Total wall ~33 min of 60.
+
+**Validates end-to-end:** 8-config scout + ETA funnel + monitoring/overshoot handoff + memory gate all worked on a real untried instance — a doomed COCOA grind correctly converted to a Ganak solve.
