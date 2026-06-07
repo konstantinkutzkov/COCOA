@@ -191,3 +191,13 @@ add_executable (metis_features tools/metis_features.cpp)
 target_link_libraries (metis_features
     ${METIS_DIR}/build/libmetis/libmetis.a
     ${GKLIB_DIR}/build/libGKlib.a)
+
+# nd_cost — builds the full nested-dissection hierarchy (NDHierarchy::build,
+# the exact recursive METIS bisection the solver uses) and prints the
+# decomposition's branching cost L(root) in log2(branch-leaves). This is the
+# whole-ND-tree router signal that replaces the single-root-cut sep_ratio.
+add_executable (nd_cost tools/nd_cost.cpp src/nd_hierarchy.cpp)
+target_include_directories (nd_cost PRIVATE src)
+target_link_libraries (nd_cost
+    ${METIS_DIR}/build/libmetis/libmetis.a
+    ${GKLIB_DIR}/build/libGKlib.a)
