@@ -232,6 +232,130 @@ def predict_cb(traj, n_root: float, t_active: float, t_remaining: float,
     return out
 
 
+# ===========================================================================
+# ARIMA(1,1,0)+drift forecaster on closed_bits, time-indexed in REAL SECONDS.
+#
+# Difference cb once -> per-step rate; AR(1) around the sample-mean drift mu;
+# forecast the rate reverting to mu and integrate to n_root. Honest stops:
+#   (1) STUCK-FLOOR (seconds/bits): < ARIMA_STUCK_EPS_BITS gained over the last
+#       ARIMA_STUCK_WINDOW_S seconds => eta = inf. The HARD guard against a
+#       strong-start-then-stall (the t1_031 failure): a stale high mu cannot
+#       resurrect a config that has genuinely flatlined. The window is the
+#       explicit 'fair chance' duration -- a jump within it resets it.
+#   (2) mu <= 0: no sustained drift => eta = inf.
+# Otherwise eta = (remaining - transient)/mu * step_seconds, where the AR(1)
+# transient (r_last - mu)*phi/(1-phi) LENGTHENS the ETA when the recent rate is
+# below mu (slowing into a plateau) and SHORTENS it when above (a recent burst).
+# The strong start is honored through `remaining` (level cb already reached) and
+# mu (average drift over the history) -- NOT by per-sample weighting, so it is
+# invariant to the sampling interval (the age-in-samples bug cannot occur here).
+# ===========================================================================
+ARIMA_MIN_SAMPLES    = 4       # need a few differences to fit AR(1)
+ARIMA_STUCK_WINDOW_S = 90.0    # 'fair chance' window: look back this many SECONDS
+ARIMA_STUCK_EPS_BITS = 0.5     # < this many cb gained over the window => STUCK
+ARIMA_PHI_CLAMP      = 0.98    # stationarity clamp on the AR(1) coefficient
+ARIMA_MU_EPS         = 1e-6    # long-run rate (bits/step) at/below this => stuck
+
+
+def _median(xs):
+    s = sorted(xs)
+    n = len(s)
+    if n == 0:
+        return 0.0
+    return s[n // 2] if n % 2 else 0.5 * (s[n // 2 - 1] + s[n // 2])
+
+
+def _ar1(rates):
+    """OLS fit r_t = c + phi*r_{t-1}. Returns (phi_clamped, mu). mu = mean(rates) is the
+    robust long-run per-step drift (the AR(1) mean, avoids the c/(1-phi) blow-up near a
+    unit root); phi is used only for the transient term."""
+    n = len(rates)
+    mu = sum(rates) / n if n else 0.0
+    if n < 3:
+        return 0.0, mu
+    x, y = rates[:-1], rates[1:]
+    m = len(x)
+    mx = sum(x) / m
+    my = sum(y) / m
+    sxx = sum((xi - mx) ** 2 for xi in x)
+    sxy = sum((xi - mx) * (yi - my) for xi, yi in zip(x, y))
+    phi = (sxy / sxx) if sxx > 1e-12 else 0.0
+    return max(-ARIMA_PHI_CLAMP, min(ARIMA_PHI_CLAMP, phi)), mu
+
+
+def predict_cb_arima(traj, n_root, t_active, t_remaining,
+                     stuck_window_s=ARIMA_STUCK_WINDOW_S, stuck_eps=ARIMA_STUCK_EPS_BITS,
+                     margin=MARGIN):
+    """ARIMA(1,1,0)+drift ETA on closed_bits. Same return shape as predict_cb (engine /
+    eta_s / reason / ...). eta_s is inf IFF stuck (floor fired or mu<=0)."""
+    out = {"engine": "ganak", "reason": "", "eta_s": None, "rate_bits_per_s": None,
+           "phi": None, "mu_bits_per_s": None, "closed_bits": None, "n_root": n_root,
+           "remaining_bits": None, "n_samples": 0, "stuck": False}
+    pts = sorted((float(t), float(cb)) for (t, cb) in traj
+                 if math.isfinite(t) and math.isfinite(cb))
+    warm = [(t, cb) for (t, cb) in pts if cb > 0.0]    # drop not-yet-warmed leading pts
+    if warm:
+        pts = warm
+    n = len(pts)
+    out["n_samples"] = n
+    if n < ARIMA_MIN_SAMPLES:
+        out["reason"] = f"insufficient samples ({n} < {ARIMA_MIN_SAMPLES}) -> ganak"
+        return out
+    t_now, cb_now = pts[-1]
+    out["closed_bits"] = cb_now
+    remaining = n_root - cb_now
+    out["remaining_bits"] = remaining
+    if remaining <= 0.0:
+        out.update(engine="cocoa", eta_s=0.0,
+                   reason=f"cb {cb_now:.2f} >= n_root {n_root:.2f} (done)")
+        return out
+
+    # (1) STUCK-FLOOR -- only once we actually have a full window of history
+    if t_now - pts[0][0] >= stuck_window_s:
+        cutoff = t_now - stuck_window_s
+        older = [cb for (t, cb) in pts if t <= cutoff]
+        cb_w0 = older[-1] if older else pts[0][1]
+        gained = cb_now - cb_w0
+        if gained < stuck_eps:
+            out.update(eta_s=math.inf, stuck=True,
+                       reason=f"stuck-floor: +{gained:.3f}b in last {stuck_window_s:.0f}s "
+                              f"< {stuck_eps}b -> inf -> ganak")
+            return out
+
+    # difference -> per-step rate; step size in seconds
+    steps = [pts[i + 1][0] - pts[i][0] for i in range(n - 1)]
+    rates = [pts[i + 1][1] - pts[i][1] for i in range(n - 1)]   # bits PER STEP
+    step_s = _median(steps)
+    if step_s <= 0.0:
+        out["reason"] = "degenerate time axis (median step <= 0) -> ganak"
+        return out
+    phi, mu = _ar1(rates)
+    r_last = rates[-1]
+    out["phi"] = phi
+    out["mu_bits_per_s"] = mu / step_s
+    out["rate_bits_per_s"] = r_last / step_s
+
+    # (2) no sustained drift -> never reaches n_root
+    if mu <= ARIMA_MU_EPS:
+        out.update(eta_s=math.inf, stuck=True,
+                   reason=f"AR drift mu={mu:.2e} b/step <= 0 -> inf -> ganak")
+        return out
+
+    # integrate the AR(1) rate forecast to n_root:
+    #   sum_{k>=1} (mu + phi^k (r_last-mu)) reaches `remaining` at h steps;
+    #   the geometric transient T = (r_last-mu)*phi/(1-phi) is its h->inf tail.
+    transient = (r_last - mu) * phi / (1.0 - phi) if abs(1.0 - phi) > 1e-9 else 0.0
+    h = max((remaining - transient) / mu, 0.0)        # steps to accumulate `remaining`
+    eta = h * step_s
+    out["eta_s"] = eta
+    tag = f"rem {remaining:.2f}b, mu {mu / step_s:.4g}b/s, phi {phi:.2f}, h {h:.1f}st"
+    if eta <= margin * t_remaining:
+        out.update(engine="cocoa", reason=f"ETA {eta:.0f}s <= {margin:.0%}x{t_remaining:.0f}s ({tag})")
+    else:
+        out.update(engine="ganak", reason=f"ETA {eta:.0f}s > {margin:.0%}x{t_remaining:.0f}s ({tag})")
+    return out
+
+
 # --- quick smoke self-test (python race/forecast.py); full suite in tests/ ---
 def _linear(ts, rate, p0=0.0):
     return [(t, p0 + rate * t) for t in ts]
