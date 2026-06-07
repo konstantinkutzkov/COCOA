@@ -65,13 +65,26 @@ class TestGanakCanonical(unittest.TestCase):
         finally:
             os.unlink(cnf)
 
-    def test_canonical_profile_rejected_pre_fork(self):
-        # The `canonical` profile requires the fork; unfortunately the
-        # PORTFOLIO_GANAK_BIN check happens after the profile check, so
-        # this test runs regardless of whether the binary exists.
+    def test_unknown_profile_raises(self):
+        # `canonical` is now a LIVE profile (the fork landed, see module docstring),
+        # so it is no longer rejected. Only a genuinely unknown profile raises
+        # SolverError -- and that check runs BEFORE _bin_path(), so it needs no
+        # PORTFOLIO_GANAK_BIN (env-independent).
         with self.assertRaises(solvers.SolverError):
-            solvers.run("ganak-canonical", "canonical",
+            solvers.run("ganak-canonical", "nonexistent-profile",
                         "/tmp/nonexistent.cnf")
+
+    @unittest.skipUnless(_have_binary("PORTFOLIO_GANAK_BIN"),
+                         "PORTFOLIO_GANAK_BIN not set or not executable")
+    def test_canonical_profile_accepted(self):
+        # Post-fork the canonical profile is accepted (no unknown-profile error);
+        # skip-guarded because actually running it needs the fork binary.
+        cnf = _write_smoke_cnf()
+        try:
+            r = solvers.run("ganak-canonical", "canonical", cnf, time_budget_s=10)
+            self.assertIsNotNone(r.exit_code)
+        finally:
+            os.unlink(cnf)
 
 
 class TestUnknownSolver(unittest.TestCase):
