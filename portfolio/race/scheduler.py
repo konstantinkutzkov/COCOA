@@ -2,22 +2,26 @@
 
 Sequential, resume-based, under a total wall budget (default 3600 s):
 
-  ROUND 1  run each archetype for `round1_s` (default 120 s); SIGSTOP at the
-           window; keep the BEST PER ENGINE (king-of-the-hill, so >=2 frozen +
-           1 running resident at a time), KILL the rest.
-  ROUND 2  SIGCONT each frontrunner for `round2_s` (default 180 s) more; SIGSTOP.
-  LEADER   pick one (the single cross-engine decision; see comparator); KILL the
-           runner-up to free memory.
-  ROUND 3  SIGCONT the leader; run to completion within the remaining budget.
+  FUNNEL   run each of the 8 configs for `round1_s`; SIGSTOP at the window. After
+           each round rank the survivors by predict_cb ETA and narrow 8 -> 4 -> 2
+           -> 1, SIGCONT'ing the keepers one more `round1_s` window per stage and
+           killing the rest. Three rounds = the COCOA-ONLY evaluation; predict_cb
+           is RANKING-only here (no Ganak handoff during scouting).
+  MONITOR  SIGCONT the single leader and run it to completion within the remaining
+           budget. The ONLY Ganak handoff: re-run predict_cb_arima every R3_RECHECK_EVERY
+           s and switch to Ganak after R3_CONSECUTIVE forecasts IN A ROW say
+           ETA > R3_OVERSHOOT x the remaining budget (any optimistic forecast resets
+           the streak — a between-jumps plateau gets a fair chance before dismissal).
 
 At ANY point, if a config FINISHES (emits a count) the race short-circuits: that
 count is the answer, everything else is killed. Because SIGSTOP credits a frozen
-process's work, the leader's round-1+2 time is NOT wasted — it resumes from where
+process's work, the leader's earlier rounds are NOT wasted — it resumes from where
 it left off.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -25,24 +29,39 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from race.archetypes import default_set                 # noqa: E402
 from race.procctl import ManagedProc                     # noqa: E402
-from race.forecast import predict_cb as forecast_cb        # noqa: E402
+from race.forecast import predict_cb as forecast_cb        # noqa: E402  (funnel ranking)
+from race.forecast import predict_cb_arima                  # noqa: E402  (monitoring handoff)
 
 # run_window outcomes
 FINISHED, PAUSED, BUDGET, DIED, HANDOFF = "finished", "paused", "budget", "died", "handoff"
 
 # Round-3 MONITORING re-check (the ONLY Ganak handoff). After the single leader is
-# selected, re-run predict_cb every R3_RECHECK_EVERY s and hand to Ganak only after
-# R3_CONSECUTIVE forecasts IN A ROW predict ETA > R3_OVERSHOOT x the remaining budget
-# (any optimistic forecast resets the streak). NO handoff during scouting -- COCOA gets
-# its full evaluation, then a debounced fair chance, before dismissal. predict_cb is
-# microseconds, so re-forecasting every 10s is free.
+# selected, re-run predict_cb_arima (ARIMA(1,1,0)+drift on closed_bits; inf = stuck-floor
+# fired) every R3_RECHECK_EVERY s and hand to Ganak only after R3_CONSECUTIVE forecasts IN
+# A ROW say ETA > R3_OVERSHOOT x the remaining budget (any optimistic forecast resets the
+# streak). NO handoff during scouting -- COCOA gets its full evaluation, then a debounced
+# fair chance, before dismissal. The forecast is microseconds, so re-forecasting at 10s is free.
 R3_OVERSHOOT = 1.25
 R3_CONSECUTIVE = 10
 R3_RECHECK_EVERY = 10.0
 
-# Selection funnel: after each scouting round, keep this many configs (6 -> 4 -> 2 -> 1),
+# Selection funnel: after each scouting round, keep this many configs (8 -> 4 -> 2 -> 1),
 # ranked by predict_cb ETA. Three 1-min rounds = the COCOA-only evaluation window.
+# (Initial set size is decoupled: this schedule narrows whatever round 1 produced.)
 _FUNNEL_KEEP = (4, 2, 1)
+
+# Round-1 admission gate. Before starting the NEXT round-1 candidate, if the resident
+# memory of the already-scouted (now SIGSTOP'd) configs exceeds this, stop admitting --
+# don't start any more. We never KILL a running config (no wasted work); we just decline
+# to add pressure. Safe because the funnel cuts the set 8->4 next anyway, so an unscouted
+# candidate is one we'd likely have dropped. "Better to miss an opportunity than to OOM."
+# 20 GB = the 32 GB hard limit minus ~12 GB reserve for the in-flight config's growth
+# during its un-checked window (the gate only re-checks BETWEEN configs, so peak RSS ~=
+# this threshold + one config's window growth). That growth is small -- cache bytes track
+# STORES, a fraction of decisions. Safety over coverage: costs at most ~1 fewer config in
+# the moderate-growth case, none in the common low-growth case. The per-config -cs cap is
+# the separate backstop against a single config running away mid-window.
+R1_MEM_SKIP_GB = 20.0
 
 
 def _stdout(*a):
@@ -110,6 +129,43 @@ def _kill_all(started: list):
         q.kill()
 
 
+def _group_rss_gb(procs) -> float:
+    """Total resident memory (GB) across the procs (SIGSTOP'd ones still count, which is
+    the point -- suspended king-of-the-hill configs hold their RAM)."""
+    return sum(p.rss_mb() for p in procs) / 1024.0
+
+
+def _f(x, default=None):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return default
+
+
+def _trace_append(path, rec):
+    """Append one JSON record to the per-run forecast trace (best-effort -- a logging
+    error must never affect the run). Real time-indexed data: every field is in seconds /
+    bits / bits-per-second, sampled at the recheck cadence -- no sample-index quantities."""
+    try:
+        with open(path, "a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+
+def _log_rss(procs, log, tag: str):
+    """Log total resident memory (GB) across the live process set -- the OOM-relevant
+    number. King-of-the-hill keeps non-running configs SIGSTOP'd but RESIDENT, so the
+    SUM across the set is what presses on the 32 GB ceiling, not any single cap. This is
+    instrumentation only (no enforcement): it makes the cache-growth question answerable
+    from logs instead of theory."""
+    rows = [(p.arch.name, p.rss_mb()) for p in procs]
+    rows = [(n, m) for n, m in rows if m > 0]
+    total = sum(m for _, m in rows)
+    detail = ", ".join(f"{n}={m / 1024:.1f}G" for n, m in rows) or "none"
+    log(f"    [mem~{tag}] total RSS {total / 1024:.1f} GB across {len(rows)} live: {detail}")
+
+
 def _handoff_to_ganak(fallback, cnf, pi, deadline, started, log, reason) -> dict:
     """Kill all COCOA procs (free the RAM Ganak needs) and run the Ganak fallback
     to completion within the remaining budget. NO fallback-back to COCOA."""
@@ -153,22 +209,31 @@ def _select_by_eta(survivors, keep_n, deadline, log) -> list:
 
 
 def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
-             round2_s: float = 120.0, archetypes=None,
-             progress_interval: float = 15.0, log=_stdout,
-             fallback_archetype=None, fallback_pct: float = 1.0) -> dict:
-    # FUNNEL: 6 configs x round1_s each, ranked by predict_cb ETA, narrowed 6->4->2->1
+             archetypes=None, progress_interval: float = 15.0, log=_stdout,
+             fallback_archetype=None, trace_path=None) -> dict:
+    # FUNNEL: 8 configs x round1_s each, ranked by predict_cb ETA, narrowed 8->4->2->1
     # over 3 rounds (COCOA-only evaluation). The single leader then runs to the budget
     # WITH a monitoring re-check that hands to Ganak only on sustained overshoot.
-    # round2_s/fallback_pct kept for signature compat (the funnel uses round1_s per round).
     archetypes = archetypes or default_set()
     deadline = time.monotonic() + budget_s
     started: list[ManagedProc] = []
     survivors: list[ManagedProc] = []    # all configs that ran round 1 (suspended)
 
     # ---- ROUND 1: scout every config; select frontrunners after ----
-    for arch in archetypes:
+    for i, arch in enumerate(archetypes):
         if time.monotonic() >= deadline:
             log(f"[r1] budget exhausted, skipping {arch.name}")
+            break
+        # Memory admission gate: don't START a new candidate if the already-scouted
+        # (suspended) configs are already using too much RAM. Never kills a running
+        # config; just stops admitting. The funnel cuts 8->4 next, so the skipped ones
+        # are likely drops anyway -- safer to under-scout than to OOM.
+        rss_gb = _group_rss_gb(started)
+        if started and rss_gb > R1_MEM_SKIP_GB:
+            remaining = [a.name for a in archetypes[i:] if a.engine == "cocoa"]
+            log(f"[r1] MEMORY GATE: {rss_gb:.1f} GB resident across {len(started)} configs "
+                f"> {R1_MEM_SKIP_GB:.0f} GB cap — NOT admitting the remaining "
+                f"{len(remaining)} ({', '.join(remaining)}); the funnel would cut them anyway")
             break
         p = ManagedProc(arch, cnf, progress_interval)
         p.start()
@@ -193,7 +258,9 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
         _kill_all(started)
         return {"status": "no_result", "count": None}
 
-    # ---- FUNNEL: rank by predict_cb ETA, narrow 6 -> 4 -> 2 -> 1. Ranking ONLY (no
+    _log_rss(started, log, "after-r1")   # peak concurrency: all scouted configs resident
+
+    # ---- FUNNEL: rank by predict_cb ETA, narrow 8 -> 4 -> 2 -> 1. Ranking ONLY (no
     #      Ganak handoff during scouting). Each survivor gets one more `round1_s` window
     #      per stage; the single leader then enters monitoring (below). ----
     for stage, keep_n in enumerate(_FUNNEL_KEEP):
@@ -218,6 +285,7 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
             p.stop()
             log(f"[r{rnd}] {p.arch.name}: {_fmt(p.latest())} "
                 f"closed_bits={p.closed_bits():.1f} (active {p.active_wall():.0f}s)")
+        _log_rss(started, log, f"after-r{rnd}")
 
     leader = survivors[0]
     log(f"[leader] {leader.arch.name}")
@@ -230,26 +298,54 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
     # ---- MONITORING: leader to completion, with the sustained-overshoot re-check ----
     if time.monotonic() < deadline:
         recheck = None
-        if fallback_archetype is not None and leader.arch.engine == "cocoa":
-            # Re-run predict_cb on the leader's live closed_bits every recheck_every s;
-            # hand to Ganak only after R3_CONSECUTIVE forecasts IN A ROW say ETA >
-            # R3_OVERSHOOT x remaining (any optimistic forecast resets the streak, so a
-            # between-jumps plateau gets a fair chance before dismissal).
+        _handoff_on = fallback_archetype is not None and leader.arch.engine == "cocoa"
+        if _handoff_on or trace_path:
+            # MONITORING handoff forecaster = predict_cb_arima (ARIMA(1,1,0)+drift on
+            # closed_bits, time-indexed in seconds; stuck-floor = inf when flat over the
+            # last 90s). eta=inf (stuck) counts as `over`. HANDOFF (only when a fallback is
+            # set): hand to Ganak after R3_CONSECUTIVE over-forecasts IN A ROW. NOTE: the
+            # ARIMA stuck-floor (90s) and the streak (R3_CONSECUTIVE x 10s) now BOTH debounce
+            # in series, so a pure stall bails in ~90s + streak; lower R3_CONSECUTIVE if we
+            # want the floor to be the sole debounce. When trace_path is set we ALSO append
+            # the live forecast every recheck -- pure data collection, no behaviour change.
             _streak = [0]
             def recheck(p, t_rem):
-                fc = forecast_cb(p.closed_bits_traj(), p.n_root_estimate(),
-                                 p.active_wall(), t_rem)
+                fc = predict_cb_arima(p.closed_bits_traj(), p.n_root_estimate(),
+                                      p.active_wall(), t_rem)
                 eta = fc["eta_s"]
-                if eta is None or eta <= R3_OVERSHOOT * t_rem:   # inf > x is True
-                    _streak[0] = 0
-                    return False
-                _streak[0] += 1
-                return _streak[0] >= R3_CONSECUTIVE
+                over = (eta is not None) and (eta > R3_OVERSHOOT * t_rem)  # inf counts as over
+                _streak[0] = _streak[0] + 1 if over else 0
+                if trace_path:
+                    s = p.latest()
+                    _trace_append(trace_path, {
+                        "phase": "monitor", "config": p.arch.name,
+                        "wall_s": round(budget_s - (deadline - time.monotonic()), 1),
+                        "active_s": round(p.active_wall(), 1),
+                        "closed_bits": _f(s.get("closed_bits")),
+                        "pct_lin": _f(s.get("pct_lin")),
+                        "decisions": _f(s.get("decisions")),
+                        "n_root": fc.get("n_root"),
+                        "remaining_bits": fc.get("remaining_bits"),
+                        "rate_bits_per_s": fc.get("rate_bits_per_s"),
+                        "mu_bits_per_s": fc.get("mu_bits_per_s"),
+                        "phi": fc.get("phi"), "stuck": fc.get("stuck"),
+                        "eta_s": (eta if (eta is not None and eta != float("inf")) else None),
+                        "t_rem_s": round(t_rem, 1),
+                        "over": bool(over), "streak": _streak[0],
+                    })
+                return _handoff_on and over and _streak[0] >= R3_CONSECUTIVE
         leader.cont()
         log(f"  [monitor] {leader.arch.name} resumed to completion "
             f"({deadline - time.monotonic():.0f}s left)...")
+        _log_rss([leader], log, "monitor")
         out = _run_window(leader, deadline - time.monotonic() + 1.0, deadline, log, "monitor",
                           log_every=60.0, recheck=recheck)   # full run: per-MINUTE reports
+        if trace_path:   # full leader series (scouting + monitoring), real seconds, for fitting
+            _trace_append(trace_path, {
+                "phase": "leader_full_trajectory", "config": leader.arch.name,
+                "outcome": out, "n_root": leader.n_root_estimate(),
+                "traj": [{"active_s": round(t, 2), "closed_bits": cb, "pct_lin": pl}
+                         for (t, pl, cb) in leader.traj_snapshot()]})
         if out == FINISHED:
             return _finish(leader, started, "monitor", log)
         if out == HANDOFF:
@@ -271,11 +367,10 @@ def main(argv: list) -> int:
     ap.add_argument("cnf")
     ap.add_argument("--budget", type=float, default=3600.0)
     ap.add_argument("--round1", type=float, default=120.0)
-    ap.add_argument("--round2", type=float, default=180.0)
     ap.add_argument("--progress-interval", type=float, default=15.0)
     args = ap.parse_args(argv)
     res = run_race(args.cnf, budget_s=args.budget, round1_s=args.round1,
-                   round2_s=args.round2, progress_interval=args.progress_interval)
+                   progress_interval=args.progress_interval)
     print(f"=== race result: {res} ===")
     return 0 if res.get("status") == "solved" else 1
 

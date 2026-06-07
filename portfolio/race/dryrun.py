@@ -2,9 +2,10 @@
 
 Verifies the orchestration end-to-end:
   A. short-circuit  — a config that finishes inside round 1 wins immediately.
-  B. full 3 rounds  — nobody finishes early; the highest-rate COCOA config and
-                      the (single) Ganak config become the two frontrunners; the
-                      leader resumes in round 3 and finishes; runner-up killed.
+  B. ETA funnel     — nobody finishes early; the funnel ranks survivors by
+                      predict_cb ETA and narrows 6->4->2->1 to the fastest COCOA
+                      (ganak, no live ETA, sorts last and is cut); the single
+                      leader then finishes in monitoring.
   C. resume credit  — a frozen frontrunner's progress does NOT advance while
                       suspended (SIGSTOP genuinely pauses work) and DOES advance
                       when resumed (its round-1 work is credited, not redone).
@@ -37,7 +38,7 @@ def scenario_A() -> bool:
         _mock("cocoa-fast", "cocoa", 0.01, 80, 4242),     # finishes quickly
         _mock("ganak-x", "ganak", 0.001, "none", 0),
     ]
-    r = run_race("dummy.cnf", budget_s=30, round1_s=3, round2_s=2,
+    r = run_race("dummy.cnf", budget_s=30, round1_s=3,
                  archetypes=archs, progress_interval=0.25)
     ok = (r["status"] == "solved" and r["winner"] == "cocoa-fast"
           and str(r["count"]) == "4242" and r["round"] == "round1")
@@ -56,7 +57,7 @@ def scenario_B() -> bool:
         _mock("cocoa-C", "cocoa", 0.001, "none", 222),
         _mock("ganak-Z", "ganak", 0.003, "none", 333),
     ]
-    r = run_race("dummy.cnf", budget_s=60, round1_s=1.5, round2_s=1.5,
+    r = run_race("dummy.cnf", budget_s=60, round1_s=1.5,
                  archetypes=archs, progress_interval=0.25)
     ok = (r["status"] == "solved" and r["winner"] == "cocoa-B"
           and str(r["count"]) == "777" and r["round"] == "monitor")
@@ -87,45 +88,8 @@ def scenario_C() -> bool:
     return ok
 
 
-def scenario_D() -> bool:
-    print("\n--- Scenario D: select_frontrunners (top-2 by closed_bits level + #3 accelerator) ---")
-    from types import SimpleNamespace
-    from race.comparator import select_frontrunners
-
-    class FP:  # fake proc with controlled level/velocity
-        def __init__(s, name, eng, lvl, vel):
-            s.arch = SimpleNamespace(name=name, engine=eng); s._l = lvl; s._v = vel
-        def closed_bits(s): return s._l
-        def closed_bits_velocity(s): return s._v
-
-    # 5 COCOA: top-2 by level = plain(100), adaptive(90); #3 accelerator by velocity
-    # among the rest = nosep-cascade(0.42).
-    p = [FP("plain", "cocoa", 100, 0.03), FP("reactive", "cocoa", 60, 0.0),
-         FP("adaptive", "cocoa", 90, 0.02), FP("adaptive-nosep", "cocoa", 50, 0.01),
-         FP("nosep-cascade", "cocoa", 55, 0.42)]
-    got = sorted(x.arch.name for x in select_frontrunners(p))
-    ok1 = got == sorted(["plain", "adaptive", "nosep-cascade"])
-    print(f"  COCOA-only -> {got}  (expect plain,adaptive [level] + nosep-cascade [vel])  PASS={ok1}")
-
-    # <=3 candidates -> return all of them (nothing to narrow)
-    p2 = [FP("plain", "cocoa", 100, 0.9), FP("adaptive", "cocoa", 90, 0.02), FP("reactive", "cocoa", 60, 0.0)]
-    got2 = sorted(x.arch.name for x in select_frontrunners(p2))
-    ok2 = got2 == sorted(["plain", "adaptive", "reactive"])
-    print(f"  <=3 keep all -> {got2}  PASS={ok2}")
-
-    # cross-engine: COCOA + Ganak -> best COCOA (by level) + the Ganak hedge
-    p3 = [FP("plain", "cocoa", 100, 0.03), FP("adaptive", "cocoa", 80, 0.5), FP("ganak-native", "ganak", 0, 0)]
-    got3 = sorted(x.arch.name for x in select_frontrunners(p3))
-    ok3 = got3 == sorted(["plain", "ganak-native"])
-    print(f"  cross-eng  -> {got3}  (best COCOA plain + ganak)  PASS={ok3}")
-
-    ok = ok1 and ok2 and ok3
-    print(f"  PASS={ok}")
-    return ok
-
-
 def main() -> int:
-    results = [scenario_A(), scenario_B(), scenario_C(), scenario_D()]
+    results = [scenario_A(), scenario_B(), scenario_C()]
     n_ok = sum(results)
     print(f"\n===== dry-run: {n_ok}/{len(results)} scenarios PASS =====")
     return 0 if n_ok == len(results) else 1

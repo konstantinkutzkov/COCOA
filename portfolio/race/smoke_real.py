@@ -102,7 +102,7 @@ def t2_suspend() -> bool:
 def t3_short_circuit() -> bool:
     print("\n--- T3: scheduler short-circuit on a real fast finisher (t1_071) ---")
     # cocoa-plain (first archetype) finishes t1_071 in <1s -> short-circuit.
-    r = run_race(_cnf("071"), budget_s=120, round1_s=20, round2_s=15,
+    r = run_race(_cnf("071"), budget_s=120, round1_s=20,
                  progress_interval=5.0)
     ok = (r.get("status") == "solved" and r.get("winner") == "cocoa-plain"
           and str(r.get("count")) == EXPECT["071"] and r.get("round") == "round1")

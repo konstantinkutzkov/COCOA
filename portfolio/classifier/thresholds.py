@@ -32,6 +32,23 @@ CLASSIFIER_VERSION = "thresholds-v2-phase2gate"
 SEP_RATIO_MAX = 0.20
 BALANCE_MIN   = 0.30
 
+# nd_cost BANDS (NOT a binary COCOA/Ganak gate). The whole-ND-tree branching
+# cost nd_log2_cost (= L(root), bits) classifies an instance to inform STEP 2:
+# which COCOA archetypes to race, how many, and how long before handing to Ganak.
+#
+# It must NOT make the COCOA-vs-Ganak decision on its own — validation
+# (2026-06-04, portfolio/nd_crosstab.py) showed a caching-blind bits-threshold
+# mis-routes: t1_011 scores 208 bits yet is an 8.8s precomputed-sep win because
+# caching collapses its deep-but-repetitive tree. Band -> strategy held only in
+# the LOW band (precomputed sep, 7/7); above it the cost is confounded by caching.
+#
+# PROVISIONAL band edges:
+#   low  (<= 40)   : precomputed METIS sep validated 7/7 -> prefer sep configs
+#   mid  (40..100) : ambiguous (sep/reactive/nosep all occur) -> race a diverse set
+#   high (>= 100)  : mostly hopeless, but a short sep probe can still win (t1_011)
+ND_BAND_LOW_MAX  = 40.0
+ND_BAND_HIGH_MIN = 100.0
+
 
 @dataclass
 class Decision:

@@ -147,6 +147,21 @@ class ManagedProc:
             w += time.monotonic() - self._t_resumed
         return w
 
+    def rss_mb(self) -> float:
+        """Resident memory (MB) of this process, 0 if not running. A SIGSTOP'd proc
+        still reports its RSS (memory stays resident) -- exactly what we want to sum
+        across the suspended king-of-the-hill set. `ps -o rss= -p` gives KB and is
+        portable (Linux + macOS); the solvers are monolithic so the single pid covers
+        it. Best-effort: 0 on any error."""
+        if self.proc is None or self.finished():
+            return 0.0
+        try:
+            out = subprocess.run(["ps", "-o", "rss=", "-p", str(self.proc.pid)],
+                                 capture_output=True, text=True, timeout=5)
+            return int(out.stdout.strip() or 0) / 1024.0
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return 0.0
+
     def latest(self) -> dict:
         with self._lock:
             return dict(self._sample)
@@ -195,6 +210,12 @@ class ManagedProc:
         non-degenerate where pct_lin flatlines to ~0 on deep-tail instances)."""
         with self._lock:
             return [(p[0], p[2]) for p in self._traj]
+
+    def traj_snapshot(self) -> list:
+        """Thread-safe copy of the full per-sample trajectory: [(active_s, pct_lin,
+        closed_bits)]. For one-shot persistence (data collection) without racing the reader."""
+        with self._lock:
+            return list(self._traj)
 
     def n_root_estimate(self) -> float:
         """Target closed_bits where pct_lin=100%, for predict_cb. The solver doesn't emit

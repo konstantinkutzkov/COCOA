@@ -69,10 +69,10 @@ def ganak_ref(cnf: str, timeout_s: float) -> str | None:
     return m.group(1) if m else None
 
 
-def sweep(insts, budget, round1, round2, ref_timeout, jsonl_path):
+def sweep(insts, budget, round1, ref_timeout, jsonl_path):
     rows = []
     jf = open(jsonl_path, "a")
-    _say(f"# sweep start {_now()} | budget={budget}s round1={round1} round2={round2} "
+    _say(f"# sweep start {_now()} | budget={budget}s round1={round1} "
          f"| jsonl={jsonl_path}")
     for n in insts:
         cnf = os.path.join(CNF_DIR, f"mc2025_track1_{n}.cnf")
@@ -82,7 +82,7 @@ def sweep(insts, budget, round1, round2, ref_timeout, jsonl_path):
         _say(f"\n########## t1_{n}  [{_now()}] ##########")
         t0 = time.monotonic()
         try:
-            r = run_pipeline(cnf, budget_s=budget, round1_s=round1, round2_s=round2,
+            r = run_pipeline(cnf, budget_s=budget, round1_s=round1,
                              progress_interval=5.0, log=_say)
         except Exception as e:  # noqa: BLE001 — one bad instance shouldn't kill the sweep
             _say(f"  PIPELINE ERROR: {type(e).__name__}: {e}")
@@ -127,11 +127,10 @@ def main(argv):
     ap.add_argument("insts", nargs="*", default=["065", "071", "011", "041", "159"])
     ap.add_argument("--budget", type=float, default=120.0)
     ap.add_argument("--round1", type=float, default=20.0)
-    ap.add_argument("--round2", type=float, default=15.0)
     ap.add_argument("--ref-timeout", type=float, default=90.0)
     ap.add_argument("--jsonl", default=os.path.join(_REPO, "sweep_log.jsonl"))
     a = ap.parse_args(argv)
-    rows = sweep(a.insts, a.budget, a.round1, a.round2, a.ref_timeout, a.jsonl)
+    rows = sweep(a.insts, a.budget, a.round1, a.ref_timeout, a.jsonl)
 
     _say("\n" + "=" * 78)
     _say(f"{'inst':<6}{'route':<22}{'winner':<22}{'status':<9}{'wall':<6}verdict")
