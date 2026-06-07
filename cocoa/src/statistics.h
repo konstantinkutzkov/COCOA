@@ -121,6 +121,13 @@ public:
 
 
   uint64_t overall_num_cache_stores_ = 0;
+
+  // LIVE cache memory, mirrored from ContentCache::cur_bytes_ (the counter the
+  // byte-bounded eviction actually enforces) just before printShort(). The legacy
+  // sum_bytes_cached_components_ above is no longer maintained and prints 0, so
+  // report these instead. cache_evictions_ mirrors ContentCache::stats_evictions.
+  uint64_t cache_live_bytes_ = 0;
+  unsigned long cache_evictions_ = 0;
   /*end statistics */
 
   bool cache_full(){

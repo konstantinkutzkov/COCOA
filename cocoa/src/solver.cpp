@@ -709,6 +709,10 @@ void Solver::solve(const string &file_name) {
 	statistics_.time_elapsed_ = stopwatch_.getElapsedSeconds();
 
 	comp_manager_.gatherStatistics();
+	// Mirror the LIVE cache counters (the ones byte-bounded eviction enforces) into
+	// statistics so printShort() reports real numbers, not the stale legacy fields.
+	statistics_.cache_live_bytes_ = comp_manager_.contentCache().cur_bytes_;
+	statistics_.cache_evictions_  = comp_manager_.contentCache().stats_evictions;
 	statistics_.writeToFile("data.out");
 	if (!config_.quiet)
 		statistics_.printShort();

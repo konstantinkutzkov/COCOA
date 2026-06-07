@@ -60,20 +60,12 @@ void DataAndStatistics::printShort() {
 
   cout << "implicit BCP miss rate \t " << implicitBCP_miss_rate() * 100 << "%";
   cout << endl;
-  cout << "bytes cache size     \t" << cache_bytes_memory_usage()  << "\t"
-      << endl;
-
-  cout << "bytes cache (overall) \t" << overall_cache_bytes_memory_stored()
-      << "" << endl;
-  cout << "bytes cache (infra / comps) "
-      << (cache_infrastructure_bytes_memory_usage_) << "/"
-      << sum_bytes_cached_components_  << "\t" << endl;
-
-  cout << "bytes pure comp data (curr)    " << sum_bytes_pure_cached_component_data_  << "" << endl;
-  cout << "bytes pure comp data (overall) " <<overall_bytes_pure_stored_component_data_ << "" << endl;
-
-  cout << "bytes cache with sysoverh (curr)    " << sys_overhead_sum_bytes_cached_components_  << "" << endl;
-  cout << "bytes cache with sysoverh (overall) " << sys_overhead_overall_bytes_components_stored_ << "" << endl;
+  // LIVE cache size — the counter byte-bounded eviction actually enforces
+  // (cur_bytes_), not the legacy sum_bytes_cached_components_ which is no longer
+  // maintained and printed 0. Reported in bytes + MB, with the eviction count.
+  cout << "bytes cache size (live)\t" << cache_live_bytes_ << "\t("
+      << (cache_live_bytes_ / (1024.0 * 1024.0)) << " MB), evictions "
+      << cache_evictions_ << endl;
 
 
   cout << "cache (stores / hits) \t\t\t" << num_cached_components_ << "/"
