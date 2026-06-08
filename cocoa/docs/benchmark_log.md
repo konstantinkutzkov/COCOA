@@ -2553,3 +2553,26 @@ estimator (flag-gated, emits no count, used only by `calibrate.py`; the race nev
 **Ganak handoff → SOLVED in 15.1s.** **COUNT = 124330809073498638182336606522714496740835436618714014267086565149873565679807050547200**, authoritative (ganak --prob 0 exact).
 
 **Verdict:** the forecaster did its job well on the case that actually tests it — it distinguished slow-progress (keep) from walled (bail), gave a fair chance, then bailed correctly (Ganak's 15s solve confirms). Routing note (not a forecaster issue): pct_lin≈1.6e-9 throughout + arjun_substantial=True → this was a Ganak instance from step 1; ~18 min elapsed before a 15s solve. Worth considering routing arjun_substantial=True to Ganak sooner.
+
+---
+
+# === MC2026 track1 (NEW set) ===
+New competition benchmark, 100 instances at `SharpSAT/MC2026_Public/mc2026_track1_public/` (verified ZERO content overlap with the mc2025 set). Logged as `mc2026_track1_NNN` to avoid colliding with mc2025's `t1_NNN` (same numbers, different instances).
+
+## mc2026_track1_001 — SOLVED by cocoa-plain (round-1 short-circuit); first mc2026 run
+
+**LOW band** (56v/270c, nd_cost log2=16.3, n_leaves=4, arjun_substantial=False) — trivial, an end-to-end smoke test of the mc2026 setup. **cocoa-plain** short-circuited in round 1 (0.2s). **COUNT = 48**, ganak-verified (`ganak --prob 0` → `c s exact arb int 48`). Confirms the new folder → decompress → 8-config pipeline → verify path works.
+
+## mc2026 trivial round-1 short-circuits (cocoa-plain, ganak-verified; ARIMA N/A — no funnel cut / monitoring)
+- `003`: count **8** (30v/58c, band low, 0.1s)
+- `005`: count **6** (228v, band low, 0.1s)
+
+## mc2026_track1_007 — SOLVED by COCOA (cocoa-nosep-cascade, monitoring finish); first non-trivial mc2026 + ARIMA funnel-cut limitation found
+
+**304v/8080c, band low but worst_leaf=32** (a 2^32 leaf → non-trivial, no short-circuit), arjun_substantial=False. **COUNT = 324611962730585548414761330000**, ganak-verified. First mc2026 instance to exercise the funnel + a **COCOA solve with NO handoff** (leader finished in monitoring at 341s).
+
+**Funnel:** round-1 cut (predict_cb) kept [plain, cache-max, sep-cascade, nosep-cascade] — all at cb≈293.5 (~1%), far ahead of adaptive (cb275, cut) and reactive/unified-sep (cb244 on 18–21M decisions, the worst, cut). Round-2 cut (ARIMA) → the two cascade configs; round-3 (ARIMA) → leader **nosep-cascade**. The **cascade configs led AND were ~4× more decision-efficient** (1.2M vs 4.5–4.8M decisions for the same cb) — the new sep/nosep-cascade earning their slots on a BCP-cascade-friendly leaf. Leader climbed pct 1%→4%→12%→37%→done.
+
+**CRITICAL — ARIMA funnel-cut limitation (reconstructed per-config ETAs at the 4→2 cut):** plain/cache-max had WALLED in round 2 (rate ~0.000 b/s) yet ARIMA gave them **finite optimistic ETAs ~46–48s, not inf** — because (a) `mu` is the round-1-burst-dominated mean, and (b) at active=120s the 90s stuck-floor window still spans the burst, so it can't flag the round-2 stall. All four ETAs clustered 42–48s ≈ rank-by-remaining-bits; the cut kept the cascade configs only because they were *further along* (rem 4.1 vs 6.4), NOT because ARIMA detected the wall, and the ETA was ~5× too optimistic (predicted 42s; actual ~221s to finish). So **the round-2 funnel cut is NOT wall-aware** (too little post-burst data) — it degrades to "closest-to-done." ARIMA in **monitoring** (clean post-burst window) was sound: it tracked the climbing leader (short eta, over=F, no spurious bail) to the finish.
+
+**RESOLUTION (follow-up commit):** investigated by simulation + a backtest on real traces. The "weight the recent rate" idea was **REJECTED** — t1_045 (recovers from 3-min walls) shows a short trailing window false-bails a config mid-recovery (it's too twitchy). The actual fix: **removed the myopic 90s stuck-floor** from `predict_cb_arima`, so the ETA is now pure full-data ARIMA — it grows *smoothly* as a wall lengthens (`mu` dilutes with each flat sample, no 143s→inf cliff) and bails only via the scheduler's consecutive-over-budget streak. Backtest: t1_017 bails @870s, t1_019 @1080s (later than the old floor's 321/431s, but Ganak still gets >2/3 of the budget), and t1_045 is **no longer false-bailed**. The round-2 cut's rank-by-closest-to-done is left as-is (acceptable; the wall-aware bail correctly lives in monitoring).
