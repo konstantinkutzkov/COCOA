@@ -328,6 +328,126 @@ def predict_cb_recency(traj, n_root, t_active, t_remaining, margin=MARGIN,
     return out
 
 
+# ===========================================================================
+# Escape-history decision-tree handoff forecaster (predict_cb_tree).
+#
+# Per-recheck KEEP/BAIL decision for the Ganak handoff (NOT a ranker). Replaces
+# the recency-rate "eta > budget" test, which had two failures no single rate
+# could avoid together: false-bailing a config that recovers from multi-minute
+# plateaus (t1_045), and a single early jump pinning eta near 0 so a walled config
+# never bailed (017 / the "hostage" cases). The discriminator is the PLATEAU-ESCAPE
+# HISTORY -- not "made a big jump": t1_045 escaped plateaus of ~1.2/0.3/3min
+# repeatedly; 017 made one cliff jump then never escaped a plateau -> bail. Uses
+# closed_bits ONLY (a `decisions` signal misleads: 017 had decisions growing yet
+# was doomed). The scheduler fires the real handoff only after R3_CONSECUTIVE
+# 'bail' verdicts in a row AND >= R3_MIN_ACTIVE_S active (debounce unchanged).
+#
+# Designed via a 3-variant panel + adversarial verify against the 7-case keep/bail
+# harness (portfolio/_esc_harness.py): KEEP {007, t1_045}; BAIL {011, 017, t1_019,
+# t1_031, hostage} -- all 7 correct, plus edge cases (n_root=inf/None, <4 samples,
+# irregular dt, first-move-non-escape recoverer). Conservative GRACE=120 / K=3
+# favor recoverer-safety over raw bail speed; thresholds are tunable toward faster
+# bail WITHOUT touching the escape detector. RESIDUAL RISKS (benchmark_log): the
+# ETA budget-guard is the only non-pure-cb extrapolation (gated behind
+# beyond-envelope, never load-bearing on the 7 cases); STALL_RATE/PLAT_RATE share
+# one gate, so an ultra-slow-but-real grinder could read as a single plateau.
+# ===========================================================================
+def predict_cb_tree(traj, n_root, t_active, t_remaining):
+    """Escape-history Ganak-handoff forecaster (conservative variant). Returns
+    {'verdict': 'keep'|'bail', 'reason': str}. An *escape* is a cb jump (>= jump_thr)
+    immediately preceded by a real plateau (>= MIN_PLAT s of near-zero progress); a
+    lone opening jump (from 0 or a positive baseline) has no preceding plateau and is
+    NOT an escape. 0 escapes ever => never demonstrated it can break a plateau => bail
+    on the current stall. Else patience = K * max(escape_gap)."""
+    # ---- edge: insufficient data ----
+    if traj is None or len(traj) < 4:
+        return {'verdict': 'keep', 'reason': 'insufficient samples (<4)'}
+
+    t_end, cb_now = traj[-1][0], traj[-1][1]
+    finite_root = (n_root is not None) and math.isfinite(n_root)
+    remaining = (n_root - cb_now) if finite_root else float('inf')
+
+    # ---- complete: nothing left to close ----
+    if finite_root and remaining <= 0:
+        return {'verdict': 'keep', 'reason': 'remaining<=0 (count complete)'}
+
+    # ---- per-instance scale for a "meaningful jump" ----
+    cb_first = traj[0][1]
+    span = max(cb_now - cb_first, 1e-9)            # total progress achieved so far
+    JUMP_FRAC = 0.01                              # >= 1% of total progress, or ...
+    JUMP_ABS = 0.10                               # ... >= 0.10 bits absolute floor
+    jump_thr = max(JUMP_ABS, JUMP_FRAC * span)
+
+    # ---- recent_rate over a trailing window (conservative: long 180s window) ----
+    RECENT_WIN = 180.0
+    EPS = 2e-5                                     # bits/sec; below this == "not progressing"
+    j = len(traj) - 1
+    while j > 0 and (t_end - traj[j][0]) < RECENT_WIN:
+        j -= 1
+    win_dt = max(t_end - traj[j][0], 1e-9)
+    recent_rate = (cb_now - traj[j][1]) / win_dt
+    if recent_rate > EPS:
+        return {'verdict': 'keep', 'reason': f'progressing recent_rate={recent_rate:.6f}>eps'}
+
+    # ---- stall_dur: seconds since the last *meaningful* cb increase ----
+    avg_rate = span / max(t_end - traj[0][0], 1e-9)
+    STALL_RATE = max(5e-4, 0.02 * avg_rate)       # bits/sec gate for "real" progress
+    last_inc_t = traj[0][0]
+    for i in range(1, len(traj)):
+        dt = traj[i][0] - traj[i - 1][0]
+        dt = dt if dt > 0 else 10.0
+        if (traj[i][1] - traj[i - 1][1]) / dt >= STALL_RATE:
+            last_inc_t = traj[i][0]
+    stall_dur = t_end - last_inc_t
+
+    # ---- grace: short plateaus get a fair chance (conservative: generous) ----
+    GRACE = 120.0
+    if stall_dur < GRACE:
+        return {'verdict': 'keep', 'reason': f'short plateau stall={stall_dur:.0f}<grace'}
+
+    # ---- escapes: jumps PRECEDED BY A PLATEAU span (>= MIN_PLAT seconds) ----
+    MIN_PLAT = 20.0
+    PLAT_RATE = STALL_RATE                         # same "near-zero" gate
+    escape_gaps = []
+    plat_start = None
+    prev_t, prev_c = traj[0]
+    for i in range(1, len(traj)):
+        t, c = traj[i]
+        dt = t - prev_t if t > prev_t else 10.0
+        dc = c - prev_c
+        if dc >= jump_thr:                         # a jump
+            if plat_start is not None:
+                gap = prev_t - plat_start
+                if gap >= MIN_PLAT:                # only counts if a real plateau preceded it
+                    escape_gaps.append(gap)
+            plat_start = None
+        elif (dc / dt) < PLAT_RATE:                # plateau step
+            if plat_start is None:
+                plat_start = prev_t
+        else:                                      # small but real progress (not an escape)
+            plat_start = None
+        prev_t, prev_c = t, c
+
+    # ---- never escaped a plateau -> doomed (017 cliff-from-0 / hostage cliff-from-baseline) ----
+    if not escape_gaps:
+        return {'verdict': 'bail', 'reason': 'no escapes ever (never escaped a plateau)'}
+
+    # ---- within demonstrated escape envelope -> fair chance (conservative K=3) ----
+    K = 3.0
+    max_gap = max(escape_gaps)
+    if stall_dur < K * max_gap:
+        return {'verdict': 'keep', 'reason': f'within escape envelope stall={stall_dur:.0f}<{K}*{max_gap:.0f}'}
+
+    # ---- stalled beyond the escape envelope -> bail. Budget guard is only a terminal
+    #      backstop (envelope already exceeded); it never overrides a within-envelope keep. ----
+    if not finite_root:
+        return {'verdict': 'bail', 'reason': 'stalled beyond envelope & n_root not finite'}
+    eta = (remaining / avg_rate) if avg_rate > 0 else float('inf')
+    if eta > t_remaining:
+        return {'verdict': 'bail', 'reason': f'beyond envelope & eta={eta:.0f}>t_rem'}
+    return {'verdict': 'bail', 'reason': f'stalled {stall_dur:.0f}s beyond escape envelope'}
+
+
 # --- quick smoke self-test (python race/forecast.py); full suite in tests/ ---
 def _linear(ts, rate, p0=0.0):
     return [(t, p0 + rate * t) for t in ts]

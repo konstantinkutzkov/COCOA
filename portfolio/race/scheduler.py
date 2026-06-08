@@ -8,10 +8,10 @@ Sequential, resume-based, under a total wall budget (default 3600 s):
            killing the rest. Three rounds = the COCOA-ONLY evaluation; predict_cb
            is RANKING-only here (no Ganak handoff during scouting).
   MONITOR  SIGCONT the single leader and run it to completion within the remaining
-           budget. The ONLY Ganak handoff: re-run predict_cb_recency every R3_RECHECK_EVERY
-           s and switch to Ganak after R3_CONSECUTIVE forecasts IN A ROW say
-           ETA > R3_OVERSHOOT x the remaining budget (any optimistic forecast resets
-           the streak — a between-jumps plateau gets a fair chance before dismissal).
+           budget. The ONLY Ganak handoff: re-run predict_cb_tree (escape-history
+           decision tree) every R3_RECHECK_EVERY s and switch to Ganak after
+           R3_CONSECUTIVE 'bail' verdicts IN A ROW (any 'keep' resets the streak — a
+           plateau within the config's demonstrated escape envelope keeps its chance).
 
 At ANY point, if a config FINISHES (emits a count) the race short-circuits: that
 count is the answer, everything else is killed. Because SIGSTOP credits a frozen
@@ -30,20 +30,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from race.archetypes import default_set                 # noqa: E402
 from race.procctl import ManagedProc                     # noqa: E402
 from race.forecast import predict_cb as forecast_cb        # noqa: E402  (round-1 funnel cut)
-from race.forecast import predict_cb_recency, RWR_MIN_SPAN_S   # noqa: E402  (round-2+ cut & handoff)
+from race.forecast import predict_cb_recency, predict_cb_tree, RWR_MIN_SPAN_S   # noqa: E402  (cut ranks by recency; handoff decided by the escape-history tree)
 
 # run_window outcomes
 FINISHED, PAUSED, BUDGET, DIED, HANDOFF = "finished", "paused", "budget", "died", "handoff"
 
 # Round-3 MONITORING re-check (the ONLY Ganak handoff). After the single leader is
-# selected, re-run predict_cb_recency (eta = remaining / power-law recency-weighted
-# rate on closed_bits) every R3_RECHECK_EVERY s and hand to Ganak only after
-# R3_CONSECUTIVE forecasts IN A ROW say ETA > R3_OVERSHOOT x the remaining budget (any
-# optimistic forecast resets the streak). The streak (10 x 10s) is the SOLE debounce:
-# as a wall lengthens the recency-weighted rate collapses, so ETA grows past the budget
-# and the streak fills -- while a config creeping to a finish (t1_045) keeps a low ETA
-# and is NOT false-bailed. NO handoff during scouting. The forecast is microseconds.
-R3_OVERSHOOT = 1.25
+# selected, re-run predict_cb_tree (escape-history decision tree on closed_bits) every
+# R3_RECHECK_EVERY s and hand to Ganak only after R3_CONSECUTIVE 'bail' verdicts IN A
+# ROW (any 'keep' resets the streak). The streak (10 x 10s) is the SOLE debounce. The
+# tree bails a config that has never escaped a plateau (a lone early jump then a wall --
+# 017 / hostage) or stalled beyond k x its longest demonstrated escape, but keeps one
+# still within its escape envelope (t1_045 recovers from ~3-min plateaus). NO handoff
+# during scouting. (The old R3_OVERSHOOT ETA-margin is gone -- the tree decides keep/bail.)
 R3_CONSECUTIVE = 10
 R3_RECHECK_EVERY = 10.0
 # A frontrunner gets a guaranteed minimum of this much ACTIVE running before it can be
@@ -320,37 +319,35 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
         recheck = None
         _handoff_on = fallback_archetype is not None and leader.arch.engine == "cocoa"
         if _handoff_on or trace_path:
-            # MONITORING handoff forecaster = predict_cb_recency (eta = remaining /
-            # power-law recency-weighted rate on closed_bits; eta=inf only if the rate <= 0).
-            # eta>R3_OVERSHOOT*budget (or inf) counts as `over`. HANDOFF (only when a fallback
-            # is set): hand to Ganak after R3_CONSECUTIVE over-forecasts IN A ROW -- the SOLE
-            # debounce. As a wall lengthens the recency rate collapses, so ETA grows past the
-            # budget and the streak fills (sweep-validated: 011/t1_017/t1_019 bail in ~400-620s,
-            # t1_031 ~1150s, while t1_045 stays at <0.05 of the handoff line throughout). When
-            # trace_path is set we ALSO append the live
-            # forecast every recheck -- pure data collection, no behaviour change.
+            # MONITORING handoff forecaster = predict_cb_tree (escape-history decision
+            # tree on closed_bits; returns verdict in {'keep','bail'}). verdict=='bail'
+            # counts as `over`. HANDOFF (only when a fallback is set): hand to Ganak after
+            # R3_CONSECUTIVE 'bail' verdicts IN A ROW -- the SOLE debounce. The tree bails a
+            # config that has NEVER escaped a plateau (017 cliff / hostage) and one stalled
+            # beyond k x its longest demonstrated escape, but KEEPS a config still within its
+            # escape envelope (t1_045 recovers from ~3-min plateaus). Validated keep/bail on
+            # 7 traces (KEEP {007,t1_045}; BAIL {011,017,t1_019,t1_031,hostage}). The funnel
+            # CUT still ranks by predict_cb_recency; only the handoff uses the tree. When
+            # trace_path is set we ALSO append the live forecast every recheck.
             _streak = [0]
             def recheck(p, t_rem):
-                fc = predict_cb_recency(p.closed_bits_traj(), p.n_root_estimate(),
-                                        p.active_wall(), t_rem)
-                eta = fc["eta_s"]
-                over = (eta is not None) and (eta > R3_OVERSHOOT * t_rem)  # inf counts as over
+                nroot = p.n_root_estimate()
+                fc = predict_cb_tree(p.closed_bits_traj(), nroot, p.active_wall(), t_rem)
+                over = (fc.get("verdict") == "bail")
                 _streak[0] = _streak[0] + 1 if over else 0
                 if trace_path:
                     s = p.latest()
+                    cb = _f(s.get("closed_bits"))
                     _trace_append(trace_path, {
                         "phase": "monitor", "config": p.arch.name,
                         "wall_s": round(budget_s - (deadline - time.monotonic()), 1),
                         "active_s": round(p.active_wall(), 1),
-                        "closed_bits": _f(s.get("closed_bits")),
+                        "closed_bits": cb,
                         "pct_lin": _f(s.get("pct_lin")),
                         "decisions": _f(s.get("decisions")),
-                        "n_root": fc.get("n_root"),
-                        "remaining_bits": fc.get("remaining_bits"),
-                        "rate_bits_per_s": fc.get("rate_bits_per_s"),
-                        "tau": fc.get("tau"), "power": fc.get("power"),
-                        "stuck": fc.get("stuck"),
-                        "eta_s": (eta if (eta is not None and eta != float("inf")) else None),
+                        "n_root": (nroot if nroot != float("inf") else None),
+                        "remaining_bits": ((nroot - cb) if (cb is not None and nroot != float("inf")) else None),
+                        "verdict": fc.get("verdict"), "reason": fc.get("reason"),
                         "t_rem_s": round(t_rem, 1),
                         "over": bool(over), "streak": _streak[0],
                     })
@@ -373,8 +370,8 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
         if out == HANDOFF:
             return _handoff_to_ganak(fallback_archetype, cnf, progress_interval,
                                      deadline, started, log,
-                                     f"monitor: {R3_CONSECUTIVE} consecutive forecasts of "
-                                     f"ETA > {R3_OVERSHOOT}x remaining (leader walled)")
+                                     f"monitor: {R3_CONSECUTIVE} consecutive 'bail' verdicts "
+                                     f"from the escape-history tree (leader walled)")
 
     log(f"[done] DECISION = {leader.arch.name} (best progress); ran it to the budget "
         f"but it did NOT finish — {_fmt(leader.latest())}. Needs more budget.")
