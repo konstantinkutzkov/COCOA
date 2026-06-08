@@ -30,17 +30,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from race.archetypes import default_set                 # noqa: E402
 from race.procctl import ManagedProc                     # noqa: E402
 from race.forecast import predict_cb as forecast_cb        # noqa: E402  (round-1 funnel cut)
-from race.forecast import predict_cb_arima, ARIMA_STUCK_WINDOW_S   # noqa: E402  (round-2+ cut & handoff)
+from race.forecast import predict_cb_arima, ARIMA_MIN_SPAN_S   # noqa: E402  (round-2+ cut & handoff)
 
 # run_window outcomes
 FINISHED, PAUSED, BUDGET, DIED, HANDOFF = "finished", "paused", "budget", "died", "handoff"
 
 # Round-3 MONITORING re-check (the ONLY Ganak handoff). After the single leader is
-# selected, re-run predict_cb_arima (ARIMA(1,1,0)+drift on closed_bits; inf = stuck-floor
-# fired) every R3_RECHECK_EVERY s and hand to Ganak only after R3_CONSECUTIVE forecasts IN
-# A ROW say ETA > R3_OVERSHOOT x the remaining budget (any optimistic forecast resets the
-# streak). NO handoff during scouting -- COCOA gets its full evaluation, then a debounced
-# fair chance, before dismissal. The forecast is microseconds, so re-forecasting at 10s is free.
+# selected, re-run predict_cb_arima (ARIMA(1,1,0)+drift on closed_bits, fit on ALL
+# samples -- no window) every R3_RECHECK_EVERY s and hand to Ganak only after
+# R3_CONSECUTIVE forecasts IN A ROW say ETA > R3_OVERSHOOT x the remaining budget (any
+# optimistic forecast resets the streak). The 90s == this streak (10 x 10s) is the SOLE
+# debounce: as a wall lengthens the drift mu dilutes, so ETA grows smoothly past the
+# budget and the streak fills -- no myopic stuck-window that would false-bail a config
+# mid-recovery (t1_045). NO handoff during scouting. The forecast is microseconds.
 R3_OVERSHOOT = 1.25
 R3_CONSECUTIVE = 10
 R3_RECHECK_EVERY = 10.0
@@ -194,10 +196,10 @@ def _handoff_to_ganak(fallback, cnf, pi, deadline, started, log, reason) -> dict
 
 def _select_by_eta(survivors, keep_n, deadline, log) -> list:
     """Rank survivors by ETA (lower = closer to finishing); keep the best keep_n.
-    Forecaster is chosen by data span: once a config has >= ARIMA_STUCK_WINDOW_S (90s) of
+    Forecaster is chosen by data span: once a config has >= ARIMA_MIN_SPAN_S (90s) of
     trajectory it uses predict_cb_arima -- so the round-2 cut (survivors have ~120s / 12
     samples) and the round-3 cut (~180s) rank by ARIMA, while the round-1 cut (only 60s,
-    below ARIMA's floor) falls back to predict_cb. All survivors at a given cut have the
+    below the span gate) falls back to predict_cb. All survivors at a given cut have the
     same span, so one forecaster is used per cut. Infinite ETAs (stuck / deep-tail) sort
     last, tie-broken by closed_bits LEVEL. RANKING ONLY -- no Ganak handoff here. Non-COCOA
     procs (a Ganak racer, cross-engine tests only) have no live ETA and sort last."""
@@ -208,7 +210,7 @@ def _select_by_eta(survivors, keep_n, deadline, log) -> list:
         if p.arch.engine == "cocoa":
             traj = p.closed_bits_traj()
             span = (traj[-1][0] - traj[0][0]) if len(traj) >= 2 else 0.0
-            if span >= ARIMA_STUCK_WINDOW_S:
+            if span >= ARIMA_MIN_SPAN_S:
                 fc = predict_cb_arima(traj, p.n_root_estimate(), p.active_wall(), t_rem)
                 used = "ARIMA"
             else:
@@ -318,13 +320,14 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
         _handoff_on = fallback_archetype is not None and leader.arch.engine == "cocoa"
         if _handoff_on or trace_path:
             # MONITORING handoff forecaster = predict_cb_arima (ARIMA(1,1,0)+drift on
-            # closed_bits, time-indexed in seconds; stuck-floor = inf when flat over the
-            # last 90s). eta=inf (stuck) counts as `over`. HANDOFF (only when a fallback is
-            # set): hand to Ganak after R3_CONSECUTIVE over-forecasts IN A ROW. NOTE: the
-            # ARIMA stuck-floor (90s) and the streak (R3_CONSECUTIVE x 10s) now BOTH debounce
-            # in series, so a pure stall bails in ~90s + streak; lower R3_CONSECUTIVE if we
-            # want the floor to be the sole debounce. When trace_path is set we ALSO append
-            # the live forecast every recheck -- pure data collection, no behaviour change.
+            # closed_bits, fit on ALL samples; eta=inf only if mu<=0 over the full history).
+            # eta>R3_OVERSHOOT*budget (or inf) counts as `over`. HANDOFF (only when a fallback
+            # is set): hand to Ganak after R3_CONSECUTIVE over-forecasts IN A ROW -- the SOLE
+            # debounce. As a wall lengthens mu dilutes, so ETA grows smoothly past the budget
+            # and the streak fills (validated: t1_017 bails ~870s, t1_019 ~1080s -- later than
+            # the old floor but Ganak still gets >2/3 of the budget, and a config mid-recovery
+            # like t1_045 is NOT false-bailed). When trace_path is set we ALSO append the live
+            # forecast every recheck -- pure data collection, no behaviour change.
             _streak = [0]
             def recheck(p, t_rem):
                 fc = predict_cb_arima(p.closed_bits_traj(), p.n_root_estimate(),

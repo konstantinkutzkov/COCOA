@@ -1,19 +1,20 @@
-"""Extensive synthetic tests for the ARIMA(1,1,0)+drift closed_bits forecaster.
+"""Synthetic tests for the ARIMA(1,1,0)+drift closed_bits forecaster.
 
-The point of synthetic data: we control the ground truth, so we can assert the model
-does the RIGHT thing on each regime -- steady progress, flat-from-start, the
-strong-start-then-stall that broke t1_031, short between-jumps plateaus, deep-tail
-levels, deceleration, noise, and irregular sampling. Everything is time-indexed in
-REAL SECONDS (no age-in-samples), so changing the sampling step must not change the
-verdicts -- a property we test directly (test_sampling_interval_invariance).
+The model fits on ALL collected samples (no forecast window): difference cb -> per-step
+rate, AR(1) around the sample-mean drift mu, integrate the reverting rate to n_root.
+The ONLY infinite ETA is mu <= 0 (no net drift over the FULL history). There is NO
+stuck-floor: a config that bursts then walls keeps a FINITE ETA that GROWS smoothly as
+the wall lengthens (mu dilutes with each flat sample) -- the bail is the scheduler's
+consecutive-over-budget streak, not a myopic window here. Everything is time-indexed in
+REAL SECONDS, so changing the sampling step must not change the verdicts
+(test_sampling_interval_invariance).
 """
 import math
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from race.forecast import (predict_cb_arima,                      # noqa: E402
-                           ARIMA_STUCK_WINDOW_S, ARIMA_STUCK_EPS_BITS)
+from race.forecast import predict_cb_arima                          # noqa: E402
 
 STEP = 10.0          # nominal sampling interval (seconds) -- matches the live recheck
 TR = 3000.0          # remaining budget (generous, so the engine call is about ETA only)
@@ -35,7 +36,8 @@ def test_steady_linear_accurate():
     assert d["engine"] == "cocoa"
 
 
-# 2. Flat from the start -> infinite ETA (stuck), ganak.
+# 2. Flat from the START -> mu = 0 over the whole history -> infinite ETA (stuck), ganak.
+#    This is the ONLY infinity now (no floor): genuinely zero net drift.
 def test_flat_from_start_is_inf():
     s = series(lambda i: 100.0, 15)              # constant
     d = predict_cb_arima(s, n_root=200.0, t_active=140, t_remaining=TR)
@@ -43,27 +45,55 @@ def test_flat_from_start_is_inf():
     assert d["engine"] == "ganak"
 
 
-# 3. THE t1_031 case: strong start then a multi-minute plateau -> MUST bail.
-def test_strong_start_then_plateau_bails():
+# 3. THE t1_031 case under the NO-FLOOR model: a strong start then a multi-minute wall
+#    is NOT declared stuck -- it keeps a FINITE ETA (mu is still positive over the full
+#    history). The bail does not come from this function; it comes from the ETA growing
+#    past the budget over the scheduler's streak. So: finite & cocoa under a generous
+#    budget, but ganak once the same ETA is measured against a tight budget.
+def test_strong_start_then_plateau_is_finite_not_floored():
     climb = [(i * 10.0, 10.0 * i) for i in range(31)]                    # cb 0..300 over 300s
-    plateau = [(300.0 + j * 10.0, 300.0) for j in range(1, 13)]          # flat 120s (>90s)
-    d = predict_cb_arima(climb + plateau, n_root=331.0, t_active=420, t_remaining=TR)
-    assert d["stuck"] and d["eta_s"] == math.inf and d["engine"] == "ganak"
-    assert "stuck-floor" in d["reason"]
+    plateau = [(300.0 + j * 10.0, 300.0) for j in range(1, 13)]          # flat 120s
+    traj = climb + plateau
+    d = predict_cb_arima(traj, n_root=331.0, t_active=420, t_remaining=TR)
+    assert math.isfinite(d["eta_s"]) and not d["stuck"]                  # NO floor inf
+    # the same finite ETA, against a budget it overshoots, hands off:
+    d_tight = predict_cb_arima(traj, n_root=331.0, t_active=420, t_remaining=d["eta_s"] / 2.0)
+    assert d_tight["engine"] == "ganak"
 
 
-# 4. A short between-jumps plateau (< window) keeps its fair chance -> NOT stuck.
-def test_short_plateau_gets_fair_chance():
-    climb = [(i * 10.0, 10.0 * i) for i in range(31)]                    # to cb=300 at t=300
-    plateau = [(300.0 + j * 10.0, 300.0) for j in range(1, 6)]           # flat only 50s
-    d = predict_cb_arima(climb + plateau, n_root=400.0, t_active=350, t_remaining=TR)
-    assert not d["stuck"] and math.isfinite(d["eta_s"])
+# 4. SMOOTH, NO DISCONTINUITY (the property the floor violated): as a wall lengthens
+#    sample by sample, the ETA increases MONOTONICALLY and stays finite -- never the
+#    143s -> inf cliff the 90s floor produced.
+def test_wall_eta_grows_smoothly_no_cliff():
+    climb = [(i * 10.0, 2.0 * i) for i in range(31)]                     # cb 0..60 over 300s
+    etas = []
+    for j in range(1, 25):                                              # extend the wall 10..240s
+        wall = [(300.0 + k * 10.0, 60.0) for k in range(1, j + 1)]
+        d = predict_cb_arima(climb + wall, n_root=100.0,
+                             t_active=300 + 10 * j, t_remaining=TR)
+        etas.append(d["eta_s"])
+        assert math.isfinite(d["eta_s"])                                # never jumps to inf
+    # strictly increasing (mu dilutes as flat samples accumulate)
+    assert all(b > a for a, b in zip(etas, etas[1:]))
 
 
-# 5. Level matters (the user's point): a slow crawl close to done vs far from done ->
-#    ETA proportional to `remaining`, so they differ by the remaining ratio.
+# 5. THE t1_045 PROPERTY: a long plateau (>> the old 90s window) followed by a RECOVERY
+#    jump must NOT be falsely declared stuck during the plateau -- the full-history mu
+#    keeps the ETA finite, so the config is never myopically bailed before it recovers.
+def test_long_plateau_then_recovery_no_false_bail():
+    climb = [(i * 10.0, 2.0 * i) for i in range(11)]                    # cb 0..20 over 100s
+    plateau = [(100.0 + j * 10.0, 20.0) for j in range(1, 16)]          # flat 150s (>90s)
+    d_mid = predict_cb_arima(climb + plateau, n_root=40.0, t_active=250, t_remaining=TR)
+    assert math.isfinite(d_mid["eta_s"]) and not d_mid["stuck"]         # NOT falsely stuck
+    recover = [(250.0 + j * 10.0, 20.0 + 2.0 * j) for j in range(1, 6)]  # jumps again
+    d_rec = predict_cb_arima(climb + plateau + recover, n_root=40.0, t_active=300, t_remaining=TR)
+    assert math.isfinite(d_rec["eta_s"]) and not d_rec["stuck"]
+
+
+# 6. Level matters: a slow crawl close to done vs far from done -> ETA proportional to
+#    `remaining`, so they differ by the remaining ratio.
 def test_level_dependence():
-    s = series(lambda i: 50.0 + 0.1 * i, 20)     # crawl 0.1 b/step (above the floor)
+    s = series(lambda i: 50.0 + 0.1 * i, 20)     # crawl 0.1 b/step
     cb = s[-1][1]
     d_near = predict_cb_arima(s, n_root=cb + 3.3, t_active=190, t_remaining=TR)
     d_far = predict_cb_arima(s, n_root=cb + 10.0, t_active=190, t_remaining=TR)
@@ -72,7 +102,7 @@ def test_level_dependence():
     assert abs(ratio - (10.0 / 3.3)) < 0.4       # ~3x, drastically different
 
 
-# 6. Faster overall progress -> shorter ETA.
+# 7. Faster overall progress -> shorter ETA.
 def test_faster_rate_shorter_eta():
     slow = series(lambda i: 1.0 * i, 20)
     fast = series(lambda i: 4.0 * i, 20)
@@ -81,7 +111,7 @@ def test_faster_rate_shorter_eta():
     assert df["eta_s"] < ds["eta_s"]
 
 
-# 7. More remaining bits at the same rate -> longer ETA.
+# 8. More remaining bits at the same rate -> longer ETA.
 def test_more_remaining_longer_eta():
     s = series(lambda i: 2.0 * i, 20)
     near = predict_cb_arima(s, n_root=s[-1][1] + 10, t_active=190, t_remaining=TR)
@@ -89,7 +119,7 @@ def test_more_remaining_longer_eta():
     assert far["eta_s"] > near["eta_s"]
 
 
-# 8. Infinity invariant: eta == inf IFF stuck.
+# 9. Infinity invariant: eta == inf IFF mu <= 0 (stuck). Steady -> finite; flat -> inf.
 def test_infinity_invariant():
     steady = predict_cb_arima(series(lambda i: 2.0 * i, 20),
                               n_root=60.0, t_active=190, t_remaining=TR)
@@ -99,21 +129,21 @@ def test_infinity_invariant():
     assert flat["eta_s"] == math.inf and flat["stuck"]
 
 
-# 9. Already past n_root -> eta 0, cocoa.
+# 10. Already past n_root -> eta 0, cocoa.
 def test_already_done():
     s = series(lambda i: 10.0 * i, 10)           # cb up to 90
     d = predict_cb_arima(s, n_root=50.0, t_active=90, t_remaining=TR)
     assert d["eta_s"] == 0.0 and d["engine"] == "cocoa"
 
 
-# 10. Too few samples -> ganak (no guessing).
+# 11. Too few samples -> ganak (no guessing).
 def test_few_samples_ganak():
     s = series(lambda i: 2.0 * i, 3)             # 2 warm samples after dropping cb=0
     d = predict_cb_arima(s, n_root=100.0, t_active=20, t_remaining=TR)
     assert d["engine"] == "ganak" and "insufficient" in d["reason"]
 
 
-# 11. Irregular timestamps (jitter) -> still finite and ~accurate (uses median step).
+# 12. Irregular timestamps (jitter) -> still finite and ~accurate (uses median step).
 def test_irregular_dt():
     s = [(i * 10.0 + (0.4 if i % 2 else -0.3), 2.0 * i) for i in range(20)]
     d = predict_cb_arima(s, n_root=s[-1][1] + 40, t_active=190, t_remaining=TR)
@@ -121,24 +151,13 @@ def test_irregular_dt():
     assert abs(d["eta_s"] - 200.0) < 40.0
 
 
-# 12. Measurement noise on a steady climb -> robust finite ETA.
+# 13. Measurement noise on a steady climb -> robust finite ETA.
 def test_noisy_steady_robust():
     jitter = [0.0, 0.3, 0.1, 0.4, 0.2]           # deterministic, keeps cb increasing
     s = series(lambda i: 2.0 * i + jitter[i % 5], 30)
     d = predict_cb_arima(s, n_root=s[-1][1] + 40, t_active=290, t_remaining=TR)
     assert math.isfinite(d["eta_s"])
     assert abs(d["eta_s"] - 200.0) < 60.0
-
-
-# 13. Stuck-floor boundary: just below eps over the window -> stuck; just above -> not.
-def test_stuck_floor_boundary():
-    base = [(i * 10.0, 10.0 * i) for i in range(20)]               # climb to 190 by t=190
-    tail_stuck = [(200.0 + j * 10.0, 190.0 + 0.04 * j) for j in range(1, 11)]   # +0.4/100s
-    d_stuck = predict_cb_arima(base + tail_stuck, n_root=400.0, t_active=300, t_remaining=TR)
-    assert d_stuck["stuck"] and d_stuck["eta_s"] == math.inf
-    tail_ok = [(200.0 + j * 10.0, 190.0 + 0.12 * j) for j in range(1, 11)]      # +1.2/100s
-    d_ok = predict_cb_arima(base + tail_ok, n_root=400.0, t_active=300, t_remaining=TR)
-    assert not d_ok["stuck"] and math.isfinite(d_ok["eta_s"])
 
 
 # 14. Handoff decision keys off ETA vs margin*remaining-budget.
@@ -150,20 +169,20 @@ def test_handoff_decision_boundary():
     assert loose["engine"] == "cocoa"            # eta 1000s <= 0.9*3000
 
 
-# 15. SAMPLING-INTERVAL INVARIANCE -- the property the old per-sample model lacked.
-#     The SAME wall-clock trajectory sampled at 10s vs 30s must give the SAME verdict.
+# 15. SAMPLING-INTERVAL INVARIANCE -- the SAME wall-clock trajectory sampled at 10s vs
+#     30s must give the SAME (finite) verdict. A burst-then-wall is finite under the
+#     no-floor model, and that finite ETA must be ~equal at both sampling rates.
 def test_sampling_interval_invariance():
-    # strong-start-then-stall, expressed as cb(t): climbs to 300 by t=300, flat after.
     def cb_of_t(t):
         return min(300.0, t)            # 1 bit/s climb to 300, then flat
 
     fine = [(t, cb_of_t(t)) for t in range(0, 481, 10)]    # 10s sampling
     coarse = [(t, cb_of_t(t)) for t in range(0, 481, 30)]  # 30s sampling
-    d_fine = predict_cb_arima(fine, n_root=331.0, t_active=480, t_remaining=TR)
-    d_coarse = predict_cb_arima(coarse, n_root=331.0, t_active=480, t_remaining=TR)
-    # both must declare the SAME thing (stuck), regardless of sampling rate
-    assert d_fine["stuck"] and d_coarse["stuck"]
-    assert d_fine["eta_s"] == d_coarse["eta_s"] == math.inf
+    d_fine = predict_cb_arima(fine, n_root=400.0, t_active=480, t_remaining=TR)
+    d_coarse = predict_cb_arima(coarse, n_root=400.0, t_active=480, t_remaining=TR)
+    assert math.isfinite(d_fine["eta_s"]) and math.isfinite(d_coarse["eta_s"])
+    # same wall-clock signal -> ETAs within ~20% regardless of sampling rate
+    assert abs(d_fine["eta_s"] - d_coarse["eta_s"]) < 0.2 * d_fine["eta_s"]
 
 
 # 16. A genuinely-progressing series at two sampling rates -> close finite ETAs.
@@ -182,17 +201,18 @@ def test_invariance_progressing():
     assert abs(d_coarse["eta_s"] - 100.0) < 15.0
 
 
-# 17. Deceleration into a (not-yet-floored) plateau -> ETA longer than naive last-rate.
+# 17. Deceleration into a plateau -> ETA longer than the naive average-rate projection
+#     (the AR(1) transient lengthens it when the recent rate is below mu).
 def test_decelerating_lengthens_eta():
-    # rate steps down 3,3,3,...,1,1 (recent slower) but still > floor over the window
     cbs = [0.0]
     for i in range(1, 25):
-        cbs.append(cbs[-1] + (3.0 if i < 18 else 1.0))
+        cbs.append(cbs[-1] + (3.0 if i < 18 else 1.0))   # 3,3,...,1,1 (recent slower)
     s = [(i * 10.0, cbs[i]) for i in range(len(cbs))]
     d = predict_cb_arima(s, n_root=s[-1][1] + 30, t_active=240, t_remaining=TR)
     assert math.isfinite(d["eta_s"]) and not d["stuck"]
     # recent rate is 1 b/step (0.1 b/s); naive remaining/r_last = 30/1*10 = 300s.
-    # mu (avg) is higher, but the AR transient (r_last<mu) must keep eta clearly > 0.
+    naive = 30.0 / 1.0 * 10.0
+    assert d["eta_s"] < naive                            # avg mu (higher) shortens vs last-rate
     assert d["eta_s"] > 0.0
 
 

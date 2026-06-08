@@ -235,26 +235,30 @@ def predict_cb(traj, n_root: float, t_active: float, t_remaining: float,
 # ===========================================================================
 # ARIMA(1,1,0)+drift forecaster on closed_bits, time-indexed in REAL SECONDS.
 #
+# Fits on ALL collected samples -- the full growing series (30 points at 300s,
+# 31 at 310s, ...), re-fit every recheck. There is NO forecast window: the whole
+# history informs the drift, so a config's PAST RECOVERIES from long plateaus
+# (e.g. t1_045's multi-minute walls that then jump) are visible to the fit rather
+# than discarded by a short look-back -- the myopia we explicitly removed.
+#
 # Difference cb once -> per-step rate; AR(1) around the sample-mean drift mu;
-# forecast the rate reverting to mu and integrate to n_root. Honest stops:
-#   (1) STUCK-FLOOR (seconds/bits): < ARIMA_STUCK_EPS_BITS gained over the last
-#       ARIMA_STUCK_WINDOW_S seconds => eta = inf. The HARD guard against a
-#       strong-start-then-stall (the t1_031 failure): a stale high mu cannot
-#       resurrect a config that has genuinely flatlined. The window is the
-#       explicit 'fair chance' duration -- a jump within it resets it.
-#   (2) mu <= 0: no sustained drift => eta = inf.
+# forecast the rate reverting to mu and integrate to n_root. The ONLY infinite
+# ETA is mu <= 0: no net drift over the ENTIRE history => never reaches n_root.
 # Otherwise eta = (remaining - transient)/mu * step_seconds, where the AR(1)
 # transient (r_last - mu)*phi/(1-phi) LENGTHENS the ETA when the recent rate is
 # below mu (slowing into a plateau) and SHORTENS it when above (a recent burst).
-# The strong start is honored through `remaining` (level cb already reached) and
-# mu (average drift over the history) -- NOT by per-sample weighting, so it is
-# invariant to the sampling interval (the age-in-samples bug cannot occur here).
+# Invariant to the sampling interval (drift is per-second, not per-sample).
+#
+# The BAIL decision is NOT here. It lives in the scheduler, which hands to Ganak
+# only after R3_CONSECUTIVE (=10) consecutive rechecks ALL forecast over budget
+# -- the "last ~90s of predictions" debounce. This forecaster only reports ETA.
 # ===========================================================================
 ARIMA_MIN_SAMPLES    = 4       # need a few differences to fit AR(1)
-ARIMA_STUCK_WINDOW_S = 90.0    # 'fair chance' window: look back this many SECONDS
-ARIMA_STUCK_EPS_BITS = 0.5     # < this many cb gained over the window => STUCK
+ARIMA_MIN_SPAN_S     = 90.0    # scheduler gate: prefer ARIMA over predict_cb once a
+                               # config has >= this many SECONDS of trajectory. NOT a
+                               # forecast window -- ARIMA always fits ALL collected data.
 ARIMA_PHI_CLAMP      = 0.98    # stationarity clamp on the AR(1) coefficient
-ARIMA_MU_EPS         = 1e-6    # long-run rate (bits/step) at/below this => stuck
+ARIMA_MU_EPS         = 1e-6    # long-run drift (bits/step) at/below this => inf ETA
 
 
 def _median(xs):
@@ -283,11 +287,10 @@ def _ar1(rates):
     return max(-ARIMA_PHI_CLAMP, min(ARIMA_PHI_CLAMP, phi)), mu
 
 
-def predict_cb_arima(traj, n_root, t_active, t_remaining,
-                     stuck_window_s=ARIMA_STUCK_WINDOW_S, stuck_eps=ARIMA_STUCK_EPS_BITS,
-                     margin=MARGIN):
-    """ARIMA(1,1,0)+drift ETA on closed_bits. Same return shape as predict_cb (engine /
-    eta_s / reason / ...). eta_s is inf IFF stuck (floor fired or mu<=0)."""
+def predict_cb_arima(traj, n_root, t_active, t_remaining, margin=MARGIN):
+    """ARIMA(1,1,0)+drift ETA on closed_bits, fit on ALL samples (no forecast window).
+    Same return shape as predict_cb (engine / eta_s / reason / ...). eta_s is inf IFF
+    mu <= 0 (no net drift over the FULL history => never reaches n_root)."""
     out = {"engine": "ganak", "reason": "", "eta_s": None, "rate_bits_per_s": None,
            "phi": None, "mu_bits_per_s": None, "closed_bits": None, "n_root": n_root,
            "remaining_bits": None, "n_samples": 0, "stuck": False}
@@ -301,7 +304,7 @@ def predict_cb_arima(traj, n_root, t_active, t_remaining,
     if n < ARIMA_MIN_SAMPLES:
         out["reason"] = f"insufficient samples ({n} < {ARIMA_MIN_SAMPLES}) -> ganak"
         return out
-    t_now, cb_now = pts[-1]
+    cb_now = pts[-1][1]
     out["closed_bits"] = cb_now
     remaining = n_root - cb_now
     out["remaining_bits"] = remaining
@@ -309,18 +312,6 @@ def predict_cb_arima(traj, n_root, t_active, t_remaining,
         out.update(engine="cocoa", eta_s=0.0,
                    reason=f"cb {cb_now:.2f} >= n_root {n_root:.2f} (done)")
         return out
-
-    # (1) STUCK-FLOOR -- only once we actually have a full window of history
-    if t_now - pts[0][0] >= stuck_window_s:
-        cutoff = t_now - stuck_window_s
-        older = [cb for (t, cb) in pts if t <= cutoff]
-        cb_w0 = older[-1] if older else pts[0][1]
-        gained = cb_now - cb_w0
-        if gained < stuck_eps:
-            out.update(eta_s=math.inf, stuck=True,
-                       reason=f"stuck-floor: +{gained:.3f}b in last {stuck_window_s:.0f}s "
-                              f"< {stuck_eps}b -> inf -> ganak")
-            return out
 
     # difference -> per-step rate; step size in seconds
     steps = [pts[i + 1][0] - pts[i][0] for i in range(n - 1)]
@@ -335,10 +326,10 @@ def predict_cb_arima(traj, n_root, t_active, t_remaining,
     out["mu_bits_per_s"] = mu / step_s
     out["rate_bits_per_s"] = r_last / step_s
 
-    # (2) no sustained drift -> never reaches n_root
+    # the ONLY infinite ETA: no net drift over the FULL history -> never reaches n_root
     if mu <= ARIMA_MU_EPS:
         out.update(eta_s=math.inf, stuck=True,
-                   reason=f"AR drift mu={mu:.2e} b/step <= 0 -> inf -> ganak")
+                   reason=f"AR drift mu={mu:.2e} b/step <= 0 over full history -> inf -> ganak")
         return out
 
     # integrate the AR(1) rate forecast to n_root:
