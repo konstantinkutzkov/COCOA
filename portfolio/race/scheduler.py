@@ -8,7 +8,7 @@ Sequential, resume-based, under a total wall budget (default 3600 s):
            killing the rest. Three rounds = the COCOA-ONLY evaluation; predict_cb
            is RANKING-only here (no Ganak handoff during scouting).
   MONITOR  SIGCONT the single leader and run it to completion within the remaining
-           budget. The ONLY Ganak handoff: re-run predict_cb_arima every R3_RECHECK_EVERY
+           budget. The ONLY Ganak handoff: re-run predict_cb_recency every R3_RECHECK_EVERY
            s and switch to Ganak after R3_CONSECUTIVE forecasts IN A ROW say
            ETA > R3_OVERSHOOT x the remaining budget (any optimistic forecast resets
            the streak — a between-jumps plateau gets a fair chance before dismissal).
@@ -30,19 +30,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from race.archetypes import default_set                 # noqa: E402
 from race.procctl import ManagedProc                     # noqa: E402
 from race.forecast import predict_cb as forecast_cb        # noqa: E402  (round-1 funnel cut)
-from race.forecast import predict_cb_arima, ARIMA_MIN_SPAN_S   # noqa: E402  (round-2+ cut & handoff)
+from race.forecast import predict_cb_recency, RWR_MIN_SPAN_S   # noqa: E402  (round-2+ cut & handoff)
 
 # run_window outcomes
 FINISHED, PAUSED, BUDGET, DIED, HANDOFF = "finished", "paused", "budget", "died", "handoff"
 
 # Round-3 MONITORING re-check (the ONLY Ganak handoff). After the single leader is
-# selected, re-run predict_cb_arima (ARIMA(1,1,0)+drift on closed_bits, fit on ALL
-# samples -- no window) every R3_RECHECK_EVERY s and hand to Ganak only after
+# selected, re-run predict_cb_recency (eta = remaining / power-law recency-weighted
+# rate on closed_bits) every R3_RECHECK_EVERY s and hand to Ganak only after
 # R3_CONSECUTIVE forecasts IN A ROW say ETA > R3_OVERSHOOT x the remaining budget (any
-# optimistic forecast resets the streak). The 90s == this streak (10 x 10s) is the SOLE
-# debounce: as a wall lengthens the drift mu dilutes, so ETA grows smoothly past the
-# budget and the streak fills -- no myopic stuck-window that would false-bail a config
-# mid-recovery (t1_045). NO handoff during scouting. The forecast is microseconds.
+# optimistic forecast resets the streak). The streak (10 x 10s) is the SOLE debounce:
+# as a wall lengthens the recency-weighted rate collapses, so ETA grows past the budget
+# and the streak fills -- while a config creeping to a finish (t1_045) keeps a low ETA
+# and is NOT false-bailed. NO handoff during scouting. The forecast is microseconds.
 R3_OVERSHOOT = 1.25
 R3_CONSECUTIVE = 10
 R3_RECHECK_EVERY = 10.0
@@ -196,10 +196,11 @@ def _handoff_to_ganak(fallback, cnf, pi, deadline, started, log, reason) -> dict
 
 def _select_by_eta(survivors, keep_n, deadline, log) -> list:
     """Rank survivors by ETA (lower = closer to finishing); keep the best keep_n.
-    Forecaster is chosen by data span: once a config has >= ARIMA_MIN_SPAN_S (90s) of
-    trajectory it uses predict_cb_arima -- so the round-2 cut (survivors have ~120s / 12
-    samples) and the round-3 cut (~180s) rank by ARIMA, while the round-1 cut (only 60s,
-    below the span gate) falls back to predict_cb. All survivors at a given cut have the
+    Forecaster is chosen by data span: once a config has >= RWR_MIN_SPAN_S (90s) of
+    trajectory it uses predict_cb_recency -- so the round-2 cut (survivors have ~120s / 12
+    samples) and the round-3 cut (~180s) rank by recency-weighted rate, while the round-1
+    cut (only 60s, below the span gate) falls back to predict_cb. All survivors at a cut
+    share the same span, so one forecaster is used per cut. Infinite ETAs (stuck) sort
     same span, so one forecaster is used per cut. Infinite ETAs (stuck / deep-tail) sort
     last, tie-broken by closed_bits LEVEL. RANKING ONLY -- no Ganak handoff here. Non-COCOA
     procs (a Ganak racer, cross-engine tests only) have no live ETA and sort last."""
@@ -210,9 +211,9 @@ def _select_by_eta(survivors, keep_n, deadline, log) -> list:
         if p.arch.engine == "cocoa":
             traj = p.closed_bits_traj()
             span = (traj[-1][0] - traj[0][0]) if len(traj) >= 2 else 0.0
-            if span >= ARIMA_MIN_SPAN_S:
-                fc = predict_cb_arima(traj, p.n_root_estimate(), p.active_wall(), t_rem)
-                used = "ARIMA"
+            if span >= RWR_MIN_SPAN_S:
+                fc = predict_cb_recency(traj, p.n_root_estimate(), p.active_wall(), t_rem)
+                used = "recency"
             else:
                 fc = forecast_cb(traj, p.n_root_estimate(), p.active_wall(), t_rem)
             eta = fc["eta_s"]
@@ -319,19 +320,19 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
         recheck = None
         _handoff_on = fallback_archetype is not None and leader.arch.engine == "cocoa"
         if _handoff_on or trace_path:
-            # MONITORING handoff forecaster = predict_cb_arima (ARIMA(1,1,0)+drift on
-            # closed_bits, fit on ALL samples; eta=inf only if mu<=0 over the full history).
+            # MONITORING handoff forecaster = predict_cb_recency (eta = remaining /
+            # power-law recency-weighted rate on closed_bits; eta=inf only if the rate <= 0).
             # eta>R3_OVERSHOOT*budget (or inf) counts as `over`. HANDOFF (only when a fallback
             # is set): hand to Ganak after R3_CONSECUTIVE over-forecasts IN A ROW -- the SOLE
-            # debounce. As a wall lengthens mu dilutes, so ETA grows smoothly past the budget
-            # and the streak fills (validated: t1_017 bails ~870s, t1_019 ~1080s -- later than
-            # the old floor but Ganak still gets >2/3 of the budget, and a config mid-recovery
-            # like t1_045 is NOT false-bailed). When trace_path is set we ALSO append the live
+            # debounce. As a wall lengthens the recency rate collapses, so ETA grows past the
+            # budget and the streak fills (sweep-validated: 011/t1_017/t1_019 bail in ~400-620s,
+            # t1_031 ~1150s, while t1_045 stays at <0.05 of the handoff line throughout). When
+            # trace_path is set we ALSO append the live
             # forecast every recheck -- pure data collection, no behaviour change.
             _streak = [0]
             def recheck(p, t_rem):
-                fc = predict_cb_arima(p.closed_bits_traj(), p.n_root_estimate(),
-                                      p.active_wall(), t_rem)
+                fc = predict_cb_recency(p.closed_bits_traj(), p.n_root_estimate(),
+                                        p.active_wall(), t_rem)
                 eta = fc["eta_s"]
                 over = (eta is not None) and (eta > R3_OVERSHOOT * t_rem)  # inf counts as over
                 _streak[0] = _streak[0] + 1 if over else 0
@@ -347,8 +348,8 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
                         "n_root": fc.get("n_root"),
                         "remaining_bits": fc.get("remaining_bits"),
                         "rate_bits_per_s": fc.get("rate_bits_per_s"),
-                        "mu_bits_per_s": fc.get("mu_bits_per_s"),
-                        "phi": fc.get("phi"), "stuck": fc.get("stuck"),
+                        "tau": fc.get("tau"), "power": fc.get("power"),
+                        "stuck": fc.get("stuck"),
                         "eta_s": (eta if (eta is not None and eta != float("inf")) else None),
                         "t_rem_s": round(t_rem, 1),
                         "over": bool(over), "streak": _streak[0],

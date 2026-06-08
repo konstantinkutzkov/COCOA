@@ -2576,3 +2576,35 @@ New competition benchmark, 100 instances at `SharpSAT/MC2026_Public/mc2026_track
 **CRITICAL — ARIMA funnel-cut limitation (reconstructed per-config ETAs at the 4→2 cut):** plain/cache-max had WALLED in round 2 (rate ~0.000 b/s) yet ARIMA gave them **finite optimistic ETAs ~46–48s, not inf** — because (a) `mu` is the round-1-burst-dominated mean, and (b) at active=120s the 90s stuck-floor window still spans the burst, so it can't flag the round-2 stall. All four ETAs clustered 42–48s ≈ rank-by-remaining-bits; the cut kept the cascade configs only because they were *further along* (rem 4.1 vs 6.4), NOT because ARIMA detected the wall, and the ETA was ~5× too optimistic (predicted 42s; actual ~221s to finish). So **the round-2 funnel cut is NOT wall-aware** (too little post-burst data) — it degrades to "closest-to-done." ARIMA in **monitoring** (clean post-burst window) was sound: it tracked the climbing leader (short eta, over=F, no spurious bail) to the finish.
 
 **RESOLUTION (follow-up commit):** investigated by simulation + a backtest on real traces. The "weight the recent rate" idea was **REJECTED** — t1_045 (recovers from 3-min walls) shows a short trailing window false-bails a config mid-recovery (it's too twitchy). The actual fix: **removed the myopic 90s stuck-floor** from `predict_cb_arima`, so the ETA is now pure full-data ARIMA — it grows *smoothly* as a wall lengthens (`mu` dilutes with each flat sample, no 143s→inf cliff) and bails only via the scheduler's consecutive-over-budget streak. Backtest: t1_017 bails @870s, t1_019 @1080s (later than the old floor's 321/431s, but Ganak still gets >2/3 of the budget), and t1_045 is **no longer false-bailed**. The round-2 cut's rank-by-closest-to-done is left as-is (acceptable; the wall-aware bail correctly lives in monitoring).
+
+## mc2026_track1_009 — SOLVED in round 1 by cocoa-adaptive (config-diversity short-circuit); ARIMA N/A
+
+**8307v, band mid** (log2_cost=78.6, worst_leaf=1, 8143 leaves), arjun **substantial=True**. **COUNT = 110680464442257309696** (~2⁶⁶·⁶), ganak-verified. Solved in **round 1** — no funnel cut, no monitoring, **ARIMA not exercised**.
+
+**Config-diversity win:** `cocoa-reactive` scouted first (full 60s window) and churned **5.2M decisions** to cb 319.6 / pct 37.5% **without finishing** (grinding a ~2³²¹ search tree). `cocoa-adaptive` then started and **short-circuited in 4.5s** — its decomposition/branching collapsed the count where reactive stalled. Concrete evidence that the 8-config covering set earns its slots: the winner here (adaptive) is a *different* config from 007's winner (nosep-cascade). Note: `closed_bits`/`n_root` measure SEARCH size, not log2(count) — reactive's n_root≈321 is the work it faced, unrelated to the 2⁶⁶·⁶ model count adaptive found cheaply.
+
+## Forecaster redesign — ARIMA → recency-weighted progress rate (power-law tail); sweep table (LIVING, update over time)
+
+**Why ARIMA was dropped.** Investigating mc2026_011's monitoring (a band=high deep-tail grinder) exposed that the ETA model assumed a **constant** progress rate, but `closed_bits` **decelerates** hard: cb = n_root + log2(pct_lin/100), so a constant cb-rate assumes pct_lin keeps *doubling* at a fixed cadence — and on 011 the doubling cadence lengthened ~100× (10s → 1000s+/doubling). ARIMA(1,1,0)+drift (drift = arithmetic mean of all rates) therefore stayed optimistic and predicted ~500s for a config that wasn't finishing (pct_lin was ~8×10⁻¹⁰% at that point). A linear *rate-slope* fix was tested and **rejected** — it over-bails: nearly every hard instance decelerates (t1_045 too), so a negative slope doesn't distinguish recovering from terminal. The real discriminator is **remaining_bits / rate**: t1_045 keeps because it's *close* (~1 bit left), 011 bails because it's *far* (~33 bits).
+
+**The model now:**
+```
+eta  = remaining_bits / rate
+rate = Σ_i w_i·r_i / Σ_i w_i ,  r_i = per-interval cb rate (b/s),  w_i = (1 + age_i/TAU)^(−POWER)
+```
+Power-law recency tail: **sharp near age 0** (a fresh wall dominates → prompt bail) + **heavy tail** (a strong early burst is remembered → a config creeping to a finish is never endangered). Time-indexed in seconds (sampling-invariant). eta=inf only if rate ≤ 0 (truly flat from the start). Bail is the scheduler's 10-consecutive-over-budget streak (unchanged).
+
+**Sweep** (replay the leader trajectory of each instance through the model + the streak; BAIL walls extended to budget). Two objectives: **(1) t1_045 never near a handoff** (low peak-danger), **(2) bailers flagged fast**.
+
+| weight setting | 007 KEEP | t1_045 KEEP | 011 BAIL | t1_017 BAIL | t1_019 BAIL | t1_031 BAIL |
+|---|---|---|---|---|---|---|
+| exp τ=120 | 0.01 | 0.66 | @501 | @400 | @480 | @1091 |
+| exp τ=175 | 0.01 | 0.39 | @611 | @450 | @540 | @1111 |
+| exp τ=240 | 0.01 | 0.16 | @651 | @500 | @600 | @1151 |
+| exp τ=300 | 0.01 | 0.08 | @682 | @540 | @640 | @1201 |
+| pow p=1, τ=120 | 0.01 | 0.03 | @932 | @570 | @690 | @1561 |
+| **pow p=2, τ=120 (CHOSEN)** | **0.01** | **0.04** | **@621** | **@420** | **@510** | **@1151** |
+
+KEEP cols = peak danger ratio (eta / 1.25·budget-left; <1 safe, lower=better). BAIL cols = handoff active-time in s (smaller=better). pow-p2-τ120 is the only setting that is both very safe on t1_045 (0.04, like the slow exponentials) AND bails fast (≈ exp τ=120). Implemented as `predict_cb_recency` with `RWR_POWER=2`, `RWR_TAU=120` — **PROVISIONAL** knobs, not derived constants.
+
+**Caveat / TODO:** the KEEP set is thin — only t1_045 is a true recoverer (007 finished easily). exp τ=240 (0.16, bails ~80s slower) is the closest runner-up. **Re-run this sweep and update the table as more keep/bail traces accumulate; re-fit POWER/TAU then.** Ground truth used here: KEEP = {007 solved-in-monitor, t1_045 recovers→97%}; BAIL = {011, t1_017, t1_019, t1_031 — all terminal walls Ganak should take}.

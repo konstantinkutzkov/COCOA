@@ -233,67 +233,51 @@ def predict_cb(traj, n_root: float, t_active: float, t_remaining: float,
 
 
 # ===========================================================================
-# ARIMA(1,1,0)+drift forecaster on closed_bits, time-indexed in REAL SECONDS.
+# Recency-weighted progress-rate forecaster on closed_bits (REAL SECONDS).
 #
-# Fits on ALL collected samples -- the full growing series (30 points at 300s,
-# 31 at 310s, ...), re-fit every recheck. There is NO forecast window: the whole
-# history informs the drift, so a config's PAST RECOVERIES from long plateaus
-# (e.g. t1_045's multi-minute walls that then jump) are visible to the fit rather
-# than discarded by a short look-back -- the myopia we explicitly removed.
+#   eta = remaining_bits / rate
+#   rate = Sum_i w_i * r_i / Sum_i w_i        (recency-weighted mean interval rate)
+#   r_i  = (cb_i - cb_{i-1}) / (t_i - t_{i-1})            bits/sec for interval i
+#   w_i  = (1 + age_i / TAU) ^ (-POWER)        POWER-LAW recency weight,
+#          age_i = t_now - midpoint(interval i)           in SECONDS
 #
-# Difference cb once -> per-step rate; AR(1) around the sample-mean drift mu;
-# forecast the rate reverting to mu and integrate to n_root. The ONLY infinite
-# ETA is mu <= 0: no net drift over the ENTIRE history => never reaches n_root.
-# Otherwise eta = (remaining - transient)/mu * step_seconds, where the AR(1)
-# transient (r_last - mu)*phi/(1-phi) LENGTHENS the ETA when the recent rate is
-# below mu (slowing into a plateau) and SHORTENS it when above (a recent burst).
-# Invariant to the sampling interval (drift is per-second, not per-sample).
+# The power-law tail was chosen empirically (sweep over t1_045/mc2026_007 [must
+# KEEP] vs mc2026_011/t1_017/t1_019/t1_031 [must BAIL]) to satisfy two opposing
+# goals at once:
+#   * sharp drop near age 0   -> a fresh wall dominates the average fast, so a
+#     genuinely-stalled config is handed to Ganak promptly (objective: fast bail);
+#   * heavy tail at large age  -> a strong early burst is NOT forgotten, so a
+#     config slowly creeping to a finish (t1_045) never drifts near a handoff
+#     (objective: a recoverer is never endangered).
+# It replaces the ARIMA(1,1,0)+drift model, whose constant-rate assumption was
+# structurally over-optimistic on decelerating instances (it never saw the wall).
+# Time-indexed in seconds => invariant to the sampling interval.
 #
-# The BAIL decision is NOT here. It lives in the scheduler, which hands to Ganak
-# only after R3_CONSECUTIVE (=10) consecutive rechecks ALL forecast over budget
-# -- the "last ~90s of predictions" debounce. This forecaster only reports ETA.
+# PROVISIONAL WEIGHTS: POWER=2 and TAU=120s are the current best fit on only ~6
+# instances (just ONE true recoverer, t1_045). They are TUNING KNOBS, not derived
+# constants -- expect to re-fit both as more progress traces accumulate. (e.g.
+# exp tau=240 was nearly as good; revisit once the keep/bail corpus grows.)
+#
+# The BAIL decision is NOT here: the scheduler hands to Ganak only after
+# R3_CONSECUTIVE (=10) consecutive rechecks forecast eta > overshoot x budget.
 # ===========================================================================
-ARIMA_MIN_SAMPLES    = 4       # need a few differences to fit AR(1)
-ARIMA_MIN_SPAN_S     = 90.0    # scheduler gate: prefer ARIMA over predict_cb once a
-                               # config has >= this many SECONDS of trajectory. NOT a
-                               # forecast window -- ARIMA always fits ALL collected data.
-ARIMA_PHI_CLAMP      = 0.98    # stationarity clamp on the AR(1) coefficient
-ARIMA_MU_EPS         = 1e-6    # long-run drift (bits/step) at/below this => inf ETA
+RWR_MIN_SAMPLES = 4        # need a few intervals before forecasting
+RWR_MIN_SPAN_S  = 90.0     # scheduler gate: prefer this forecaster over predict_cb once a
+                           # config has >= this many SECONDS of trajectory (round-2+ / monitor)
+RWR_TAU         = 120.0    # PROVISIONAL recency time-constant (seconds) -- retune with data
+RWR_POWER       = 2.0      # PROVISIONAL power-law tail exponent     -- retune with data
+RWR_RATE_EPS    = 1e-9     # recency-weighted rate at/below this (b/s) => stuck => inf ETA
 
 
-def _median(xs):
-    s = sorted(xs)
-    n = len(s)
-    if n == 0:
-        return 0.0
-    return s[n // 2] if n % 2 else 0.5 * (s[n // 2 - 1] + s[n // 2])
-
-
-def _ar1(rates):
-    """OLS fit r_t = c + phi*r_{t-1}. Returns (phi_clamped, mu). mu = mean(rates) is the
-    robust long-run per-step drift (the AR(1) mean, avoids the c/(1-phi) blow-up near a
-    unit root); phi is used only for the transient term."""
-    n = len(rates)
-    mu = sum(rates) / n if n else 0.0
-    if n < 3:
-        return 0.0, mu
-    x, y = rates[:-1], rates[1:]
-    m = len(x)
-    mx = sum(x) / m
-    my = sum(y) / m
-    sxx = sum((xi - mx) ** 2 for xi in x)
-    sxy = sum((xi - mx) * (yi - my) for xi, yi in zip(x, y))
-    phi = (sxy / sxx) if sxx > 1e-12 else 0.0
-    return max(-ARIMA_PHI_CLAMP, min(ARIMA_PHI_CLAMP, phi)), mu
-
-
-def predict_cb_arima(traj, n_root, t_active, t_remaining, margin=MARGIN):
-    """ARIMA(1,1,0)+drift ETA on closed_bits, fit on ALL samples (no forecast window).
-    Same return shape as predict_cb (engine / eta_s / reason / ...). eta_s is inf IFF
-    mu <= 0 (no net drift over the FULL history => never reaches n_root)."""
+def predict_cb_recency(traj, n_root, t_active, t_remaining, margin=MARGIN,
+                       tau=RWR_TAU, power=RWR_POWER):
+    """Recency-weighted progress-rate ETA on closed_bits. eta = remaining / rate, where
+    rate is a power-law recency-weighted mean of the per-interval cb rate (see header).
+    Same return shape as predict_cb. eta_s is inf IFF the recency-weighted rate <= 0
+    (no recent net progress => never reaches n_root). tau/power are provisional knobs."""
     out = {"engine": "ganak", "reason": "", "eta_s": None, "rate_bits_per_s": None,
-           "phi": None, "mu_bits_per_s": None, "closed_bits": None, "n_root": n_root,
-           "remaining_bits": None, "n_samples": 0, "stuck": False}
+           "closed_bits": None, "n_root": n_root, "remaining_bits": None,
+           "n_samples": 0, "stuck": False, "tau": tau, "power": power}
     pts = sorted((float(t), float(cb)) for (t, cb) in traj
                  if math.isfinite(t) and math.isfinite(cb))
     warm = [(t, cb) for (t, cb) in pts if cb > 0.0]    # drop not-yet-warmed leading pts
@@ -301,10 +285,10 @@ def predict_cb_arima(traj, n_root, t_active, t_remaining, margin=MARGIN):
         pts = warm
     n = len(pts)
     out["n_samples"] = n
-    if n < ARIMA_MIN_SAMPLES:
-        out["reason"] = f"insufficient samples ({n} < {ARIMA_MIN_SAMPLES}) -> ganak"
+    if n < RWR_MIN_SAMPLES:
+        out["reason"] = f"insufficient samples ({n} < {RWR_MIN_SAMPLES}) -> ganak"
         return out
-    cb_now = pts[-1][1]
+    t_now, cb_now = pts[-1]
     out["closed_bits"] = cb_now
     remaining = n_root - cb_now
     out["remaining_bits"] = remaining
@@ -313,33 +297,30 @@ def predict_cb_arima(traj, n_root, t_active, t_remaining, margin=MARGIN):
                    reason=f"cb {cb_now:.2f} >= n_root {n_root:.2f} (done)")
         return out
 
-    # difference -> per-step rate; step size in seconds
-    steps = [pts[i + 1][0] - pts[i][0] for i in range(n - 1)]
-    rates = [pts[i + 1][1] - pts[i][1] for i in range(n - 1)]   # bits PER STEP
-    step_s = _median(steps)
-    if step_s <= 0.0:
-        out["reason"] = "degenerate time axis (median step <= 0) -> ganak"
-        return out
-    phi, mu = _ar1(rates)
-    r_last = rates[-1]
-    out["phi"] = phi
-    out["mu_bits_per_s"] = mu / step_s
-    out["rate_bits_per_s"] = r_last / step_s
+    # recency-weighted mean of per-interval rates; POWER-LAW tail w=(1+age/tau)^(-power)
+    num = den = 0.0
+    for i in range(1, n):
+        (ta, ca), (tb, cbi) = pts[i - 1], pts[i]
+        dt = tb - ta
+        if dt <= 0.0:
+            continue
+        r = (cbi - ca) / dt                          # bits/sec over interval i
+        age = t_now - 0.5 * (ta + tb)                # seconds before now (midpoint)
+        w = (1.0 + age / tau) ** (-power)
+        num += w * r
+        den += w
+    rate = num / den if den > 0.0 else 0.0
+    out["rate_bits_per_s"] = rate
 
-    # the ONLY infinite ETA: no net drift over the FULL history -> never reaches n_root
-    if mu <= ARIMA_MU_EPS:
+    # the ONLY infinite ETA: no recent net progress -> never reaches n_root
+    if rate <= RWR_RATE_EPS:
         out.update(eta_s=math.inf, stuck=True,
-                   reason=f"AR drift mu={mu:.2e} b/step <= 0 over full history -> inf -> ganak")
+                   reason=f"recency rate {rate:.2e} b/s <= 0 -> stuck -> inf -> ganak")
         return out
 
-    # integrate the AR(1) rate forecast to n_root:
-    #   sum_{k>=1} (mu + phi^k (r_last-mu)) reaches `remaining` at h steps;
-    #   the geometric transient T = (r_last-mu)*phi/(1-phi) is its h->inf tail.
-    transient = (r_last - mu) * phi / (1.0 - phi) if abs(1.0 - phi) > 1e-9 else 0.0
-    h = max((remaining - transient) / mu, 0.0)        # steps to accumulate `remaining`
-    eta = h * step_s
+    eta = remaining / rate
     out["eta_s"] = eta
-    tag = f"rem {remaining:.2f}b, mu {mu / step_s:.4g}b/s, phi {phi:.2f}, h {h:.1f}st"
+    tag = f"rem {remaining:.2f}b / rate {rate:.4g}b/s (pow={power:.0f}, tau={tau:.0f}s)"
     if eta <= margin * t_remaining:
         out.update(engine="cocoa", reason=f"ETA {eta:.0f}s <= {margin:.0%}x{t_remaining:.0f}s ({tag})")
     else:
