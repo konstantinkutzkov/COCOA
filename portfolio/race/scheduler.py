@@ -30,8 +30,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from race.archetypes import default_set                 # noqa: E402
 from race.procctl import ManagedProc                     # noqa: E402
-from race.forecast import predict_cb as forecast_cb        # noqa: E402  (round-1 funnel cut)
-from race.forecast import predict_cb_recency, predict_cb_tree, RWR_MIN_SPAN_S   # noqa: E402  (cut ranks by recency; handoff decided by the escape-history tree)
+from race.forecast import predict_cb_recency, predict_cb_tree, RWR_MIN_SPAN_S   # noqa: E402  (round-2/3 cut ranks by recency ETA; round-1 cut ranks by closed_bits LEVEL; handoff decided by the escape-history tree)
 
 # run_window outcomes
 FINISHED, PAUSED, BUDGET, DIED, HANDOFF = "finished", "paused", "budget", "died", "handoff"
@@ -229,35 +228,39 @@ def _handoff_to_ganak(fallback, cnf, pi, deadline, started, log, reason) -> dict
 
 
 def _select_by_eta(survivors, keep_n, deadline, log) -> list:
-    """Rank survivors by ETA (lower = closer to finishing); keep the best keep_n.
-    Forecaster is chosen by data span: once a config has >= RWR_MIN_SPAN_S (90s) of
-    trajectory it uses predict_cb_recency -- so the round-2 cut (survivors have ~120s / 12
-    samples) and the round-3 cut (~180s) rank by recency-weighted rate, while the round-1
-    cut (only 60s, below the span gate) falls back to predict_cb. All survivors at a cut
-    share the same span, so one forecaster is used per cut. Infinite ETAs (stuck) sort
-    same span, so one forecaster is used per cut. Infinite ETAs (stuck / deep-tail) sort
-    last, tie-broken by closed_bits LEVEL. RANKING ONLY -- no Ganak handoff here. Non-COCOA
-    procs (a Ganak racer, cross-engine tests only) have no live ETA and sort last."""
+    """Keep the best keep_n survivors. The RANKING CRITERION depends on data span:
+
+    - Round 1 (span < RWR_MIN_SPAN_S = 90s, ~6 samples over 60s): rank by closed_bits
+      LEVEL (how far each config actually got). A rate/ETA from ~6 samples is noise --
+      ETA-ranking here CUT cascade leaders that were AHEAD by closed_bits (mc2026_029/033)
+      because their tail-slowdown inflated the noisy ETA. Level is the robust round-1 signal.
+    - Rounds 2/3 (span >= 90s, ~12-18 samples): rank by recency-weighted ETA
+      (predict_cb_recency), lower = closer to finishing.
+
+    All survivors at a cut share the same span, so one criterion applies per cut. Non-COCOA
+    procs (a Ganak racer; cross-engine tests only) have no live metric and sort last.
+    RANKING ONLY -- no Ganak handoff here."""
     t_rem = max(deadline - time.monotonic(), 1.0)
     scored = []
-    used = "predict_cb"
+    used = "closed_bits LEVEL"
     for p in survivors:
         if p.arch.engine == "cocoa":
             traj = p.closed_bits_traj()
             span = (traj[-1][0] - traj[0][0]) if len(traj) >= 2 else 0.0
             if span >= RWR_MIN_SPAN_S:
                 fc = predict_cb_recency(traj, p.n_root_estimate(), p.active_wall(), t_rem)
-                used = "recency"
+                eta = fc["eta_s"]
+                key = eta if (eta is not None and eta != float("inf")) else float("inf")
+                used = "recency ETA"
             else:
-                fc = forecast_cb(traj, p.n_root_estimate(), p.active_wall(), t_rem)
-            eta = fc["eta_s"]
-            key = eta if (eta is not None and eta != float("inf")) else float("inf")
+                # Too few samples for a trustworthy ETA -> rank by closed_bits LEVEL.
+                key = -p.closed_bits()
         else:
             key = float("inf")
         scored.append((key, -p.closed_bits(), p))
     scored.sort(key=lambda s: (s[0], s[1]))
     kept = [s[2] for s in scored[:keep_n]]
-    log(f"[select] keep {keep_n}/{len(survivors)} by {used} ETA -> "
+    log(f"[select] keep {keep_n}/{len(survivors)} by {used} -> "
         f"{[k.arch.name for k in kept]}")
     return kept
 
@@ -265,7 +268,7 @@ def _select_by_eta(survivors, keep_n, deadline, log) -> list:
 def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
              archetypes=None, progress_interval: float = 15.0, log=_stdout,
              fallback_archetype=None, trace_path=None) -> dict:
-    # FUNNEL: 8 configs x round1_s each, ranked by predict_cb ETA, narrowed 8->4->2->1
+    # FUNNEL: 8 configs x round1_s each, narrowed 8->4->2->1 (round-1 cut by closed_bits LEVEL; rounds 2-3 by recency ETA)
     # over 3 rounds (COCOA-only evaluation). The single leader then runs to the budget
     # WITH a monitoring re-check that hands to Ganak only on sustained overshoot.
     archetypes = archetypes or default_set()
@@ -315,7 +318,7 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
 
     _log_rss(started, log, "after-r1")   # peak concurrency: all scouted configs resident
 
-    # ---- FUNNEL: rank by predict_cb ETA, narrow 8 -> 4 -> 2 -> 1. Ranking ONLY (no
+    # ---- FUNNEL: round-1 cut by closed_bits LEVEL, rounds 2-3 by recency ETA; narrow 8 -> 4 -> 2 -> 1. Ranking ONLY (no
     #      Ganak handoff during scouting). Each survivor gets one more `round1_s` window
     #      per stage; the single leader then enters monitoring (below). ----
     for stage, keep_n in enumerate(_FUNNEL_KEEP):
