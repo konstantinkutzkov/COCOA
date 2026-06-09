@@ -80,6 +80,23 @@ def test_complete_keeps():
     assert verdict(traj, 10.0) == "keep"   # n_root below current cb
 
 
+# 9. mc2026_027 REGRESSION: PROGRESSING (recent_rate>eps) but far from done AND too slow --
+#    eta blows the budget -> bail. The pre-fix tree only asked "moving?" not "fast enough?",
+#    so it rode this leader for ~16 min of active time (a 70-min wall runaway).
+def test_progressing_but_doomed_far_and_slow_bails():
+    traj = [(float(t), 0.005 * t) for t in range(10, 601, 10)]   # steady ~0.005 b/s creep, cb_now=3.0
+    # remaining = 30 - 3 = 27 bits (>> floor); eta = 27/0.005 = 5400s > 2 x 2000s budget -> bail
+    assert verdict(traj, 30.0, t_remaining=2000.0) == "bail"
+
+
+# 10. ...but a near-finisher (remaining <= KEEP_REM_FLOOR) is ALWAYS ridden out, even when slow
+#     and even when its eta nominally exceeds the (small) remaining budget -- the 025 case (91%).
+def test_progressing_near_finisher_kept_despite_slow():
+    traj = [(float(t), 0.005 * t) for t in range(10, 601, 10)]   # same creep, cb_now=3.0
+    # remaining = 4 - 3 = 1 bit (< floor 2); eta = 1/0.005 = 200s > 2 x 50s, but the floor keeps it
+    assert verdict(traj, 4.0, t_remaining=50.0) == "keep"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))

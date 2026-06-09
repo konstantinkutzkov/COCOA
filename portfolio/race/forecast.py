@@ -387,6 +387,23 @@ def predict_cb_tree(traj, n_root, t_active, t_remaining):
     win_dt = max(t_end - traj[j][0], 1e-9)
     recent_rate = (cb_now - traj[j][1]) / win_dt
     if recent_rate > EPS:
+        # Progressing -- but FAST ENOUGH to finish in the remaining budget? A leader can
+        # creep at recent_rate>eps yet need many times the budget to close `remaining`
+        # bits. mc2026_027 rode such a "progressing but doomed" leader for ~16 min of
+        # active time (eta ~4500s vs ~2000s budget) because this branch only asked
+        # "moving?", never "moving fast enough?" -- the budget-aware eta check the old
+        # recency forecaster had was dropped here. Restore it: bail a progressing leader
+        # whose eta blows the budget -- UNLESS it is a near-finisher
+        # (remaining <= KEEP_REM_FLOOR, e.g. 025 at 91%), which we always ride out.
+        KEEP_ETA_MARGIN = 2.0      # keep iff eta <= 2x the remaining budget
+        KEEP_REM_FLOOR = 2.0       # bits; never bail a leader this close to done
+        if finite_root and t_remaining > 0 and remaining > KEEP_REM_FLOOR:
+            eta = remaining / recent_rate
+            if eta > KEEP_ETA_MARGIN * t_remaining:
+                return {'verdict': 'bail',
+                        'reason': (f'progressing but doomed: eta={eta:.0f}s>'
+                                   f'{KEEP_ETA_MARGIN:.0f}x{t_remaining:.0f}s '
+                                   f'(rem={remaining:.1f} rate={recent_rate:.6f})')}
         return {'verdict': 'keep', 'reason': f'progressing recent_rate={recent_rate:.6f}>eps'}
 
     # ---- stall_dur: seconds since the last *meaningful* cb increase ----
