@@ -2566,6 +2566,7 @@ New competition benchmark, 100 instances at `SharpSAT/MC2026_Public/mc2026_track
 ## mc2026 trivial round-1 short-circuits (cocoa-plain, ganak-verified; ARIMA N/A — no funnel cut / monitoring)
 - `003`: count **8** (30v/58c, band low, 0.1s)
 - `005`: count **6** (228v, band low, 0.1s)
+- `023`: count **449260070** (39v/45 lines, band low, 0.1s)
 
 ## mc2026_track1_007 — SOLVED by COCOA (cocoa-nosep-cascade, monitoring finish); first non-trivial mc2026 + ARIMA funnel-cut limitation found
 
@@ -2632,3 +2633,33 @@ mc2026 round-1 short-circuits so far: 009 (adaptive), 013 (reactive) — differe
 **Ganak side:** ran ~2640s and made **literally zero progress** — `cache_K=0, cubes=0, conflicts=0, confl/s=0, cache_miss_rate=1.000`. The fallback contributed nothing; 017 is pathological for both engines.
 
 **FORECASTER FINDING (the run's real payoff).** The leader's ETA was **∞ from the first monitoring recheck**, never evolving — because the rate is a *difference series* and the **warm filter (`if cb>0`) drops the `cb=0` sample**, deleting the only non-flat interval (the 0→6496 jump). So the forecaster saw an all-flat trajectory ⇒ rate=0 ⇒ ∞. Why the filter exists (verified): if `cb=0` is KEPT, the single 0→6496 jump (649 b/s) is remembered by the power-law tail and pins eta at **0.1–34s for the ENTIRE 3600s budget** ⇒ the config would *never* bail (ride to timeout). So the filter is **load-bearing** (guards the "one-jump-hostage" case), but **blunt**: it can't distinguish *cliff-then-dead* (bail, correct) from *cliff-then-grinding-the-hard-core* (017: decisions growing → maybe keep). The missing signal is **decisions** (growing=working, flat=idle). **Open fix:** bail on cb-flat only when decisions are *also* flat; bound patience while still grinding. Also (Q1 from the analysis): seed the handoff streak from the leader's scouting trajectory so an already-walled leader bails at the 180s floor instead of 180+90s. NOTE: for 017 the keep-vs-bail debate was **moot** — Ganak also walled — but handing 25%-COCOA-progress to a 0-progress Ganak was a pure loss.
+
+## mc2026_track1_019 — SOLVED in round 1 by cocoa-plain (1.0s) despite band=high
+
+**3766v, band HIGH** (log2_cost=126.2 — 2nd-deepest mc2026 after 017's 184; worst_leaf=2, arjun substantial=True). Yet `cocoa-plain` solved it in **1.0s** in round 1. **COUNT = 948731481813003893206929197567363893059348940398470365088269067920407148829343744000** (84 digits), ganak-verified. Reinforces that band/log2_cost does NOT predict difficulty: 017 (band=high, log2_cost 184) → portfolio TIMEOUT; 019 (band=high, log2_cost 126) → 1s plain solve. Tree handoff not exercised (round-1 short-circuit). First run on the live `predict_cb_tree` build (handoff path present but unused).
+
+## mc2026_track1_021 — SOLVED by cocoa-plain in monitoring (263s); FIRST live exercise of the escape-history tree
+
+**87v / 93-line CNF, band low** (log2_cost=32.2, worst_leaf=2, arjun substantial=False) — a **tiny CNF but a genuine grinder** (deep search, n_root≈87; ~31M decisions in the first 60s). The starkest "size ≠ difficulty" case yet: 93 lines took COCOA **263s active**, while 019 (10406 lines, band high) fell in 1s. **COUNT = 37854886389693351111** (~2⁶⁵), ganak-verified.
+
+**Funnel:** round-1 cut → [plain, cache-max, adaptive, sep-cascade]; round-2 (recency) → [plain, adaptive]; round-3 → leader **plain**. plain climbed **pct 21% → 34% → 54%** across r1/r2/r3, then to 100% in monitoring.
+
+**Tree forecaster — first LIVE deployment, correct:** 8 monitoring forecasts, **all `keep`** with reason "progressing recent_rate>eps", riding plain from rem 0.71 → 0.03 bits to the finish. The `recent_rate>eps` first branch fired throughout (a climbing leader); the escape logic never engaged (no wall to detect) — exactly the easy-correct case. No spurious handoff. (The wall-detection branches remain validated only on the offline harness; a live grinder that *walls* is still wanted to exercise them in production.)
+
+## mc2026_track1_025 — TIMEOUT at 91% (cocoa-plain, 0.14 bits from done); tree correctly kept a slow progressor
+
+**102v / 105-line CNF, band low** (log2_cost=27.6, arjun substantial=False) — another small-but-hard grinder (n_root≈102). **TIMEOUT @ 3600s, count=None**, but cocoa-plain reached **pct 90.96% / cb 101.86 / rem 0.14 bits** on **1.27 BILLION decisions** (338M L2 hits) — ~0.14 bits (≈ the last top-level component) from a finish at the 1h limit.
+
+**Tree's 2nd live deployment — patience validated.** 274 monitoring forecasts, **all `keep`** (recent_rate>eps the whole time; plain crept 4.5%→91% over ~50 min of monitoring, decelerating to ~0.0005 b/s but never stalling). Never bailed — which was CORRECT: plain was the genuine best option, progressing to 91%; bailing to a cold Ganak would have thrown that away (and Ganak made ZERO progress on the structurally-similar 017).
+
+**Revises the mid-run "budget-aware bail" idea:** I'd flagged that the tree keeps a progressing-but-too-slow leader to timeout rather than trying Ganak — but here that was the RIGHT call. A budget-aware bail would have abandoned a 91%-done leader for a Ganak that almost certainly also fails. So 025 is a **"needs-more-budget" instance** (0.14 bits short at 3600s), NOT a forecaster failure — with a longer budget, plain finishes. (Caveat retained: a budget-aware bail could still help when the leader is *far* from done, not 91%.)
+
+Tree status after 021+025: both live runs were KEEP-a-progressor cases (021 → finish, 025 → near-finish timeout). The **bail/escape branches are still only harness-validated** — a live leader that genuinely WALLS is still wanted to exercise them in production.
+
+## mc2026_track1_027 — KILLED (runaway, ~70 min wall); exposes a WALL-BUDGET OVERRUN bug
+
+**760v / 43783-line CNF, band HIGH, log2_cost=624.3 (deepest mc2026 by far; 017 was 184), worst_leaf=38, n_root≈760, arjun not-substantial.** Funnel: the standard configs front-loaded to cb≈727 then crawled; the **cascade configs won the cut** (sep/nosep climbed fast in bursts). Leader = `cocoa-sep-cascade`. In monitoring it burst-and-plateaued (cb 716→719→…→737, the 716 plateau was transient — it resumed) then crept to cb 737 / rem ~23 / **pct≈10⁻⁵%**. **Tree kept it throughout (114 forecasts, all `keep`)** — correct (genuinely progressing, if glacially); the bail branch never fired (it kept resuming). Manually **KILLED** at the user's instruction.
+
+**BUG — wall-budget overrun (fix item).** The pipeline ran **~70 min of wall** (`pipeline` etime 01:09:13) on a `--budget 3600` (60 min) run **without stopping**. The leader's active time was only **1321s of 3600s**, and `sharpSAT` had **22:58 CPU over 66 min elapsed (~35% CPU)** — it was **memory/cache-bound** on this deepest instance. So the budget is effectively spent against the leader's *active/CPU* progress (the deadline check is gated by the leader's progress emission, which a CPU-starved leader emits slowly), letting a cache-thrashing deep instance run **~3× its wall budget** (projected ~3 h to the active-budget). **FIX: enforce a hard wall-clock cap independent of the leader's emission rate** (e.g. a watchdog), so wall ≈ `--budget` regardless of CPU starvation.
+
+Outcome: unsolved (killed; would have been a runaway/timeout). Confirms the deep-instance pattern (017/025/027 all unsolved); 027 additionally is the first to expose the wall-budget overrun.
