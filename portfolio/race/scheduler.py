@@ -227,41 +227,65 @@ def _handoff_to_ganak(fallback, cnf, pi, deadline, started, log, reason) -> dict
             "count": None, "leader_sample": gp.latest()}
 
 
-def _select_by_eta(survivors, keep_n, deadline, log) -> list:
-    """Keep the best keep_n survivors. The RANKING CRITERION depends on data span:
+SELECT_K_BAND = 1.5   # closed_bits "near-tie" band for the 2->1 pick (within it, ETA decides)
 
-    - Round 1 (span < RWR_MIN_SPAN_S = 90s, ~6 samples over 60s): rank by closed_bits
-      LEVEL (how far each config actually got). A rate/ETA from ~6 samples is noise --
-      ETA-ranking here CUT cascade leaders that were AHEAD by closed_bits (mc2026_029/033)
-      because their tail-slowdown inflated the noisy ETA. Level is the robust round-1 signal.
-    - Rounds 2/3 (span >= 90s, ~12-18 samples): rank by recency-weighted ETA
-      (predict_cb_recency), lower = closer to finishing.
 
-    All survivors at a cut share the same span, so one criterion applies per cut. Non-COCOA
-    procs (a Ganak racer; cross-engine tests only) have no live metric and sort last.
+def _select(survivors, keep_n, deadline, log, stage) -> list:
+    """Stage-aware funnel cut. closed_bits LEVEL is the spine; ETA is recency-weighted
+    (predict_cb_recency, valid at rounds 2/3 once span >= 90s):
+
+      stage 0  (8->4): rank by closed_bits LEVEL. Round 1 is ~6 samples / 60s -- a rate/ETA
+                       there is noise (it once CUT cascade leaders AHEAD by cb on 029/033
+                       because their tail-slowdown inflated the ETA). Level is robust.
+      stage 1  (4->2): HEDGE -- keep argmax(closed_bits) AND argmin(ETA); if they coincide,
+                       keep that + the 2nd-smallest ETA. One proven leader + one speculative
+                       fast-mover, given a round to prove a catch-up.
+      stage 2  (2->1): BANDED -- if |dcb| < SELECT_K_BAND take the smaller ETA, else the
+                       larger closed_bits. Level dominates outside a genuine near-tie.
+
+    Non-COCOA procs (cross-engine tests only) have no live metric and sort last.
     RANKING ONLY -- no Ganak handoff here."""
     t_rem = max(deadline - time.monotonic(), 1.0)
-    scored = []
-    used = "closed_bits LEVEL"
-    for p in survivors:
-        if p.arch.engine == "cocoa":
-            traj = p.closed_bits_traj()
-            span = (traj[-1][0] - traj[0][0]) if len(traj) >= 2 else 0.0
-            if span >= RWR_MIN_SPAN_S:
-                fc = predict_cb_recency(traj, p.n_root_estimate(), p.active_wall(), t_rem)
-                eta = fc["eta_s"]
-                key = eta if (eta is not None and eta != float("inf")) else float("inf")
-                used = "recency ETA"
-            else:
-                # Too few samples for a trustworthy ETA -> rank by closed_bits LEVEL.
-                key = -p.closed_bits()
+    cocoa = [p for p in survivors if p.arch.engine == "cocoa"]
+    others = [p for p in survivors if p.arch.engine != "cocoa"]
+    if keep_n >= len(survivors):
+        return list(survivors)
+
+    def _cb(p):
+        return p.closed_bits()
+
+    def _eta(p):
+        fc = predict_cb_recency(p.closed_bits_traj(), p.n_root_estimate(),
+                                p.active_wall(), t_rem)
+        e = fc.get("eta_s")
+        return e if (e is not None and e != float("inf")) else float("inf")
+
+    by_eta = lambda p: (_eta(p), -_cb(p))   # min ETA, ties -> higher cb
+    by_cb = lambda p: (_cb(p), -_eta(p))    # max cb,  ties -> smaller ETA
+
+    if stage == 1 and keep_n == 2 and len(cocoa) >= 2:                  # 4->2 HEDGE
+        leader = max(cocoa, key=by_cb)
+        eta_leader = min(cocoa, key=by_eta)
+        if eta_leader is leader:
+            second = min((p for p in cocoa if p is not leader), key=by_eta)
+            kept, how = [leader, second], "hedge {top-cb==min-eta, +2nd-eta}"
         else:
-            key = float("inf")
-        scored.append((key, -p.closed_bits(), p))
-    scored.sort(key=lambda s: (s[0], s[1]))
-    kept = [s[2] for s in scored[:keep_n]]
-    log(f"[select] keep {keep_n}/{len(survivors)} by {used} -> "
-        f"{[k.arch.name for k in kept]}")
+            kept, how = [leader, eta_leader], "hedge {top-cb, min-eta}"
+        log(f"[select] keep {keep_n}/{len(survivors)} by {how} -> {[k.arch.name for k in kept]}")
+        return kept
+
+    if stage == 2 and keep_n == 1 and len(cocoa) >= 2:                  # 2->1 BANDED
+        hi, lo = max(cocoa, key=_cb), min(cocoa, key=_cb)
+        if abs(_cb(hi) - _cb(lo)) < SELECT_K_BAND:
+            winner, how = min(cocoa, key=by_eta), f"banded near-tie |dcb|<{SELECT_K_BAND}b -> min ETA"
+        else:
+            winner, how = hi, f"banded |dcb|>={SELECT_K_BAND}b -> max cb"
+        log(f"[select] keep 1/{len(survivors)} by {how} -> {winner.arch.name}")
+        return [winner]
+
+    # stage 0 (8->4) + any fallback: closed_bits LEVEL
+    kept = (sorted(cocoa, key=lambda p: -_cb(p)) + others)[:keep_n]
+    log(f"[select] keep {keep_n}/{len(survivors)} by closed_bits LEVEL -> {[k.arch.name for k in kept]}")
     return kept
 
 
@@ -324,7 +348,7 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
     for stage, keep_n in enumerate(_FUNNEL_KEEP):
         if len(survivors) <= 1:
             break
-        kept = _select_by_eta(survivors, min(keep_n, len(survivors)), deadline, log)
+        kept = _select(survivors, min(keep_n, len(survivors)), deadline, log, stage)
         for p in survivors:
             if p not in kept:
                 p.kill()
