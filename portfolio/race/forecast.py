@@ -352,7 +352,8 @@ def predict_cb_recency(traj, n_root, t_active, t_remaining, margin=MARGIN,
 # beyond-envelope, never load-bearing on the 7 cases); STALL_RATE/PLAT_RATE share
 # one gate, so an ultra-slow-but-real grinder could read as a single plateau.
 # ===========================================================================
-def predict_cb_tree(traj, n_root, t_active, t_remaining):
+def predict_cb_tree(traj, n_root, t_active, t_remaining, *,
+                    recent_win=180.0, grace=120.0, eta_margin=2.0, rem_floor=2.0):
     """Escape-history Ganak-handoff forecaster (conservative variant). Returns
     {'verdict': 'keep'|'bail', 'reason': str}. An *escape* is a cb jump (>= jump_thr)
     immediately preceded by a real plateau (>= MIN_PLAT s of near-zero progress); a
@@ -379,7 +380,7 @@ def predict_cb_tree(traj, n_root, t_active, t_remaining):
     jump_thr = max(JUMP_ABS, JUMP_FRAC * span)
 
     # ---- recent_rate over a trailing window (conservative: long 180s window) ----
-    RECENT_WIN = 180.0
+    RECENT_WIN = recent_win
     EPS = 2e-5                                     # bits/sec; below this == "not progressing"
     j = len(traj) - 1
     while j > 0 and (t_end - traj[j][0]) < RECENT_WIN:
@@ -395,8 +396,8 @@ def predict_cb_tree(traj, n_root, t_active, t_remaining):
         # recency forecaster had was dropped here. Restore it: bail a progressing leader
         # whose eta blows the budget -- UNLESS it is a near-finisher
         # (remaining <= KEEP_REM_FLOOR, e.g. 025 at 91%), which we always ride out.
-        KEEP_ETA_MARGIN = 2.0      # keep iff eta <= 2x the remaining budget
-        KEEP_REM_FLOOR = 2.0       # bits; never bail a leader this close to done
+        KEEP_ETA_MARGIN = eta_margin   # keep iff eta <= margin x the remaining budget
+        KEEP_REM_FLOOR = rem_floor     # bits; never bail a leader this close to done
         if finite_root and t_remaining > 0 and remaining > KEEP_REM_FLOOR:
             eta = remaining / recent_rate
             if eta > KEEP_ETA_MARGIN * t_remaining:
@@ -418,7 +419,7 @@ def predict_cb_tree(traj, n_root, t_active, t_remaining):
     stall_dur = t_end - last_inc_t
 
     # ---- grace: short plateaus get a fair chance (conservative: generous) ----
-    GRACE = 120.0
+    GRACE = grace
     if stall_dur < GRACE:
         return {'verdict': 'keep', 'reason': f'short plateau stall={stall_dur:.0f}<grace'}
 
