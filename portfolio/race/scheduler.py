@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -136,6 +137,39 @@ def _kill_all(started: list):
         q.kill()
 
 
+# Grace after the wall deadline before the watchdog force-kills. Caps any overrun at this
+# (vs the ~6-9 min mc2026_027 ran past its 60-min budget), while leaving room for the
+# normal end-of-budget shutdown (BUDGET return + Ganak-handoff cleanup) to finish first.
+WATCHDOG_GRACE_S = 60.0
+
+
+def _spawn_wall_watchdog(deadline: float, started: list, budget_s: float, log=_stdout,
+                         grace_s: float = WATCHDOG_GRACE_S, poll_s: float = 1.0):
+    """Enforce the WALL budget independent of the main poll loop. The in-loop
+    `now >= deadline` check lives inside _run_window's 0.1s poll, which on a loaded /
+    memory-thrashing machine can be starved long past the deadline (mc2026_027 ran ~6-9 min
+    over a 60-min budget, still emitting monitor lines, never returning BUDGET). This daemon
+    fires `grace_s` after the deadline and force-kills every still-live spawned proc --
+    closing their pipes unblocks the reader threads and the stalled main loop, so the run
+    ends near budget regardless of scheduling. No-op if the normal path already finished
+    (no live procs). Returns the started daemon thread."""
+    def _run():
+        while time.monotonic() < deadline + grace_s:
+            time.sleep(poll_s)
+        live = [p for p in started if p.proc is not None and not p.finished()]
+        if live:
+            log(f"[watchdog] WALL budget + {grace_s:.0f}s grace exceeded "
+                f"({budget_s + grace_s:.0f}s); main loop stalled past deadline -- "
+                f"force-killing {len(live)} live proc(s): "
+                f"{', '.join(p.arch.name for p in live)} "
+                f"(max active_wall={max(p.active_wall() for p in live):.0f}s)")
+            for p in started:
+                p.kill()
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return t
+
+
 def _group_rss_gb(procs) -> float:
     """Total resident memory (GB) across the procs (SIGSTOP'd ones still count, which is
     the point -- suspended king-of-the-hill configs hold their RAM)."""
@@ -182,6 +216,7 @@ def _handoff_to_ganak(fallback, cnf, pi, deadline, started, log, reason) -> dict
         q.kill()
     gp = ManagedProc(fallback, cnf, pi)
     gp.start()
+    started.append(gp)   # so the wall-clock watchdog also covers the Ganak fallback
     log(f"  [ganak] {fallback.name} to completion "
         f"({deadline - time.monotonic():.0f}s left, 26 GB)...")
     out = _run_window(gp, deadline - time.monotonic() + 1.0, deadline, log, "ganak",
@@ -237,6 +272,7 @@ def run_race(cnf: str, budget_s: float = 3600.0, round1_s: float = 60.0,
     deadline = time.monotonic() + budget_s
     started: list[ManagedProc] = []
     survivors: list[ManagedProc] = []    # all configs that ran round 1 (suspended)
+    _spawn_wall_watchdog(deadline, started, budget_s, log)   # hard WALL cap (see mc2026_027)
 
     # ---- ROUND 1: scout every config; select frontrunners after ----
     for i, arch in enumerate(archetypes):
