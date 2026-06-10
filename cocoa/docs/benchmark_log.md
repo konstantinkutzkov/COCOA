@@ -2716,3 +2716,7 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 ## mc2026_track1_043 — SOLVED, count = 738,969,640,920 (cocoa-reactive r1, 0.1s; ganak-verified)
 
 **550v / 2001-cl, band=MID, log2_cost=72.3, sep_ratio=0.0418, sepsize=23, worst_leaf=4, n_leaves=179, arjun substantial=True.** SOLVED by **cocoa-reactive** in round 1, **0.1s**, count = **738,969,640,920** (~7.4e11); `ganak --prob 0` = same (0.09s) — match ✓. Same trivial profile as 041 (band=mid + small separator + arjun=True + clean decomposition ⇒ instant for both). Run of easy ones continues (037/041/043 all sub-second).
+
+## mc2026_track1_045 — SOLVED, count = 32,334,741,710 (cocoa-nosep-cascade r1, 6.0s; ganak-verified)
+
+**1337v / 24,777-cl, band=HIGH, log2_cost=287.7, sep_ratio=0.066, sepsize=88, worst_leaf=12, n_leaves=328, arjun substantial=True** — essentially the **twin of 039** (1413v/29487cl, same band/arjun profile). SOLVED by **cocoa-nosep-cascade** in round 1, **6.0s** active, count = **32,334,741,710** (~3.2e10); `ganak --prob 0` = same (10.36s) — match ✓, and here **COCOA (6.0s) beat ganak (10.36s)**. Same mechanism as 039: the separator configs (cocoa-plain/cache-max) mirage-ground to ~900 closed_bits / pct ~1e-34 while nosep-cascade cracked it in 6s. **Two-for-two on the band=high + arjun=True ⇒ nosep-cascade-wins-fast profile** (039, 045) — distinct from band=high + arjun=False ⇒ both-lose (029, 033). The arjun signal is looking like a reliable tractability discriminator within band=high.
