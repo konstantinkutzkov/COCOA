@@ -2809,3 +2809,7 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 ## mc2026_track1_075 — SOLVED, count = 6,905,169,454 (cocoa-plain r1, 0.5s; ganak-verified)
 
 **37v / 107-cl (tiny), band=LOW, log2_cost=32.2, sep_ratio=0.541 / sepsize=20, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.5s**, count = **6,905,169,454** (~6.9e9); `ganak --prob 0` = same (0.62s) — match ✓. Tiny (37 vars): high sep_ratio (0.54) but a trivially small search → band=low → instant for both. (Reinforces: at tiny var counts the separator ratio is moot — there's just not enough search to matter.)
+
+## mc2026_track1_077 — SOLVED, count = 1,214,819,892,986 (cocoa-reactive r1, 14.4s; ganak-verified 1.9s)
+
+**80v / 238-cl, band=MID, log2_cost=45.4, sep_ratio=0.3875 / sepsize=31, arjun substantial=False.** SOLVED by **cocoa-reactive** in round 1, **14.4s**, count = **1,214,819,892,986** (~1.2e12); `ganak --prob 0` = same (1.9s) — match ✓. Band=mid + arjun=False family (049/051/053), solved in round 1. Here **ganak (1.9s) was much faster than COCOA (14.4s)** — so arjun=False is NOT always slow for ganak (cf 049/051/053 where ganak took 199–433s); 077's structure was ganak-friendly despite arjun not-substantial.
