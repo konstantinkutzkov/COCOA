@@ -2917,3 +2917,15 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_119 — SOLVED, count = 1,000,000 = 10⁶ (cocoa-plain monitor, 275.8s; ganak-verified 286s)
 
 **47,647v / 204,121-cl (BY FAR the largest in the sweep), band=HIGH, log2_cost=1279 (deepest yet), sep_ratio=0.013 / sepsize=620, arjun substantial=True.** SOLVED by **cocoa-plain** in the monitor phase, **275.8s**, count = **1,000,000** (exactly 10⁶); `ganak --prob 0` = same (285.95s) — match ✓. Both engines ~4.7 min (comparable). Despite 47k vars / 204k clauses, it decomposed to ~0.9 bits (pct ~55%) within 1 min; the remaining ~21% (one last big component) took the rest of the time to enumerate exactly to 10⁶. Clean round count (10⁶ = 2⁶·5⁶). Largest instance in the sweep — both engines solve it.
+
+## mc2026_track1_121 — SOLVED, count = 55,143 (ganak-handoff, 93.9s) — MIRAGE + fragile-but-correct handoff
+
+**5259v / 15,676-cl, band=HIGH, log2_cost=188.5, sep_ratio=0.020 / sepsize=105 (tiny metis separator — OVER-PROMISED), arjun substantial=False.** SOLVED via ganak-handoff, count = **55,143** (ganak's exact `--prob 0`, the oracle; COCOA was bailed so no cross-check).
+
+**The count is TINY (55,143 ≈ 2¹⁶) — a mirage.** COCOA's live metrics screamed deep (n_root≈5099, closed_bits ~5098, "~1 bit remaining"), but closed_bits measures decomposition-search depth (≈ var count), not the count. The tiny metis separator split the top cleanly, but one resulting **component** was the hard part: COCOA decomposed ~65% then got stuck crawling that one component (decision rate ~96/s — barely searching; pct bursting 47%→65% over 25 min in fits-and-starts), while ganak's Arjun cracked the whole thing in 94s.
+
+**Handoff — right outcome, fragile mechanism, and it exposed two design bugs (both confirm the eta-vs-bits critique):**
+1. **REM_FLOOR(2 bits) is a bits-cutoff that contradicts the pct-gate.** It kept the creeping-but-doomed near-finisher (rem~1 bit, pct-ETA ~hours) out of the eta-bail for ~25 min. The handoff only fired by luck when the leader fully **STALLED** at +43m → dropped into the frozen/stall branch (reason: "no escapes ever") which REM_FLOOR doesn't guard. A steadily-creeping leader would have ridden to a timeout instead.
+2. **The escape/patience detector is closed_bits-based, blind to pct-bursts near the finish.** 121's bursts were big in pct (count-chunks resolving) but tiny in cb (~0.06-bit steps near n_root), so the tree credited **0 escapes** → gave the leader **no patience** → bailed at the first stall. The opposite of "show patience after a strong beginning."
+
+**Cost of the bugs:** had the gate been pct-aware + ETA-driven (not bits-floored), it would have handed off ~+16m → solved ~+18m total, vs the ~+45m actually spent. **FIX queued:** REM_FLOOR(2) → tiny sliver guard (~0.2 bits); route near-finishers through the escape-history-gated pct-ETA; and move escape/patience detection into pct-space near the finish (so count-chunk bursts earn patience). Regression test to be seeded with 121's trajectory.
