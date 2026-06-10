@@ -1,0 +1,18 @@
+[step1] mc2026_track1_113.cnf — structural analysis (what METIS produced):
+    metis root cut : sep_ratio=0.02075 balance=0.399348 sepsize=26 n_vars=1253
+    nd_cost (tree) : band=mid log2_cost=56.193792 root_sep=25 max_path=53.0 worst_leaf=3 n_leaves=870
+    arjun signal   : substantial=True
+[step2] band=mid -> PHASE-2 SOLVERS SELECTED (8): ['cocoa-reactive', 'cocoa-adaptive', 'cocoa-unified-sep', 'cocoa-sep-cascade', 'cocoa-plain', 'cocoa-cache-max', 'cocoa-nosep-cascade', 'cocoa-adaptive-nosep']  (+Ganak handoff on sustained overshoot)
+[step2] forecast trace -> /Users/konstantin.kutzkov/Desktop/Code/COCOA/portfolio/runlogs/forecast_mc2026_track1_113.jsonl
+  [r1] cocoa-reactive running (window 60s)...
+    [r1~live] cocoa-reactive: pct_lin=0 closed_bits=0 decisions=0 (active 10s)
+    [r1~live] cocoa-reactive: pct_lin=11.7182 closed_bits=1210.91 decisions=1900357 (active 20s)
+    [r1~live] cocoa-reactive: pct_lin=17.767 closed_bits=1211.51 decisions=5616710 (active 30s)
+    [r1~live] cocoa-reactive: pct_lin=18.7266 closed_bits=1211.58 decisions=7281021 (active 40s)
+    [r1~live] cocoa-reactive: pct_lin=24.199 closed_bits=1211.95 decisions=8806952 (active 50s)
+[r1] cocoa-reactive: pct_lin=90.3344 closed_bits=1213.85 decisions=10751949 closed_bits=1213.8 vel=0.074 (active 60s)
+  [r1] cocoa-adaptive running (window 60s)...
+[FINISH] cocoa-adaptive completed in round1: count=2386179727798317443182387728759025280637542166208758384036037409346857065068615755489422934430477849440649064528671759799828200
+
+=== pipeline result: {'status': 'solved', 'winner': 'cocoa-adaptive', 'decided': 'cocoa-adaptive', 'count': '2386179727798317443182387728759025280637542166208758384036037409346857065068615755489422934430477849440649064528671759799828200', 'round': 'round1', 'active_wall_s': 8.4, 'step1_band': 'mid', 'step1_arjun_substantial': True, 'cnf': 'mc2026_track1_113.cnf'} ===
+COUNT: 2386179727798317443182387728759025280637542166208758384036037409346857065068615755489422934430477849440649064528671759799828200

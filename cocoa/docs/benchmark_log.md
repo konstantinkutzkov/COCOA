@@ -2901,3 +2901,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_111 — SOLVED, count = 2.7×10¹²³ (124 digits) (cocoa-adaptive r1, 5.3s; ganak-verified)
 
 **1271v / 3156-cl, band=MID, log2_cost=54.9, sep_ratio=0.0197 / sepsize=25 (tiny separator), arjun substantial=True** — near-twin of 107 (1271v, band=mid, tiny sep, arjun=True). SOLVED by **cocoa-adaptive** in round 1, **5.3s**, count = **2716090255555394786865673931721659870192662048106344246114776105307491592972573691035248570056672524173798505601634040233480** (~2.7e123, 124 digits); `ganak --prob 0` = same (1.89s; exact full-string match ✓). Decomposable → another huge count computed fast (cf 107's 137-digit solve).
+
+## mc2026_track1_113 — SOLVED, count = 2.4×10¹²⁶ (127 digits) (cocoa-adaptive r1, 8.4s; ganak-verified)
+
+**1253v / 3039-cl, band=MID, log2_cost=56.2, sep_ratio=0.0208 / sepsize=26 (tiny separator), arjun substantial=True** — 107/111 family. SOLVED by **cocoa-adaptive** in round 1, **8.4s**, count = **2386179727798317443182387728759025280637542166208758384036037409346857065068615755489422934430477849440649064528671759799828200** (127 digits); `ganak --prob 0` = same (1.94s; exact full-string match ✓). Third in the ~1253–1271-var / band=mid / tiny-sep / arjun=True / huge-count cluster (107/111/113) — all cocoa-adaptive round-1 decompose-solves.
