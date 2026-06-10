@@ -2795,3 +2795,9 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 - **Both-lose set now 029 / 033 / 047 / 069** — all arjun=False with a large separator (047 band=mid, others band=high). The ~6-bit COCOA tail (pct 1.6%) holds the bulk of the count and neither engine can enumerate it.
 - **Handoff economics:** ganak got a *healthy* ~43 min (well above the ~30-min floor) and still lost → for this family the bottleneck is the count's intrinsic hardness, not handoff timing. (Reassuring for the pct-gate: bailing COCOA earlier only helps; it can't hurt a case ganak loses with 43 min.)
 - **pct-gate note:** the handoff fired via the FROZEN/stall path (leader rate≈0), not the pct-gate (needs recent_rate>EPS). The pct-gate's *creeping-but-doomed* bail is still unexercised live (049/051/053 near-finishers kept by the floor; 067 mirage solved; 069 froze outright).
+
+## mc2026_track1_071 — SOLVED, count = 25,205,389,326 (cocoa-plain r1, 2.3s; ganak-verified 13.4s)
+
+**387v / 7106-cl, band=HIGH, log2_cost=134, sep_ratio=0.207 / sepsize=118, n_leaves=850, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **2.3s**, count = **25,205,389,326** (~2.5e10); `ganak --prob 0` = same (13.4s) — match ✓ (COCOA edged ganak). **Breaks the "band=high + arjun=False ⇒ both-lose" expectation:** 071 has that exact profile (large separator included) yet solved in 2.3s.
+
+**Consolidated picture of the predictors (so far):** the only *clean* signals are (a) **arjun=True ⇒ solvable** (039/045 nosep-cascade; 067 mirage; via ganak otherwise) and (b) **tiny separator ⇒ COCOA instant** (055/057/059/063/065). **arjun=False + large separator is UNPREDICTABLE** — solvable {049,051,053,071} vs both-lose {029,033,047,069} — because it comes down to the intrinsic count hardness (071's 2.5e10 is modest), which the structural features only weakly predict. Lesson: don't pre-route arjun=False+large-sep instances; run the race and let the runtime decide.
