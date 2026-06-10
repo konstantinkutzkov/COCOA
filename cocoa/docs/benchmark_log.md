@@ -2769,3 +2769,7 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 ## mc2026_track1_059 — SOLVED, count = 549,755,813,888 = 2³⁹ (cocoa-plain r1, 0.1s; ganak-verified)
 
 **58v / 304-cl, band=LOW, log2_cost=16.5, sep_ratio=0.052 / sepsize=3 (tiny separator), arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **549,755,813,888 = exactly 2³⁹**; `ganak --prob 0` = same (0.00s) — match ✓. Third in the band=low / tiny-separator / power-of-2 run (**055 = 2⁵⁴, 057 = 2⁷⁴, 059 = 2³⁹**), all instant for both engines. "Tiny separator ⇒ COCOA instant" now three-for-three.
+
+## mc2026_track1_061 — UNSAT, count = 0 (cocoa-plain r1, 0.1s; ganak-verified)
+
+**1492v / 6600-cl, band=LOW, log2_cost=14.6, sep_ratio=0.0 / sepsize=0, arjun substantial=False.** **UNSATISFIABLE — count = 0.** cocoa-plain reported count=0 in round 1, 0.1s; `ganak --prob 0` = `s UNSATISFIABLE`, count 0 (0.02s) — match ✓. **First UNSAT in the sweep**; both engines agree, so count=0 is a genuine UNSAT, not a false-UNSAT soundness bug (the most important case to cross-check). sepsize=0 reflects the formula collapsing under BCP/decomposition to a contradiction.
