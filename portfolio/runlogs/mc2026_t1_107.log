@@ -1,0 +1,20 @@
+[step1] mc2026_track1_107.cnf — structural analysis (what METIS produced):
+    metis root cut : sep_ratio=0.021243 balance=0.417203 sepsize=27 n_vars=1271
+    nd_cost (tree) : band=mid log2_cost=53.672785 root_sep=21 max_path=51.0 worst_leaf=3 n_leaves=881
+    arjun signal   : substantial=True
+[step2] band=mid -> PHASE-2 SOLVERS SELECTED (8): ['cocoa-reactive', 'cocoa-adaptive', 'cocoa-unified-sep', 'cocoa-sep-cascade', 'cocoa-plain', 'cocoa-cache-max', 'cocoa-nosep-cascade', 'cocoa-adaptive-nosep']  (+Ganak handoff on sustained overshoot)
+[step2] forecast trace -> /Users/konstantin.kutzkov/Desktop/Code/COCOA/portfolio/runlogs/forecast_mc2026_track1_107.jsonl
+  [r1] cocoa-reactive running (window 60s)...
+    [r1~live] cocoa-reactive: pct_lin=4.28587e-12 closed_bits=1181.59 decisions=3483991 (active 10s)
+    [r1~live] cocoa-reactive: pct_lin=8.08025e-12 closed_bits=1182.51 decisions=7830076 (active 20s)
+    [r1~live] cocoa-reactive: pct_lin=1.46912e-11 closed_bits=1183.37 decisions=12205978 (active 30s)
+    [r1~live] cocoa-reactive: pct_lin=2.23105e-11 closed_bits=1183.97 decisions=16536415 (active 40s)
+    [r1~live] cocoa-reactive: pct_lin=3.67616e-11 closed_bits=1184.69 decisions=20904034 (active 50s)
+[r1] cocoa-reactive: pct_lin=4.34692e-11 closed_bits=1184.93 decisions=25163638 closed_bits=1184.9 vel=0.054 (active 60s)
+  [r1] cocoa-adaptive running (window 60s)...
+    [r1~live] cocoa-adaptive: pct_lin=21.1573 closed_bits=1223.76 decisions=321925 (active 10s)
+    [r1~live] cocoa-adaptive: pct_lin=71.2644 closed_bits=1225.51 decisions=961728 (active 20s)
+[FINISH] cocoa-adaptive completed in round1: count=27074324552188263115193324525043910411466079287194737862239975111039283194478178486570350758010456761223622424071136573497534086266600
+
+=== pipeline result: {'status': 'solved', 'winner': 'cocoa-adaptive', 'decided': 'cocoa-adaptive', 'count': '27074324552188263115193324525043910411466079287194737862239975111039283194478178486570350758010456761223622424071136573497534086266600', 'round': 'round1', 'active_wall_s': 20.9, 'step1_band': 'mid', 'step1_arjun_substantial': True, 'cnf': 'mc2026_track1_107.cnf'} ===
+COUNT: 27074324552188263115193324525043910411466079287194737862239975111039283194478178486570350758010456761223622424071136573497534086266600

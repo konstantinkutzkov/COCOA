@@ -2889,3 +2889,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_105 — SOLVED, count = 288 (cocoa-reactive r1, 0.1s; ganak-verified)
 
 **64v / 384-cl (tiny), band=MID, log2_cost=41.17, sep_ratio=0.484 / sepsize=31, arjun substantial=False.** SOLVED by **cocoa-reactive** in round 1, **0.1s**, count = **288**; `ganak --prob 0` = 288 (0.42s) — match ✓. Same structural shape as 097 (64v, band=mid, identical log2_cost 41.17) but arjun=False / count 288 vs 097's arjun=True / count 3 — another sibling pair.
+
+## mc2026_track1_107 — SOLVED, count = 2.7×10¹³⁷ (137 digits) (cocoa-adaptive r1, 20.9s; ganak-verified)
+
+**1271v / 3027-cl, band=MID, log2_cost=53.7, sep_ratio=0.021 / sepsize=27 (tiny separator → fully decomposable), arjun substantial=True.** SOLVED by **cocoa-adaptive** in round 1, **20.9s**, count = **27074324552188263115193324525043910411466079287194737862239975111039283194478178486570350758010456761223622424071136573497534086266600** (~2.7e137, ≈2⁴⁵⁵); `ganak --prob 0` = same (2.33s; exact full-string match ✓). **NOT a mirage** — a genuinely enormous count, computed efficiently *because* the tiny separator makes it a product over near-independent components (huge count ⇏ hard, when decomposable). **Largest count in the sweep so far** (137 digits). Reinforces: count magnitude is orthogonal to difficulty — decomposability is what matters.
