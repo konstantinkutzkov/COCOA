@@ -2755,3 +2755,9 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 ## mc2026_track1_053 — SOLVED, count = 6,827,710,664,219 (cocoa-adaptive-nosep monitor, 187.5s; ganak-verified 199s)
 
 **80v / 224-cl, band=MID, log2_cost=69.1, sep_ratio=0.5875 / sepsize=47-of-80 / balance=0.091, arjun substantial=False — the 047/049/051 family.** SOLVED by **cocoa-adaptive-nosep** in the monitor phase, **187.5s** active, count = **6,827,710,664,219** (~6.83e12); `ganak --prob 0` = same (**199s**, ~3.3 min) — match ✓. Both engines ~3 min (fastest family solve; COCOA edged ganak). Adaptive config won (like 049; 051 went to plain). **arjun=False family tally: 047 both-lose; 049/051/053 all solve in 3–7 min** — confirms a *mixed* family where the winning config rotates (adaptive ↔ separator), vindicating the diverse 8-config race. (Round-1 here was tightly clustered ~75–76.6 with even the cascades keeping pace, unlike the wide spread on 047/049/051.)
+
+## mc2026_track1_055 — SOLVED, count = 18,014,398,509,481,984 = 2⁵⁴ (cocoa-plain r1, 0.1s; ganak-verified)
+
+**80v / 416-cl, band=LOW, log2_cost=16.4, sep_ratio=0.025 / sepsize=2 (TINY separator) / balance=0.5, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **18,014,398,509,481,984 = exactly 2⁵⁴**; `ganak --prob 0` = same (0.01s) — match ✓.
+
+**Sharpens the discriminator: it's the SEPARATOR (decomposability), not arjun, that sets COCOA tractability.** 055 is arjun=False and tiny like 047–053, but has a *2-variable* separator → trivially decomposable → instant for COCOA. So the cleaner picture: **large separator ⇒ COCOA must grind** (047–053; finishes only if the count is small enough), **tiny separator ⇒ COCOA instant regardless of arjun** (055). arjun=True is the orthogonal *Ganak* tractability signal (preprocessing cracks it, e.g. 039/045). The count being a clean 2⁵⁴ fits a near-fully-independent-component structure (hence the tiny separator).
