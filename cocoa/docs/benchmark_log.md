@@ -2805,3 +2805,7 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 ## mc2026_track1_073 — SOLVED, count = 2,268 (cocoa-plain r1, 1.3s; ganak-verified 1.4s)
 
 **381v / 6918-cl, band=HIGH, log2_cost=135, sep_ratio=0.189 / sepsize=127, n_leaves=835, arjun substantial=True.** SOLVED by **cocoa-plain** in round 1, **1.3s**, count = **2,268**; `ganak --prob 0` = same (1.4s) — match ✓. Near-twin of 071 (387v, band=high, large sep) but **arjun=True** → solved even faster (1.3s vs 071's 2.3s). A mini-mirage (band=high large search, but tiny count 2268, flagged by arjun=True). Confirms the clean signal: **arjun=True ⇒ solvable**.
+
+## mc2026_track1_075 — SOLVED, count = 6,905,169,454 (cocoa-plain r1, 0.5s; ganak-verified)
+
+**37v / 107-cl (tiny), band=LOW, log2_cost=32.2, sep_ratio=0.541 / sepsize=20, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.5s**, count = **6,905,169,454** (~6.9e9); `ganak --prob 0` = same (0.62s) — match ✓. Tiny (37 vars): high sep_ratio (0.54) but a trivially small search → band=low → instant for both. (Reinforces: at tiny var counts the separator ratio is moot — there's just not enough search to matter.)
