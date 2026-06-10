@@ -2881,3 +2881,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_101 — SOLVED, count = 3 (cocoa-plain r1, 0.1s; ganak-verified)
 
 **64v / 147-cl (tiny), band=LOW, log2_cost=8.0, sep_ratio=0.125 / sepsize=22, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **3**; `ganak --prob 0` = 3 (0.00s) — match ✓. Tiny + band=low → trivial for both.
+
+## mc2026_track1_103 — SOLVED, count = 1 (cocoa-plain r1, 0.1s; ganak-verified)
+
+**64v / 148-cl (tiny), band=LOW, log2_cost=8.0, sep_ratio=0.0625 / sepsize=20, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **1** (uniquely satisfiable); `ganak --prob 0` = 1 (0.00s) — match ✓. Near-twin of 101 (64v/147cl, band=low, log2_cost 8) — sibling instances (count 1 vs 101's 3).
