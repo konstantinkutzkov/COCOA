@@ -2844,3 +2844,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 
 - **Both-lose set now 029 / 033 / 047 / 069 / 081 / 085** — all arjun=False + large separator.
 - ganak telemetry again the both-lose signature: 24.5M conflicts @ ~18k/s, **cubes_resolved=0, cache_entries=0, cache_miss_rate=1.000** — zero decomposition/caching traction, pure brute search. The **081/083/085 triplet** (near-identical 320-var structures) is consistently both-lose.
+
+## mc2026_track1_087 — SOLVED, count = 17,528,422,464 (cocoa-plain r1, 1.8s; ganak-verified)
+
+**39v / 256-cl (tiny), band=LOW, log2_cost=25.5, sep_ratio=0.308 / sepsize=12, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **1.8s**, count = **17,528,422,464** (~1.75e10); `ganak --prob 0` = same (0.19s) — match ✓. Tiny + band=low → trivial for both engines; a clean break from the 081/083/085 both-lose triplet (those were 320v / band=high).
