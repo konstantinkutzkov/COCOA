@@ -2649,12 +2649,10 @@ mc2026 round-1 short-circuits so far: 009 (adaptive), 013 (reactive) — differe
 ## mc2026 early-index backfill (003 / 005 / 011 / 023) — recorded retroactively
 
 Run in an earlier session but never given individual entries; logged here for completeness from their `runlogs/mc2026_t1_0NN.log` pipeline-result lines (all band=low trivial round-1 cocoa-plain solves):
-- **003** — SOLVED, count = **8** (r1, 0.1s; arjun=False). ganak-verify PENDING (deferred — 085's ganak currently owns the box).
-- **005** — SOLVED, count = **6** (r1, 0.1s; arjun=False). ganak-verify PENDING.
-- **023** — SOLVED, count = **449,260,070** (r1, 0.1s; arjun=False). ganak-verify PENDING.
+- **003** — SOLVED, count = **8** (cocoa-plain r1, 0.1s; arjun=False); ganak `--prob 0` = 8 (0.00s) — match ✓.
+- **005** — SOLVED, count = **6** (cocoa-plain r1, 0.1s; arjun=False); ganak `--prob 0` = 6 (0.01s) — match ✓.
+- **023** — SOLVED, count = **449,260,070** (cocoa-plain r1, 0.1s; arjun=False); ganak `--prob 0` = 449,260,070 (0.29s) — match ✓.
 - **011** — KILLED mid-run, no pipeline result (UNRESOLVED, like 083). NB: the `mc2025_track1_011` rows elsewhere in this log are a different, prior instance set — not this one.
-
-ganak cross-checks for 003/005/023 to follow once 085 frees the box.
 
 ## mc2026_track1_025 — TIMEOUT at 91% (cocoa-plain, 0.14 bits from done); tree correctly kept a slow progressor
 
@@ -2835,3 +2833,14 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 - **Both-lose set now 029/033/047/069/081** — all arjun=False + large separator.
 - **Cleanest both-lose telemetry yet:** ganak's final sample = 43.2M conflicts @ ~17k/s, **cubes_resolved=0, cache_entries=0, cache_miss_rate=1.000** → ganak got ZERO decomposition/caching traction; pure brute conflict search, no answer. Neither engine has a structural handle on this family's hard members — it's intrinsic count hardness.
 - **pct-gate again unexercised:** the funnel monitored the *walled* cascade (frozen-path bail), not the creeping adaptive. Pattern holds — the banded 2→1 keeps the higher-level config, which tends to be the walled one, so the creeping-but-doomed pct-gate path rarely gets the leader slot.
+
+## mc2026_track1_083 — KILLED mid-ganak (no result; was trending both-lose)
+
+Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rounds 1–3), handed off; ganak ran ~13 min (18k confl/s, cache_K=0 — the both-lose signature) when **killed at the user's request** (had to step away). No count → UNRESOLVED (like 011). Can be re-run to settle it, but was trending both-lose.
+
+## mc2026_track1_085 — TIMEOUT (both engines lose); third cascade-led wall (081/083 triplet)
+
+**320v / 2880-cl, band=HIGH, log2_cost=218.5, sep_ratio=0.475 / sepsize=152, arjun substantial=False** — an exact structural triplet with 081 (320v/2880cl) and 083. Both engines failed. Round 1: cascades led to 312.398 closed_bits (~7.6 bits, pct 0.515%) then **walled** (identical across rounds 1/2/3, both cascade configs); adaptives crept to ~299 (~21 bits, doomed); separators stuck ~285. Funnel: 8→4 {cascades+adaptives} → 4→2 {nosep-cascade walled + adaptive-nosep creeping} → 2→1 nosep-cascade → frozen-path handoff (~+16m) → **ganak-native ran its FULL ~44-min window → NO count → TIMEOUT**. (Run fully at the user's call, to see if ganak would surprise — it did not.)
+
+- **Both-lose set now 029 / 033 / 047 / 069 / 081 / 085** — all arjun=False + large separator.
+- ganak telemetry again the both-lose signature: 24.5M conflicts @ ~18k/s, **cubes_resolved=0, cache_entries=0, cache_miss_rate=1.000** — zero decomposition/caching traction, pure brute search. The **081/083/085 triplet** (near-identical 320-var structures) is consistently both-lose.
