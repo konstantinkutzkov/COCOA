@@ -1,0 +1,18 @@
+[step1] mc2026_track1_111.cnf — structural analysis (what METIS produced):
+    metis root cut : sep_ratio=0.01967 balance=0.399679 sepsize=25 n_vars=1271
+    nd_cost (tree) : band=mid log2_cost=54.927394 root_sep=24 max_path=50.0 worst_leaf=3 n_leaves=929
+    arjun signal   : substantial=True
+[step2] band=mid -> PHASE-2 SOLVERS SELECTED (8): ['cocoa-reactive', 'cocoa-adaptive', 'cocoa-unified-sep', 'cocoa-sep-cascade', 'cocoa-plain', 'cocoa-cache-max', 'cocoa-nosep-cascade', 'cocoa-adaptive-nosep']  (+Ganak handoff on sustained overshoot)
+[step2] forecast trace -> /Users/konstantin.kutzkov/Desktop/Code/COCOA/portfolio/runlogs/forecast_mc2026_track1_111.jsonl
+  [r1] cocoa-reactive running (window 60s)...
+    [r1~live] cocoa-reactive: pct_lin=6.67077e-14 closed_bits=1143.59 decisions=1297505 (active 10s)
+    [r1~live] cocoa-reactive: pct_lin=2.66789e-13 closed_bits=1145.59 decisions=2602339 (active 20s)
+    [r1~live] cocoa-reactive: pct_lin=7.36133e-13 closed_bits=1147.05 decisions=3911648 (active 30s)
+    [r1~live] cocoa-reactive: pct_lin=1.13681e-11 closed_bits=1151 decisions=4970541 (active 40s)
+    [r1~live] cocoa-reactive: pct_lin=1.14157e-11 closed_bits=1151.01 decisions=6115246 (active 50s)
+[r1] cocoa-reactive: pct_lin=1.15544e-11 closed_bits=1151.02 decisions=7214876 closed_bits=1151.0 vel=0.119 (active 60s)
+  [r1] cocoa-adaptive running (window 60s)...
+[FINISH] cocoa-adaptive completed in round1: count=2716090255555394786865673931721659870192662048106344246114776105307491592972573691035248570056672524173798505601634040233480
+
+=== pipeline result: {'status': 'solved', 'winner': 'cocoa-adaptive', 'decided': 'cocoa-adaptive', 'count': '2716090255555394786865673931721659870192662048106344246114776105307491592972573691035248570056672524173798505601634040233480', 'round': 'round1', 'active_wall_s': 5.3, 'step1_band': 'mid', 'step1_arjun_substantial': True, 'cnf': 'mc2026_track1_111.cnf'} ===
+COUNT: 2716090255555394786865673931721659870192662048106344246114776105307491592972573691035248570056672524173798505601634040233480

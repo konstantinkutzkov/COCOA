@@ -2897,3 +2897,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_109 — SOLVED, count = 3.6×10¹⁴¹ (142 digits) (cocoa-plain r1, 0.1s; ganak-verified)
 
 **631v / 1312-cl, band=LOW, log2_cost=14.3, sep_ratio=0.006 / sepsize=4 (tiny separator), arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **3599239755983329331332100508562451780508192148493160801718199944973008026807919208513108710328389951098075842967611059200000000000000000000000** (~3.6e141, 142 digits); `ganak --prob 0` = same (0.22s; exact full-string match ✓). **New sweep record** (142 digits, beats 107's 137) yet **instant** — band=low + 4-var separator → fully decomposable. Magnitude ⊥ difficulty, again.
+
+## mc2026_track1_111 — SOLVED, count = 2.7×10¹²³ (124 digits) (cocoa-adaptive r1, 5.3s; ganak-verified)
+
+**1271v / 3156-cl, band=MID, log2_cost=54.9, sep_ratio=0.0197 / sepsize=25 (tiny separator), arjun substantial=True** — near-twin of 107 (1271v, band=mid, tiny sep, arjun=True). SOLVED by **cocoa-adaptive** in round 1, **5.3s**, count = **2716090255555394786865673931721659870192662048106344246114776105307491592972573691035248570056672524173798505601634040233480** (~2.7e123, 124 digits); `ganak --prob 0` = same (1.89s; exact full-string match ✓). Decomposable → another huge count computed fast (cf 107's 137-digit solve).
