@@ -1,0 +1,12 @@
+[step1] mc2026_track1_035.cnf — structural analysis (what METIS produced):
+    metis root cut : sep_ratio=0.514286 balance=0.411765 sepsize=54 n_vars=105
+    nd_cost (tree) : band=mid log2_cost=82.856717 root_sep=51 max_path=81.0 worst_leaf=0 n_leaves=127
+    arjun signal   : substantial=False
+[step2] band=mid -> PHASE-2 SOLVERS SELECTED (8): ['cocoa-reactive', 'cocoa-adaptive', 'cocoa-unified-sep', 'cocoa-sep-cascade', 'cocoa-plain', 'cocoa-cache-max', 'cocoa-nosep-cascade', 'cocoa-adaptive-nosep']  (+Ganak handoff on sustained overshoot)
+[step2] forecast trace -> /Users/konstantin.kutzkov/Desktop/Code/COCOA/portfolio/runlogs/forecast_mc2026_track1_035.jsonl
+  [r1] cocoa-reactive running (window 60s)...
+    [r1~live] cocoa-reactive: pct_lin=71.829 closed_bits=95.5226 decisions=1632662 (active 10s)
+[FINISH] cocoa-reactive completed in round1: count=16588420
+
+=== pipeline result: {'status': 'solved', 'winner': 'cocoa-reactive', 'decided': 'cocoa-reactive', 'count': '16588420', 'round': 'round1', 'active_wall_s': 13.4, 'step1_band': 'mid', 'step1_arjun_substantial': False, 'cnf': 'mc2026_track1_035.cnf'} ===
+COUNT: 16588420
