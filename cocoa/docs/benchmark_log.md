@@ -2871,3 +2871,9 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_097 — SOLVED, count = 3 (cocoa-reactive r1, 0.1s; ganak-verified)
 
 **64v / 387-cl (tiny), band=MID, log2_cost=41.2, sep_ratio=0.5 / sepsize=32, arjun substantial=True.** SOLVED by **cocoa-reactive** in round 1, **0.1s**, count = **3**; `ganak --prob 0` = 3 (0.00s) — match ✓. Tiny + arjun=True → small count cracked instantly (the arjun=True ⇒ solvable signal again; cf 067/073's small counts).
+
+## mc2026_track1_099 — SOLVED, count = 4,503,632 (cocoa-cache-max round3, 179.6s; ganak-verified 59.3s)
+
+**729v / 10,545-cl, band=HIGH, log2_cost=538, sep_ratio=0.497 / sepsize=362, arjun substantial=True.** SOLVED by **cocoa-cache-max** in round 3, **179.6s**, count = **4,503,632**; `ganak --prob 0` = same (59.3s) — match ✓.
+
+**Twin of 095:** identical count (4,503,632) AND identical var count (729), but different clauses (10,545 vs 3,174) and band (high vs low) — almost certainly the same underlying problem in two encodings. Instructive contrast in *how* they solved: **095** (band=low, deep search n_root≈594) → COCOA leader creeped-but-doomed → **pct-gate bail → ganak rescue**; **099** (band=high) → COCOA **solved directly** (cache-max broke the ~5-bit plateau in round 2 and closed in round 3). Same answer, opposite engine paths — the diverse race + handoff covers both. arjun=True ⇒ solvable held again.
