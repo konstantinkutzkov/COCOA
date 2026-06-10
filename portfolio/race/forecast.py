@@ -390,21 +390,37 @@ def predict_cb_tree(traj, n_root, t_active, t_remaining, *,
     if recent_rate > EPS:
         # Progressing -- but FAST ENOUGH to finish in the remaining budget? A leader can
         # creep at recent_rate>eps yet need many times the budget to close `remaining`
-        # bits. mc2026_027 rode such a "progressing but doomed" leader for ~16 min of
-        # active time (eta ~4500s vs ~2000s budget) because this branch only asked
-        # "moving?", never "moving fast enough?" -- the budget-aware eta check the old
-        # recency forecaster had was dropped here. Restore it: bail a progressing leader
-        # whose eta blows the budget -- UNLESS it is a near-finisher
-        # (remaining <= KEEP_REM_FLOOR, e.g. 025 at 91%), which we always ride out.
-        KEEP_ETA_MARGIN = eta_margin   # keep iff eta <= margin x the remaining budget
+        # bits. mc2026_027/047 rode such "progressing but doomed" leaders for ~16-25 min of
+        # active time because this branch only asked "moving?", then judged "fast enough?"
+        # with a LINEAR eta = remaining/rate.  That is the deceleration trap: closed_bits is
+        # log2(count), so each further bit DOUBLES the linear work left, and the cb-rate must
+        # decay as cb -> n_root.  Fitting a line to that decelerating curve always predicts
+        # arrival too early (047 at +28m: linear eta ~22 min -> keep, while only ~2.4% of the
+        # count was actually closed).  The honest time-to-100% is the pct-space eta
+        #     eta_pct = (2**remaining - 1) / (ln2 * recent_rate),
+        # exponentially larger than remaining/recent_rate.  We test it in LOG space so that
+        # neither 2**remaining (overflow on a far-from-done leader) nor the symmetric
+        # pct_lin = 2^(cb-n_root) (UNDERFLOW to 0.0 on large instances, n_root in the
+        # thousands) is ever materialised -- the exponential lives only inside one log2:
+        #     bail  iff  remaining > log2(ln2 * recent_rate * margin * t_remaining).
+        # All operands are well-conditioned (remaining ~ O(1e3), recent_rate the cb rate).
+        # Near-finishers (remaining <= KEEP_REM_FLOOR, e.g. 025 at 91%) are always ridden out;
+        # there eta_pct -> remaining/rate anyway (2**x-1 ~ x*ln2 as x->0), so the floor and
+        # the log test agree on the last bit.
+        KEEP_ETA_MARGIN = eta_margin   # keep iff the pct-space eta <= margin x remaining budget
         KEEP_REM_FLOOR = rem_floor     # bits; never bail a leader this close to done
         if finite_root and t_remaining > 0 and remaining > KEEP_REM_FLOOR:
-            eta = remaining / recent_rate
-            if eta > KEEP_ETA_MARGIN * t_remaining:
+            log_budget = math.log2(math.log(2.0) * recent_rate * KEEP_ETA_MARGIN * t_remaining)
+            if remaining > log_budget:
+                try:
+                    eta_pct = f'{(2.0 ** remaining - 1.0) / (math.log(2.0) * recent_rate):.0f}s'
+                except OverflowError:
+                    eta_pct = 'inf'
                 return {'verdict': 'bail',
-                        'reason': (f'progressing but doomed: eta={eta:.0f}s>'
+                        'reason': (f'progressing but doomed (pct-eta): rem={remaining:.1f}>'
+                                   f'log2budget={log_budget:.2f} (eta_pct={eta_pct}>'
                                    f'{KEEP_ETA_MARGIN:.0f}x{t_remaining:.0f}s '
-                                   f'(rem={remaining:.1f} rate={recent_rate:.6f})')}
+                                   f'rate={recent_rate:.6f})')}
         return {'verdict': 'keep', 'reason': f'progressing recent_rate={recent_rate:.6f}>eps'}
 
     # ---- stall_dur: seconds since the last *meaningful* cb increase ----

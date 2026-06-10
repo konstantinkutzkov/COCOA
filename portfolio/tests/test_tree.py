@@ -36,10 +36,12 @@ def test_hostage_cliff_from_positive_baseline_bails():
     assert verdict(traj, 5002.0) == "bail"
 
 
-# 3. Currently progressing (steady climb) -> keep, regardless of escape history.
-def test_progressing_keeps():
-    traj = [(float(10 * i), 5.0 * i) for i in range(1, 31)]
-    assert verdict(traj, 500.0) == "keep"
+# 3. Currently progressing AND pct-feasible: a healthy ~0.5 b/s climb with only ~6 bits left
+#    -> keep, regardless of escape history. (n_root set so the pct log-budget ~11 bits exceeds
+#    the 6 remaining; the SAME rate far from done is doomed -- see #11.)
+def test_progressing_feasible_keeps():
+    traj = [(float(10 * i), 5.0 * i) for i in range(1, 31)]   # steady 0.5 b/s, cb_now=150
+    assert verdict(traj, 156.0) == "keep"                      # remaining 6 < pct log-budget ~11
 
 
 # 4. Too few samples -> keep (insufficient data to judge).
@@ -47,8 +49,9 @@ def test_few_samples_keep():
     assert verdict([(10., 1.), (20., 2.), (30., 3.)], 100.0) == "keep"
 
 
-# 5. A demonstrated recoverer (two ~60s-plateau escapes) currently in a ~160s plateau,
-#    which is past GRACE(120) but within k(3) x max_escape_gap(60) = 180 -> keep.
+# 5. A demonstrated recoverer (two ~60s-plateau escapes) whose last escape is still inside the
+#    180s recency window, so recent_rate>eps -> judged by the (pct) eta-gate; with only ~5 bits
+#    left it is pct-feasible -> keep. (The escape-envelope BAIL is pinned by #6.)
 def _recoverer():
     return ([(10., 100.)] + [(float(t), 100.) for t in range(20, 71, 10)]   # 60s plateau
             + [(80., 110.)]                                                  # escape 1
@@ -57,8 +60,8 @@ def _recoverer():
             + [(float(t), 120.) for t in range(160, 311, 10)])               # current plateau ~160s
 
 
-def test_recoverer_within_envelope_keeps():
-    assert verdict(_recoverer(), 200.0) == "keep"
+def test_recoverer_progressing_feasible_keeps():
+    assert verdict(_recoverer(), 125.0) == "keep"   # remaining ~5 bits < pct log-budget ~7.8
 
 
 # 6. Same recoverer, but stalled ~200s -> beyond k x escape envelope (180) -> bail.
@@ -95,6 +98,20 @@ def test_progressing_near_finisher_kept_despite_slow():
     traj = [(float(t), 0.005 * t) for t in range(10, 601, 10)]   # same creep, cb_now=3.0
     # remaining = 4 - 3 = 1 bit (< floor 2); eta = 1/0.005 = 200s > 2 x 50s, but the floor keeps it
     assert verdict(traj, 4.0, t_remaining=50.0) == "keep"
+
+
+# 11. mc2026_047 (REAL trajectory): a leader creeping at ~0.012 b/s with ~8 bits left LOOKS
+#     feasible to the old LINEAR gate (eta = 8/0.012 ~ 660s << budget -> keep) but is pct-doomed
+#     -- 8 more bits means ~2^8x the linear count still to enumerate, at a rate that had closed
+#     only ~2.4% of it. The log-space pct-gate bails. (In production the old linear gate rode
+#     this ~25 min until the frozen-path handoff; the pct-gate would have bailed ~18-20 min in.)
+def test_mc2026_047_real_trajectory_pct_doomed_bails():
+    cbs = [79.84, 80.43, 81.33, 82.02]                       # observed monitoring cb @ 60s spacing
+    traj = [(1080.0 + 60.0 * i, cb) for i, cb in enumerate(cbs)]
+    # n_root pinned at 90; remaining 7.98 bits; recent_rate ~0.0121 b/s; t_remaining 2520s.
+    # OLD: eta = 7.98/0.0121 ~ 660s < 2x2520 -> KEEP (the bug). NEW: log2(ln2*0.0121*2*2520)
+    # ~ 5.4 < 7.98 -> BAIL.
+    assert predict_cb_tree(traj, 90.0, traj[-1][0], 2520.0)["verdict"] == "bail"
 
 
 if __name__ == "__main__":
