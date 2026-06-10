@@ -2909,3 +2909,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_115 — SOLVED, count = 3,865,470,566,400 (cocoa-reactive r1, 53.5s; ganak-verified 1.3s)
 
 **6470v / 26,053-cl (large), band=MID, log2_cost=79.0, sep_ratio=0.0015 / sepsize=13 (tiny separator), arjun substantial=True.** SOLVED by **cocoa-reactive** in round 1, **53.5s**, count = **3,865,470,566,400** (~3.87e12, 13 digits); `ganak --prob 0` = same (1.31s) — match ✓. Same decomposable / arjun=True family as 107/111/113 but a **modest** count (13 digits). Here the large size (6470v) made COCOA's decomposition take ~53s while **ganak's Arjun cracked it in 1.3s** (ganak much faster) — so within this family COCOA's time is driven by var count (decomposition work), not by the count magnitude.
+
+## mc2026_track1_117 — SOLVED, count = 259,288,096 (cocoa-reactive r1, 0.7s; ganak-verified)
+
+**2344v / 9045-cl, band=MID, log2_cost=63.6, sep_ratio=0.014 / sepsize=33 (tiny separator), arjun substantial=True.** SOLVED by **cocoa-reactive** in round 1, **0.7s**, count = **259,288,096** (~2.6e8); `ganak --prob 0` = same (0.46s) — match ✓. Decomposable + arjun=True + modest count → fast for both.
