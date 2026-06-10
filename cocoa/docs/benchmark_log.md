@@ -2852,3 +2852,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_089 — UNSAT, count = 0 (cocoa-plain r1, 0.1s; ganak-verified)
 
 **8281v / 15,164-cl (large), band=LOW, log2_cost=35.5, sep_ratio=0.0006 / sepsize=5, arjun substantial=False.** **UNSATISFIABLE — count = 0.** cocoa-plain reported count=0 in round 1, 0.1s; `ganak --prob 0` = `s UNSATISFIABLE`, count 0 (0.02s) — match ✓. **Second UNSAT in the sweep** (after 061); both engines agree → genuine UNSAT, not a false-UNSAT soundness bug. Large (8281 vars) but the contradiction surfaces instantly under BCP (tiny 5-var separator, fully decomposable).
+
+## mc2026_track1_091 — UNSAT, count = 0 (cocoa-reactive r1, 0.1s; ganak-verified)
+
+**29,456v / 54,597-cl (largest instance in the sweep), band=MID, log2_cost=72.3, sep_ratio=0.0004 / sepsize=14, arjun substantial=True.** **UNSATISFIABLE — count = 0.** cocoa-reactive round 1, 0.1s; `ganak --prob 0` = `s UNSATISFIABLE`, count 0 (0.10s) — match ✓. **Third UNSAT** (061/089/091); both engines agree → genuine. Largest instance yet (29k vars) but the contradiction surfaces instantly under BCP.
