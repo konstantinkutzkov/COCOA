@@ -2777,3 +2777,7 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 ## mc2026_track1_063 — SOLVED, count = 302,231,454,903,657,293,676,544 = 2⁷⁸ (cocoa-plain r1, 0.1s; ganak-verified)
 
 **116v / 608-cl, band=LOW, log2_cost=19.2, sep_ratio=0.034 / sepsize=4 (tiny separator), arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **302,231,454,903,657,293,676,544 = exactly 2⁷⁸**; `ganak --prob 0` = same (0.01s) — match ✓. Continues the band=low / tiny-separator / power-of-2 run (055=2⁵⁴, 057=2⁷⁴, 059=2³⁹, 063=2⁷⁸); instant for both engines.
+
+## mc2026_track1_065 — SOLVED, count = 3,066 (cocoa-plain r1, 0.1s; ganak-verified)
+
+**2394v / 3986-cl (large var count), band=LOW, log2_cost=29.4, sep_ratio=0.002 / sepsize=5 (tiny separator), n_leaves=1709, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **3,066**; `ganak --prob 0` = same (0.02s) — match ✓. Same "tiny separator ⇒ instant" pattern despite 2394 vars — **size doesn't matter, decomposability does**. Count 3066 is small and NOT a power of two (so components aren't fully independent, unlike 055/057/059/063), but the 5-var separator still decomposes it trivially.
