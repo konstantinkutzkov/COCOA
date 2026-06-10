@@ -1,0 +1,25 @@
+[step1] mc2026_track1_039.cnf — structural analysis (what METIS produced):
+    metis root cut : sep_ratio=0.062987 balance=0.46148 sepsize=89 n_vars=1413
+    nd_cost (tree) : band=high log2_cost=289.600213 root_sep=0 max_path=289.0 worst_leaf=16 n_leaves=372
+    arjun signal   : substantial=True
+[step2] band=high -> PHASE-2 SOLVERS SELECTED (8): ['cocoa-plain', 'cocoa-cache-max', 'cocoa-nosep-cascade', 'cocoa-sep-cascade', 'cocoa-adaptive', 'cocoa-reactive', 'cocoa-unified-sep', 'cocoa-adaptive-nosep']  (+Ganak handoff on sustained overshoot)
+[step2] forecast trace -> /Users/konstantin.kutzkov/Desktop/Code/COCOA/portfolio/runlogs/forecast_mc2026_track1_039.jsonl
+  [r1] cocoa-plain running (window 60s)...
+    [r1~live] cocoa-plain: pct_lin=2.23338e-21 closed_bits=1037.75 decisions=542727 (active 10s)
+    [r1~live] cocoa-plain: pct_lin=5.50075e-21 closed_bits=1039.06 decisions=840936 (active 20s)
+    [r1~live] cocoa-plain: pct_lin=9.14034e-21 closed_bits=1039.79 decisions=1094085 (active 30s)
+    [r1~live] cocoa-plain: pct_lin=1.29454e-20 closed_bits=1040.29 decisions=1349445 (active 40s)
+    [r1~live] cocoa-plain: pct_lin=1.69572e-20 closed_bits=1040.68 decisions=1586611 (active 50s)
+[r1] cocoa-plain: pct_lin=2.08863e-20 closed_bits=1040.98 decisions=1826219 closed_bits=1041.0 vel=0.040 (active 60s)
+  [r1] cocoa-cache-max running (window 60s)...
+    [r1~live] cocoa-cache-max: pct_lin=1.81979e-21 closed_bits=1037.46 decisions=467919 (active 10s)
+    [r1~live] cocoa-cache-max: pct_lin=4.50814e-21 closed_bits=1038.77 decisions=733033 (active 20s)
+    [r1~live] cocoa-cache-max: pct_lin=7.61006e-21 closed_bits=1039.52 decisions=957501 (active 30s)
+    [r1~live] cocoa-cache-max: pct_lin=1.08774e-20 closed_bits=1040.04 decisions=1187261 (active 40s)
+    [r1~live] cocoa-cache-max: pct_lin=1.38966e-20 closed_bits=1040.39 decisions=1426870 (active 50s)
+[r1] cocoa-cache-max: pct_lin=1.6709e-20 closed_bits=1040.66 decisions=1677548 closed_bits=1040.7 vel=0.038 (active 60s)
+  [r1] cocoa-nosep-cascade running (window 60s)...
+[FINISH] cocoa-nosep-cascade completed in round1: count=279857462060
+
+=== pipeline result: {'status': 'solved', 'winner': 'cocoa-nosep-cascade', 'decided': 'cocoa-nosep-cascade', 'count': '279857462060', 'round': 'round1', 'active_wall_s': 7.8, 'step1_band': 'high', 'step1_arjun_substantial': True, 'cnf': 'mc2026_track1_039.cnf'} ===
+COUNT: 279857462060

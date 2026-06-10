@@ -2700,3 +2700,11 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 ## mc2026_track1_037 — SOLVED, count = 1,234,116 (cocoa-plain r1, 0.3s; ganak-verified)
 
 **60v / 366-cl (smallest in the sweep so far), band=LOW, log2_cost=38.5, sep_ratio=0.4, sepsize=24, n_leaves=57 / worst_leaf=0, arjun not-substantial.** SOLVED by **cocoa-plain** in round 1, **0.3s** active, count = **1,234,116**; `ganak --prob 0` = 1,234,116 (0.46s) — match ✓. Trivial for both engines (band=low + tiny + clean ND decomposition). Continues the clean split: band low/mid + decomposable ⇒ instant for both; band high + large separator ⇒ the deep-grinder family (029/033) both lose.
+
+## mc2026_track1_039 — SOLVED, count = 279,857,462,060 (cocoa-nosep-cascade r1, 7.8s; ganak-verified)
+
+**1413v / 29,487-cl (largest in the sweep so far), band=HIGH, log2_cost=289.6, sep_ratio=0.063, sepsize=89, worst_leaf=16, n_leaves=372, arjun substantial=True.** SOLVED by **cocoa-nosep-cascade** in round 1, **7.8s** active, count = **279,857,462,060** (~2.8e11); `ganak --prob 0` = 279,857,462,060 (6.41s) — match ✓.
+
+**KEY — mirage caught by the diverse race:** the SEPARATOR configs were mirage-grinding — `cocoa-plain` / `cocoa-cache-max` ground to ~1040 closed_bits / pct_lin ~1e-20 within 60s (large separator → no decomposition → deep churn), looking like doomed deep-grinders. Meanwhile the NO-separator **`cocoa-nosep-cascade`** (`-unifiedPicker -decomposeAfterK 1000 -cascadeW 10 -cascadeDepth 9`) cracked the whole thing in 7.8s. The round-1 **diverse 8-config race is exactly what caught this**: the apparent leaders (by closed_bits) were mirages; the structurally-different config was the real winner — a concrete case where ranking round-1 survivors by closed_bits LEVEL alone would have been misled, but running all 8 to completion-or-cut saved it.
+
+**CONFIRMS the arjun-substantial signal:** band=high + **arjun=True ⇒ tractable** (039 here; cf 017/019/031), vs band=high + **arjun=False ⇒ both-engines-lose** (029/033). arjun=True also made ganak fast here (Arjun preprocessing did the heavy lifting, 6.41s). Strengthens the open "route arjun_substantial=True to Ganak sooner" thread — though note COCOA's nosep-cascade matched it without help.
