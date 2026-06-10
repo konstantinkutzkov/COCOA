@@ -2765,3 +2765,7 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 ## mc2026_track1_057 — SOLVED, count = 18,889,465,931,478,580,854,784 = 2⁷⁴ (cocoa-plain r1, 0.1s; ganak-verified)
 
 **110v / 576-cl, band=LOW, log2_cost=17.7, sep_ratio=0.018 / sepsize=2 (tiny separator), arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **18,889,465,931,478,580,854,784 = exactly 2⁷⁴**; `ganak --prob 0` = same (0.01s) — match ✓. Twin of 055 (band=low + 2-var separator ⇒ trivially decomposable ⇒ instant, arjun=False irrelevant), and again a clean power of two (2⁷⁴ ⇒ near-fully-independent components). Two-for-two on "tiny separator ⇒ COCOA instant."
+
+## mc2026_track1_059 — SOLVED, count = 549,755,813,888 = 2³⁹ (cocoa-plain r1, 0.1s; ganak-verified)
+
+**58v / 304-cl, band=LOW, log2_cost=16.5, sep_ratio=0.052 / sepsize=3 (tiny separator), arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **549,755,813,888 = exactly 2³⁹**; `ganak --prob 0` = same (0.00s) — match ✓. Third in the band=low / tiny-separator / power-of-2 run (**055 = 2⁵⁴, 057 = 2⁷⁴, 059 = 2³⁹**), all instant for both engines. "Tiny separator ⇒ COCOA instant" now three-for-three.
