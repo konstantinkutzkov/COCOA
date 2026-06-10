@@ -2913,3 +2913,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_117 — SOLVED, count = 259,288,096 (cocoa-reactive r1, 0.7s; ganak-verified)
 
 **2344v / 9045-cl, band=MID, log2_cost=63.6, sep_ratio=0.014 / sepsize=33 (tiny separator), arjun substantial=True.** SOLVED by **cocoa-reactive** in round 1, **0.7s**, count = **259,288,096** (~2.6e8); `ganak --prob 0` = same (0.46s) — match ✓. Decomposable + arjun=True + modest count → fast for both.
+
+## mc2026_track1_119 — SOLVED, count = 1,000,000 = 10⁶ (cocoa-plain monitor, 275.8s; ganak-verified 286s)
+
+**47,647v / 204,121-cl (BY FAR the largest in the sweep), band=HIGH, log2_cost=1279 (deepest yet), sep_ratio=0.013 / sepsize=620, arjun substantial=True.** SOLVED by **cocoa-plain** in the monitor phase, **275.8s**, count = **1,000,000** (exactly 10⁶); `ganak --prob 0` = same (285.95s) — match ✓. Both engines ~4.7 min (comparable). Despite 47k vars / 204k clauses, it decomposed to ~0.9 bits (pct ~55%) within 1 min; the remaining ~21% (one last big component) took the rest of the time to enumerate exactly to 10⁶. Clean round count (10⁶ = 2⁶·5⁶). Largest instance in the sweep — both engines solve it.
