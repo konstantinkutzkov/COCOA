@@ -2860,3 +2860,10 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_093 — SOLVED, count = 1 (cocoa-plain r1, 0.1s; ganak-verified)
 
 **182v / 385-cl, band=LOW, log2_cost=15.7, sep_ratio=0.022 / sepsize=5, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **1** (uniquely satisfiable — exactly one solution); `ganak --prob 0` = 1 (0.00s) — match ✓. band=low + tiny separator → trivial for both.
+
+## mc2026_track1_095 — SOLVED, count = 4,503,632 (ganak-handoff, 74.8s) — FIRST LIVE pct-gate bail → ganak rescue
+
+**729v / 3174-cl, band=LOW but a DEEP decomposition search (live n_root≈594 ≫ log2_cost 23), sep_ratio≈0, arjun substantial=False.** COCOA configs ground to ~500–583 closed_bits; the monitored leader (cocoa-nosep-cascade) **creeped-but-doomed** at 583.4 (~10.6 bits from n_root, pct 0.066%, ~0.08 b/min). **FIRST LIVE FIRING OF THE pct-GATE:** every bail verdict read `progressing but doomed (pct-eta): rem=10.6 > log2budget=2.65 (eta_pct≈1.31M s ≈ 15 days, rate=0.0017 b/s)` — the log-space pct-ETA correctly judged the *creeping* leader doomed (the old linear eta would've been ~1.75 h — borderline-keep). 10 verdicts → handoff → **ganak-native solved in ~75s → count = 4,503,632** (ganak's exact `--prob 0`, the oracle; COCOA was bailed so no cross-check applies).
+
+- **MILESTONE — the pct-gate's designed flow worked end-to-end in production:** creeping-but-doomed COCOA leader → pct-ETA bail → ganak rescue → solve. 069/081/083/085 never exercised this (they FROZE → stall-path bail; all both-lose); **095 is the first where the creeping-doomed bail → ganak actually WON.** Validates the log-space pct-ETA gate live (rem > log2(ln2·rate·margin·t_rem)), and confirms the numerics hold (eta_pct printed cleanly at ~1.3e6 s, no overflow; pct_lin never materialized).
+- **Funnel note:** reactive's round-2 +20.8-bit jump was a ONE-TIME cache-hit — it then sat dead flat at 576.209 through all of round 3 (zero bits closed, ~84k decisions burned). So the banded 2→1 keeping the higher-level nosep-cascade over reactive was correct; the apparent "fast mover" had already walled.
