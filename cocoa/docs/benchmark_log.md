@@ -2646,6 +2646,16 @@ mc2026 round-1 short-circuits so far: 009 (adaptive), 013 (reactive) — differe
 
 **Tree forecaster — first LIVE deployment, correct:** 8 monitoring forecasts, **all `keep`** with reason "progressing recent_rate>eps", riding plain from rem 0.71 → 0.03 bits to the finish. The `recent_rate>eps` first branch fired throughout (a climbing leader); the escape logic never engaged (no wall to detect) — exactly the easy-correct case. No spurious handoff. (The wall-detection branches remain validated only on the offline harness; a live grinder that *walls* is still wanted to exercise them in production.)
 
+## mc2026 early-index backfill (003 / 005 / 011 / 023) — recorded retroactively
+
+Run in an earlier session but never given individual entries; logged here for completeness from their `runlogs/mc2026_t1_0NN.log` pipeline-result lines (all band=low trivial round-1 cocoa-plain solves):
+- **003** — SOLVED, count = **8** (r1, 0.1s; arjun=False). ganak-verify PENDING (deferred — 085's ganak currently owns the box).
+- **005** — SOLVED, count = **6** (r1, 0.1s; arjun=False). ganak-verify PENDING.
+- **023** — SOLVED, count = **449,260,070** (r1, 0.1s; arjun=False). ganak-verify PENDING.
+- **011** — KILLED mid-run, no pipeline result (UNRESOLVED, like 083). NB: the `mc2025_track1_011` rows elsewhere in this log are a different, prior instance set — not this one.
+
+ganak cross-checks for 003/005/023 to follow once 085 frees the box.
+
 ## mc2026_track1_025 — TIMEOUT at 91% (cocoa-plain, 0.14 bits from done); tree correctly kept a slow progressor
 
 **102v / 105-line CNF, band low** (log2_cost=27.6, arjun substantial=False) — another small-but-hard grinder (n_root≈102). **TIMEOUT @ 3600s, count=None**, but cocoa-plain reached **pct 90.96% / cb 101.86 / rem 0.14 bits** on **1.27 BILLION decisions** (338M L2 hits) — ~0.14 bits (≈ the last top-level component) from a finish at the 1h limit.
@@ -2656,7 +2666,7 @@ mc2026 round-1 short-circuits so far: 009 (adaptive), 013 (reactive) — differe
 
 Tree status after 021+025: both live runs were KEEP-a-progressor cases (021 → finish, 025 → near-finish timeout). The **bail/escape branches are still only harness-validated** — a live leader that genuinely WALLS is still wanted to exercise them in production.
 
-## mc2026_track1_027 — KILLED (runaway, ~70 min wall); exposes a WALL-BUDGET OVERRUN bug
+## mc2026_track1_027 — SOLVED, count = 4 (Ganak-solo `--prob 0`, 254s — backbone mirage); COCOA runaway was KILLED (~70 min wall = WALL-BUDGET OVERRUN bug). See RESOLUTION below.
 
 **760v / 43783-line CNF, band HIGH, log2_cost=624.3 (deepest mc2026 by far; 017 was 184), worst_leaf=38, n_root≈760, arjun not-substantial.** Funnel: the standard configs front-loaded to cb≈727 then crawled; the **cascade configs won the cut** (sep/nosep climbed fast in bursts). Leader = `cocoa-sep-cascade`. In monitoring it burst-and-plateaued (cb 716→719→…→737, the 716 plateau was transient — it resumed) then crept to cb 737 / rem ~23 / **pct≈10⁻⁵%**. **Tree kept it throughout (114 forecasts, all `keep`)** — correct (genuinely progressing, if glacially); the bail branch never fired (it kept resuming). Manually **KILLED** at the user's instruction.
 
