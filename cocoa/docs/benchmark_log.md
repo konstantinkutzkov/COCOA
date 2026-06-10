@@ -2712,3 +2712,7 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 ## mc2026_track1_041 — SOLVED, count = 564,153,552,511,417,968,750 (cocoa-reactive r1, 0.1s; ganak-verified)
 
 **939v / 3785-cl, band=MID, log2_cost=82.4, sep_ratio=0.0149, sepsize=15, worst_leaf=9, n_leaves=307, arjun substantial=True.** SOLVED by **cocoa-reactive** in round 1, **0.1s**, count = **564,153,552,511,417,968,750** (~5.6e20, 21 digits); `ganak --prob 0` = same (0.27s) — match ✓. A HUGE count yet structurally trivial — clean reminder that count **magnitude ≠ difficulty**: tractability is set by structure (band=mid + small separator/clean decomposition + arjun=True ⇒ instant for both engines), not by how large the answer is.
+
+## mc2026_track1_043 — SOLVED, count = 738,969,640,920 (cocoa-reactive r1, 0.1s; ganak-verified)
+
+**550v / 2001-cl, band=MID, log2_cost=72.3, sep_ratio=0.0418, sepsize=23, worst_leaf=4, n_leaves=179, arjun substantial=True.** SOLVED by **cocoa-reactive** in round 1, **0.1s**, count = **738,969,640,920** (~7.4e11); `ganak --prob 0` = same (0.09s) — match ✓. Same trivial profile as 041 (band=mid + small separator + arjun=True + clean decomposition ⇒ instant for both). Run of easy ones continues (037/041/043 all sub-second).
