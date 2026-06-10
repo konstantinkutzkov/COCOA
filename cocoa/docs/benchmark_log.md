@@ -2696,3 +2696,7 @@ Monitoring: `nosep-cascade` crept the tail — over ~15 min closed only ~0.73 bi
 
 ### wlIter-2 side-experiment on 033 (negative result)
 Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (both 1 h, per-minute progress). wlIter-2 **tracked wlIter-1 within ~0.03 bits the whole way** (bouncing, never separating), creeping the same sticky tail; killed at ~21 min. So the "more isomorphic-component collapsing helps the binary-heavy tail" hypothesis does **not** hold on 033 — wlIter-2 is net-equivalent (marginally slower per decision). 033 stays a both-engines-lose instance regardless of wlIter.
+
+## mc2026_track1_037 — SOLVED, count = 1,234,116 (cocoa-plain r1, 0.3s; ganak-verified)
+
+**60v / 366-cl (smallest in the sweep so far), band=LOW, log2_cost=38.5, sep_ratio=0.4, sepsize=24, n_leaves=57 / worst_leaf=0, arjun not-substantial.** SOLVED by **cocoa-plain** in round 1, **0.3s** active, count = **1,234,116**; `ganak --prob 0` = 1,234,116 (0.46s) — match ✓. Trivial for both engines (band=low + tiny + clean ND decomposition). Continues the clean split: band low/mid + decomposable ⇒ instant for both; band high + large separator ⇒ the deep-grinder family (029/033) both lose.
