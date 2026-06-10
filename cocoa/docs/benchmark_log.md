@@ -2867,3 +2867,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 
 - **MILESTONE — the pct-gate's designed flow worked end-to-end in production:** creeping-but-doomed COCOA leader → pct-ETA bail → ganak rescue → solve. 069/081/083/085 never exercised this (they FROZE → stall-path bail; all both-lose); **095 is the first where the creeping-doomed bail → ganak actually WON.** Validates the log-space pct-ETA gate live (rem > log2(ln2·rate·margin·t_rem)), and confirms the numerics hold (eta_pct printed cleanly at ~1.3e6 s, no overflow; pct_lin never materialized).
 - **Funnel note:** reactive's round-2 +20.8-bit jump was a ONE-TIME cache-hit — it then sat dead flat at 576.209 through all of round 3 (zero bits closed, ~84k decisions burned). So the banded 2→1 keeping the higher-level nosep-cascade over reactive was correct; the apparent "fast mover" had already walled.
+
+## mc2026_track1_097 — SOLVED, count = 3 (cocoa-reactive r1, 0.1s; ganak-verified)
+
+**64v / 387-cl (tiny), band=MID, log2_cost=41.2, sep_ratio=0.5 / sepsize=32, arjun substantial=True.** SOLVED by **cocoa-reactive** in round 1, **0.1s**, count = **3**; `ganak --prob 0` = 3 (0.00s) — match ✓. Tiny + arjun=True → small count cracked instantly (the arjun=True ⇒ solvable signal again; cf 067/073's small counts).
