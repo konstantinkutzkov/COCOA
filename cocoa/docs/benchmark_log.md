@@ -2781,3 +2781,9 @@ Ran `nosep-cascade -wlIter 2` solo on 033 for comparison vs the wlIter-1 solo (b
 ## mc2026_track1_065 — SOLVED, count = 3,066 (cocoa-plain r1, 0.1s; ganak-verified)
 
 **2394v / 3986-cl (large var count), band=LOW, log2_cost=29.4, sep_ratio=0.002 / sepsize=5 (tiny separator), n_leaves=1709, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **3,066**; `ganak --prob 0` = same (0.02s) — match ✓. Same "tiny separator ⇒ instant" pattern despite 2394 vars — **size doesn't matter, decomposability does**. Count 3066 is small and NOT a power of two (so components aren't fully independent, unlike 055/057/059/063), but the 5-var separator still decomposes it trivially.
+
+## mc2026_track1_067 — SOLVED, count = 4 (cocoa-plain round2, 93.2s; ganak-verified 110s) — MIRAGE
+
+**22,711v / 42,833-cl (largest in the sweep), band=HIGH, log2_cost=857, sep_ratio=0.0298 / sepsize=754, n_leaves=20675, arjun substantial=True.** SOLVED by **cocoa-plain** in round 2, **93.2s** active, count = **4**; `ganak --prob 0` = 4 (110s) — match ✓. Both ~1.5–2 min.
+
+**SECOND count-4 MIRAGE (after 027).** The live metrics screamed "gigantic" — n_root≈7276, closed_bits 7272, "pct 7.6%, ~4 bits left" — but the true count is **4**. closed_bits was measuring decomposition-SEARCH depth (a 7272-bit search tree), NOT count proximity; arjun=True correctly flagged the heavy definability/backbone constraining that collapses the count. Two differences from 027: (1) here COCOA **solved the mirage directly** (cocoa-plain round 2 — the search closed all the way down to 4), rather than running away pre-fix; (2) nosep-cascade did NOT help (lagged ~99 bits back — so band=high + arjun=True does *not* always mean a nosep-cascade win, cf 039/045). Reinforces [[cocoa-metrics-mirage]]: a 22k-var / n_root≈7276 instance can have count 4 — never trust the "deep tail" framing.

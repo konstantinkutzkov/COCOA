@@ -1,0 +1,10 @@
+[step1] mc2025_track1_067.cnf — structural analysis (what METIS produced):
+    metis root cut : sep_ratio=0.026667 balance=0.5 sepsize=4 n_vars=150
+    nd_cost (tree) : band=low log2_cost=20.918863 root_sep=4 max_path=16.0 worst_leaf=1 n_leaves=38
+    arjun signal   : substantial=False
+[step2] band=low -> PHASE-2 SOLVERS SELECTED (6): ['cocoa-plain', 'cocoa-adaptive', 'cocoa-unified-sep', 'cocoa-reactive', 'cocoa-nosep-cascade', 'cocoa-adaptive-nosep']  (+Ganak fallback if best <1.0%)
+  [r1] cocoa-plain running (window 60s)...
+[FINISH] cocoa-plain completed in round1: count=1267650600228229401496703205376
+
+=== pipeline result: {'status': 'solved', 'winner': 'cocoa-plain', 'decided': 'cocoa-plain', 'count': '1267650600228229401496703205376', 'round': 'round1', 'active_wall_s': 0.1, 'step1_band': 'low', 'step1_arjun_substantial': False, 'cnf': 'mc2025_track1_067.cnf'} ===
+COUNT: 1267650600228229401496703205376
