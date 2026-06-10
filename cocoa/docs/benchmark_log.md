@@ -2877,3 +2877,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 **729v / 10,545-cl, band=HIGH, log2_cost=538, sep_ratio=0.497 / sepsize=362, arjun substantial=True.** SOLVED by **cocoa-cache-max** in round 3, **179.6s**, count = **4,503,632**; `ganak --prob 0` = same (59.3s) — match ✓.
 
 **Twin of 095:** identical count (4,503,632) AND identical var count (729), but different clauses (10,545 vs 3,174) and band (high vs low) — almost certainly the same underlying problem in two encodings. Instructive contrast in *how* they solved: **095** (band=low, deep search n_root≈594) → COCOA leader creeped-but-doomed → **pct-gate bail → ganak rescue**; **099** (band=high) → COCOA **solved directly** (cache-max broke the ~5-bit plateau in round 2 and closed in round 3). Same answer, opposite engine paths — the diverse race + handoff covers both. arjun=True ⇒ solvable held again.
+
+## mc2026_track1_101 — SOLVED, count = 3 (cocoa-plain r1, 0.1s; ganak-verified)
+
+**64v / 147-cl (tiny), band=LOW, log2_cost=8.0, sep_ratio=0.125 / sepsize=22, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **3**; `ganak --prob 0` = 3 (0.00s) — match ✓. Tiny + band=low → trivial for both.
