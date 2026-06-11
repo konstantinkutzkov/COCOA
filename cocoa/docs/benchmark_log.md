@@ -2933,3 +2933,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 ## mc2026_track1_123 — UNSAT, count = 0 (cocoa-plain r1, 0.2s; ganak-verified)
 
 **10,445v / 41,110-cl (large), band=HIGH, log2_cost=587.6, sep_ratio=0.038 / sepsize=401, arjun substantial=True.** **UNSATISFIABLE — count = 0.** cocoa-plain round 1, 0.2s; `ganak --prob 0` = `s UNSATISFIABLE`, count 0 (0.42s) — match ✓. **Fourth UNSAT** (061/089/091/123); both engines agree → genuine. Large + band=high, but the contradiction surfaces instantly under BCP/conflict (arjun=True notwithstanding).
+
+## mc2026_track1_125 — SOLVED, count = 1 (cocoa-plain r1, 0.1s; ganak-verified)
+
+**1v / 1-cl — a DEGENERATE instance** (the single clause is the unit `x1`; nd_cost N/A, sep_ratio=-1, n_root=None). SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **1** (only x1=true satisfies); `ganak --prob 0` = 1 (0.00s) — match ✓. Edge-case instance in the set; both engines trivially agree.
