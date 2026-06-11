@@ -353,7 +353,7 @@ def predict_cb_recency(traj, n_root, t_active, t_remaining, margin=MARGIN,
 # one gate, so an ultra-slow-but-real grinder could read as a single plateau.
 # ===========================================================================
 def predict_cb_tree(traj, n_root, t_active, t_remaining, *,
-                    recent_win=180.0, grace=120.0, eta_margin=2.0, rem_floor=2.0):
+                    recent_win=180.0, grace=120.0, eta_margin=2.0, rem_floor=0.2):
     """Escape-history Ganak-handoff forecaster (conservative variant). Returns
     {'verdict': 'keep'|'bail', 'reason': str}. An *escape* is a cb jump (>= jump_thr)
     immediately preceded by a real plateau (>= MIN_PLAT s of near-zero progress); a
@@ -387,6 +387,37 @@ def predict_cb_tree(traj, n_root, t_active, t_remaining, *,
         j -= 1
     win_dt = max(t_end - traj[j][0], 1e-9)
     recent_rate = (cb_now - traj[j][1]) / win_dt
+
+    # ---- escape history (shared by BOTH branches): a cb JUMP (>= jump_thr) preceded by a real
+    #      plateau (>= MIN_PLAT s). The stall branch uses it for recoverer patience; the eta-gate
+    #      now uses it too (a leader that escaped a plateau recently gets patience to burst again,
+    #      rather than being bailed on its instantaneous slow rate). K=3 conservative. ----
+    avg_rate = span / max(t_end - traj[0][0], 1e-9)
+    STALL_RATE = max(5e-4, 0.02 * avg_rate)        # bits/sec gate for "real" progress
+    MIN_PLAT = 20.0
+    K = 3.0
+    escape_gaps = []
+    last_escape_t = None
+    _plat_start = None
+    _pt, _pc = traj[0]
+    for _i in range(1, len(traj)):
+        _t, _c = traj[_i]
+        _dt = _t - _pt if _t > _pt else 10.0
+        _dc = _c - _pc
+        if _dc >= jump_thr:                         # a jump
+            if _plat_start is not None and (_pt - _plat_start) >= MIN_PLAT:
+                escape_gaps.append(_pt - _plat_start)
+                last_escape_t = _t
+            _plat_start = None
+        elif (_dc / _dt) < STALL_RATE:              # plateau step
+            if _plat_start is None:
+                _plat_start = _pt
+        else:                                       # small but real progress (not an escape)
+            _plat_start = None
+        _pt, _pc = _t, _c
+    max_gap = max(escape_gaps) if escape_gaps else 0.0
+    PATIENCE = K * max_gap                          # seconds of demonstrated recoverer patience
+
     if recent_rate > EPS:
         # Progressing -- but FAST ENOUGH to finish in the remaining budget? A leader can
         # creep at recent_rate>eps yet need many times the budget to close `remaining`
@@ -404,14 +435,22 @@ def predict_cb_tree(traj, n_root, t_active, t_remaining, *,
         # thousands) is ever materialised -- the exponential lives only inside one log2:
         #     bail  iff  remaining > log2(ln2 * recent_rate * margin * t_remaining).
         # All operands are well-conditioned (remaining ~ O(1e3), recent_rate the cb rate).
-        # Near-finishers (remaining <= KEEP_REM_FLOOR, e.g. 025 at 91%) are always ridden out;
-        # there eta_pct -> remaining/rate anyway (2**x-1 ~ x*ln2 as x->0), so the floor and
-        # the log test agree on the last bit.
+        # KEEP_REM_FLOOR is now a tiny SLIVER guard (~0.2 bits, pct>=87%) -- pure noise-insurance
+        # for the genuine last fraction of a bit (025@0.14 bits); above it the pct-eta governs even
+        # near the finish (the old 2-bit floor wrongly kept slow 1-2 bit near-finishers, e.g. 121).
         KEEP_ETA_MARGIN = eta_margin   # keep iff the pct-space eta <= margin x remaining budget
         KEEP_REM_FLOOR = rem_floor     # bits; never bail a leader this close to done
         if finite_root and t_remaining > 0 and remaining > KEEP_REM_FLOOR:
             log_budget = math.log2(math.log(2.0) * recent_rate * KEEP_ETA_MARGIN * t_remaining)
             if remaining > log_budget:
+                # PATIENCE: a leader that escaped a plateau recently (within K*max_gap of now) may
+                # burst again -- don't bail it on its instantaneous slow rate; defer to the stall
+                # branch for when it actually goes quiet past its envelope. (Fixes mc2026_121, where
+                # the old REM_FLOOR(2) instead kept EVERY near-finisher, slow or not.)
+                if escape_gaps and (t_end - last_escape_t) < PATIENCE:
+                    return {'verdict': 'keep',
+                            'reason': (f'progressing+doomed but within escape envelope '
+                                       f'(since_escape={t_end - last_escape_t:.0f}s<{PATIENCE:.0f}s)')}
                 try:
                     eta_pct = f'{(2.0 ** remaining - 1.0) / (math.log(2.0) * recent_rate):.0f}s'
                 except OverflowError:
@@ -423,9 +462,7 @@ def predict_cb_tree(traj, n_root, t_active, t_remaining, *,
                                    f'rate={recent_rate:.6f})')}
         return {'verdict': 'keep', 'reason': f'progressing recent_rate={recent_rate:.6f}>eps'}
 
-    # ---- stall_dur: seconds since the last *meaningful* cb increase ----
-    avg_rate = span / max(t_end - traj[0][0], 1e-9)
-    STALL_RATE = max(5e-4, 0.02 * avg_rate)       # bits/sec gate for "real" progress
+    # ---- STALL branch (recent_rate <= EPS): time since the last *meaningful* cb increase ----
     last_inc_t = traj[0][0]
     for i in range(1, len(traj)):
         dt = traj[i][0] - traj[i - 1][0]
@@ -439,38 +476,13 @@ def predict_cb_tree(traj, n_root, t_active, t_remaining, *,
     if stall_dur < GRACE:
         return {'verdict': 'keep', 'reason': f'short plateau stall={stall_dur:.0f}<grace'}
 
-    # ---- escapes: jumps PRECEDED BY A PLATEAU span (>= MIN_PLAT seconds) ----
-    MIN_PLAT = 20.0
-    PLAT_RATE = STALL_RATE                         # same "near-zero" gate
-    escape_gaps = []
-    plat_start = None
-    prev_t, prev_c = traj[0]
-    for i in range(1, len(traj)):
-        t, c = traj[i]
-        dt = t - prev_t if t > prev_t else 10.0
-        dc = c - prev_c
-        if dc >= jump_thr:                         # a jump
-            if plat_start is not None:
-                gap = prev_t - plat_start
-                if gap >= MIN_PLAT:                # only counts if a real plateau preceded it
-                    escape_gaps.append(gap)
-            plat_start = None
-        elif (dc / dt) < PLAT_RATE:                # plateau step
-            if plat_start is None:
-                plat_start = prev_t
-        else:                                      # small but real progress (not an escape)
-            plat_start = None
-        prev_t, prev_c = t, c
-
-    # ---- never escaped a plateau -> doomed (017 cliff-from-0 / hostage cliff-from-baseline) ----
+    # ---- escape history computed above. never escaped a plateau -> doomed (017 / hostage) ----
     if not escape_gaps:
         return {'verdict': 'bail', 'reason': 'no escapes ever (never escaped a plateau)'}
 
-    # ---- within demonstrated escape envelope -> fair chance (conservative K=3) ----
-    K = 3.0
-    max_gap = max(escape_gaps)
-    if stall_dur < K * max_gap:
-        return {'verdict': 'keep', 'reason': f'within escape envelope stall={stall_dur:.0f}<{K}*{max_gap:.0f}'}
+    # ---- within demonstrated escape envelope (K x max_gap, computed above) -> fair chance ----
+    if stall_dur < PATIENCE:
+        return {'verdict': 'keep', 'reason': f'within escape envelope stall={stall_dur:.0f}<{PATIENCE:.0f}'}
 
     # ---- stalled beyond the escape envelope -> bail. Budget guard is only a terminal
     #      backstop (envelope already exceeded); it never overrides a within-envelope keep. ----

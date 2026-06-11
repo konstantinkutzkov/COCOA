@@ -92,12 +92,12 @@ def test_progressing_but_doomed_far_and_slow_bails():
     assert verdict(traj, 30.0, t_remaining=2000.0) == "bail"
 
 
-# 10. ...but a near-finisher (remaining <= KEEP_REM_FLOOR) is ALWAYS ridden out, even when slow
-#     and even when its eta nominally exceeds the (small) remaining budget -- the 025 case (91%).
-def test_progressing_near_finisher_kept_despite_slow():
-    traj = [(float(t), 0.005 * t) for t in range(10, 601, 10)]   # same creep, cb_now=3.0
-    # remaining = 4 - 3 = 1 bit (< floor 2); eta = 1/0.005 = 200s > 2 x 50s, but the floor keeps it
-    assert verdict(traj, 4.0, t_remaining=50.0) == "keep"
+# 10. A GENUINE last-sliver finisher (remaining <= REM_FLOOR=0.2 bits, pct>=87% -- the 025@0.14
+#     case) is always ridden out: the tiny floor is pure noise-insurance for the final fraction.
+def test_sliver_near_finisher_kept():
+    traj = [(float(t), 0.005 * t) for t in range(10, 601, 10)]   # creep, cb_now=3.0
+    # remaining = 3.15 - 3.0 = 0.15 bit (< sliver floor 0.2) -> always keep, regardless of eta.
+    assert verdict(traj, 3.15, t_remaining=50.0) == "keep"
 
 
 # 11. mc2026_047 (REAL trajectory): a leader creeping at ~0.012 b/s with ~8 bits left LOOKS
@@ -112,6 +112,27 @@ def test_mc2026_047_real_trajectory_pct_doomed_bails():
     # OLD: eta = 7.98/0.0121 ~ 660s < 2x2520 -> KEEP (the bug). NEW: log2(ln2*0.0121*2*2520)
     # ~ 5.4 < 7.98 -> BAIL.
     assert predict_cb_tree(traj, 90.0, traj[-1][0], 2520.0)["verdict"] == "bail"
+
+
+# 12. mc2026_121 FIX: a slow near-finisher at rem ~1 bit -- BELOW the OLD REM_FLOOR(2), so the old
+#     gate wrongly kept it (-> a ~25-min futile ride) -- now BAILS: rem ~1 > the 0.2 sliver and the
+#     pct-eta is hopeless. Steady creep => no cb-escapes => the patience veto does not apply.
+def test_slow_near_finisher_below_old_floor_now_bails():
+    traj = [(float(60 * i), 98.0 + 0.1 * i) for i in range(1, 11)]   # cb 98.1->99.0 over 600s
+    # n_root=100 -> rem=1.0 (>0.2 sliver); recent_rate ~0.0017 b/s; t_rem=300 -> log_budget<0 -> bail.
+    assert verdict(traj, 100.0, t_remaining=300.0) == "bail"
+
+
+# 13. PATIENCE (the "strong beginning" guard): a progressing-but-doomed leader (far from done, slow
+#     recent rate, huge pct-eta) that ESCAPED a plateau recently is KEPT -- it may burst again. The
+#     eta-bail is gated behind the escape envelope; it only fires once the leader is quiet past it.
+def test_progressing_doomed_recent_escape_kept_by_patience():
+    traj = ([(float(t), 10.0) for t in range(10, 211, 10)]       # ~200s plateau at cb=10
+            + [(220., 14.0)]                                      # escape (+4, preceded by plateau)
+            + [(float(t), 14.0 + 0.001 * (t - 220)) for t in range(230, 291, 10)])  # slow creep
+    # rem ~86 (far) + recent_rate>eps -> pct-eta huge -> doomed; BUT last escape (t=220) is 70s ago
+    # < K*max_gap (~600) -> within escape envelope -> patience veto -> keep.
+    assert verdict(traj, 100.0, t_remaining=2000.0) == "keep"
 
 
 if __name__ == "__main__":
