@@ -3029,3 +3029,7 @@ Near-twin of 145 (band=high, tiny sep, arjun=False) and same outcome — a COCOA
 ## mc2026_track1_153 — SOLVED, count = 6 (cocoa-plain r1, 0.1s; ganak-verified)
 
 **509v / 26,029-cl (small but EXTREMELY dense, ~51 cl/var — densest in the sweep), band=HIGH, log2_cost=182.0, sep_ratio=0.287 / sepsize=146, max_path=182.0, worst_leaf=104, n_leaves=61, arjun substantial=True.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **6**; `ganak --prob 0` = 6 (match ✓, ganak 0.02s). **Another band=high mirage** — the nd_cost estimate (log2_cost 182, worst_leaf 104) screamed hard, but the count is 6 and both engines solved instantly (extreme density + arjun=True ⇒ heavily constrained ⇒ tiny count; Arjun/cadiback collapsed it in 0.02s). Reinforces: band/log2_cost is a worst-case decomposition estimate, orthogonal to actual difficulty.
+
+## mc2026_track1_155 — SOLVED, count = 309,623,079,113,133,176,160 (~3.1×10²⁰) (cocoa-plain r1, 0.1s; ganak-verified)
+
+**111v / 203-cl (tiny/sparse, ~1.8 cl/var), band=LOW, sep_ratio=0.018 / sepsize=2 (tiny separator), arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **309623079113133176160** (~3.1×10²⁰, 21 digits, ≈2⁶⁸); `ganak --prob 0` = same (exact full-string match ✓, ganak 0.03s). Tiny + band=low + a 2-var separator → fully decomposable → instant, with a large count emerging as the product of near-independent components. Magnitude ⊥ difficulty again (cf the 107/109/111 huge-count family).
