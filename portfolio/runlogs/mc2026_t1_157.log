@@ -1,0 +1,19 @@
+[step1] mc2026_track1_157.cnf — structural analysis (what METIS produced):
+    metis root cut : sep_ratio=0.024721 balance=0.406378 sepsize=31 n_vars=1254
+    nd_cost (tree) : band=mid log2_cost=49.314615 root_sep=23 max_path=45.0 worst_leaf=3 n_leaves=844
+    arjun signal   : substantial=True
+[step2] band=mid -> PHASE-2 SOLVERS SELECTED (8): ['cocoa-reactive', 'cocoa-adaptive', 'cocoa-unified-sep', 'cocoa-sep-cascade', 'cocoa-plain', 'cocoa-cache-max', 'cocoa-nosep-cascade', 'cocoa-adaptive-nosep']  (+Ganak handoff on sustained overshoot)
+[step2] forecast trace -> /Users/konstantin.kutzkov/Desktop/Code/COCOA/portfolio/runlogs/forecast_mc2026_track1_157.jsonl
+  [r1] cocoa-reactive running (window 60s)...
+    [r1~live] cocoa-reactive: pct_lin=0.000378444 closed_bits=1172.99 decisions=990104 (active 10s)
+    [r1~live] cocoa-reactive: pct_lin=0.000378444 closed_bits=1172.99 decisions=1930807 (active 20s)
+    [r1~live] cocoa-reactive: pct_lin=0.000378444 closed_bits=1172.99 decisions=2891685 (active 30s)
+    [r1~live] cocoa-reactive: pct_lin=0.000378444 closed_bits=1172.99 decisions=3852959 (active 40s)
+    [r1~live] cocoa-reactive: pct_lin=0.000378444 closed_bits=1172.99 decisions=4932287 (active 50s)
+[r1] cocoa-reactive: pct_lin=0.000378444 closed_bits=1172.99 decisions=5941873 closed_bits=1173.0 vel=0.000 (active 60s)
+  [r1] cocoa-adaptive running (window 60s)...
+    [r1~live] cocoa-adaptive: pct_lin=0 closed_bits=0 decisions=0 (active 10s)
+[FINISH] cocoa-adaptive completed in round1: count=12374748797617855764050198121191304103511416559087400449928139456888070478909044293083079786511928252392690782684663014702600
+
+=== pipeline result: {'status': 'solved', 'winner': 'cocoa-adaptive', 'decided': 'cocoa-adaptive', 'count': '12374748797617855764050198121191304103511416559087400449928139456888070478909044293083079786511928252392690782684663014702600', 'round': 'round1', 'active_wall_s': 10.9, 'step1_band': 'mid', 'step1_arjun_substantial': True, 'cnf': 'mc2026_track1_157.cnf'} ===
+COUNT: 12374748797617855764050198121191304103511416559087400449928139456888070478909044293083079786511928252392690782684663014702600

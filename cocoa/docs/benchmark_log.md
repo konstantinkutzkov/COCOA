@@ -3033,3 +3033,7 @@ Near-twin of 145 (band=high, tiny sep, arjun=False) and same outcome — a COCOA
 ## mc2026_track1_155 — SOLVED, count = 309,623,079,113,133,176,160 (~3.1×10²⁰) (cocoa-plain r1, 0.1s; ganak-verified)
 
 **111v / 203-cl (tiny/sparse, ~1.8 cl/var), band=LOW, sep_ratio=0.018 / sepsize=2 (tiny separator), arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **309623079113133176160** (~3.1×10²⁰, 21 digits, ≈2⁶⁸); `ganak --prob 0` = same (exact full-string match ✓, ganak 0.03s). Tiny + band=low + a 2-var separator → fully decomposable → instant, with a large count emerging as the product of near-independent components. Magnitude ⊥ difficulty again (cf the 107/109/111 huge-count family).
+
+## mc2026_track1_157 — SOLVED, count = 1.24×10¹²⁵ (125 digits) (cocoa-adaptive r1, 10.9s; ganak-verified)
+
+**1254v / 2518-cl (sparse, ~2.0 cl/var), band=MID, log2_cost=49.3, sep_ratio=0.025 / sepsize=31 (tiny separator), max_path=45.0, n_leaves=844, arjun substantial=True.** SOLVED by **cocoa-adaptive** in round 1, **10.9s**, count = **12374748797617855764050198121191304103511416559087400449928139456888070478909044293083079786511928252392690782684663014702600** (~1.24×10¹²⁵, 125 digits); `ganak --prob 0` = same (exact 125-digit match ✓, ganak 1.93s). The 107/109/111/113 family pattern — tiny separator + arjun=True → fully decomposable → enormous count computed fast as a product over near-independent components. (cocoa-reactive took a bad branch first, stuck at pct≈0, but cocoa-adaptive's decomposition closed it in 10.9s.)
