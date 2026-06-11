@@ -2975,3 +2975,7 @@ So 127 is a genuine hard instance for the current portfolio: cleanly decomposabl
 ## mc2026_track1_135 — SOLVED, count = 13 (cocoa-plain r1, 0.1s; ganak-verified)
 
 **675v / 2194-cl (small/sparse, ~3.3 cl/var), band=LOW, log2_cost=31.1, sep_ratio=0.033 / sepsize=24 (tiny separator), max_path=23.0, n_leaves=866, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **13**; `ganak --prob 0` = 13 (match ✓). Trivial — small + sparse + band=low + tiny separator → instant for both. A breather after the 129/131/133 band=high cluster.
+
+## mc2026_track1_137 — SOLVED, count = 18 (cocoa-reactive r1, 0.9s; ganak-verified)
+
+**6316v / 20,932-cl (sparse, ~3.3 cl/var), band=MID, log2_cost=63.0, sep_ratio=0.0079 / sepsize=55 (tiny separator), max_path=51.0, n_leaves=8354, arjun substantial=False.** SOLVED by **cocoa-reactive** in round 1, **0.9s**, count = **18**; `ganak --prob 0` = 18 (match ✓). The tiny root separator (0.0079) made it fully decomposable despite 6316 vars → instant solve, small count. (Reminder from 127: a tiny root_sep doesn't *guarantee* easiness — but here, with band=mid and a shallow tree, it delivered.)
