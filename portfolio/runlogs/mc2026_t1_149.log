@@ -1,0 +1,20 @@
+[step1] mc2026_track1_149.cnf — structural analysis (what METIS produced):
+    metis root cut : sep_ratio=0.117647 balance=0.498039 sepsize=34 n_vars=289
+    nd_cost (tree) : band=mid log2_cost=82.243975 root_sep=34 max_path=80.0 worst_leaf=1 n_leaves=84
+    arjun signal   : substantial=False
+[step2] band=mid -> PHASE-2 SOLVERS SELECTED (8): ['cocoa-reactive', 'cocoa-adaptive', 'cocoa-unified-sep', 'cocoa-sep-cascade', 'cocoa-plain', 'cocoa-cache-max', 'cocoa-nosep-cascade', 'cocoa-adaptive-nosep']  (+Ganak handoff on sustained overshoot)
+[step2] forecast trace -> /Users/konstantin.kutzkov/Desktop/Code/COCOA/portfolio/runlogs/forecast_mc2026_track1_149.jsonl
+  [r1] cocoa-reactive running (window 60s)...
+    [r1~live] cocoa-reactive: pct_lin=1.00538e-85 closed_bits=0 decisions=0 (active 10s)
+    [r1~live] cocoa-reactive: pct_lin=19.0054 closed_bits=286.604 decisions=101117 (active 20s)
+    [r1~live] cocoa-reactive: pct_lin=45.9852 closed_bits=287.879 decisions=260066 (active 30s)
+    [r1~live] cocoa-reactive: pct_lin=57.189 closed_bits=288.194 decisions=325860 (active 40s)
+    [r1~live] cocoa-reactive: pct_lin=67.6023 closed_bits=288.435 decisions=386024 (active 50s)
+[r1] cocoa-reactive: pct_lin=67.6023 closed_bits=288.435 decisions=386024 closed_bits=288.4 vel=0.028 (active 60s)
+  [r1] cocoa-adaptive running (window 60s)...
+    [r1~live] cocoa-adaptive: pct_lin=48.2841 closed_bits=287.95 decisions=126580 (active 10s)
+    [r1~live] cocoa-adaptive: pct_lin=79.6822 closed_bits=288.672 decisions=208888 (active 20s)
+[FINISH] cocoa-adaptive completed in round1: count=4
+
+=== pipeline result: {'status': 'solved', 'winner': 'cocoa-adaptive', 'decided': 'cocoa-adaptive', 'count': '4', 'round': 'round1', 'active_wall_s': 28.4, 'step1_band': 'mid', 'step1_arjun_substantial': False, 'cnf': 'mc2026_track1_149.cnf'} ===
+COUNT: 4
