@@ -2929,3 +2929,7 @@ Launched, walled exactly like 081 (cascades led to 295.193 then stuck across rou
 2. **The escape/patience detector is closed_bits-based, blind to pct-bursts near the finish.** 121's bursts were big in pct (count-chunks resolving) but tiny in cb (~0.06-bit steps near n_root), so the tree credited **0 escapes** → gave the leader **no patience** → bailed at the first stall. The opposite of "show patience after a strong beginning."
 
 **Cost of the bugs:** had the gate been pct-aware + ETA-driven (not bits-floored), it would have handed off ~+16m → solved ~+18m total, vs the ~+45m actually spent. **FIX queued:** REM_FLOOR(2) → tiny sliver guard (~0.2 bits); route near-finishers through the escape-history-gated pct-ETA; and move escape/patience detection into pct-space near the finish (so count-chunk bursts earn patience). Regression test to be seeded with 121's trajectory.
+
+## mc2026_track1_123 — UNSAT, count = 0 (cocoa-plain r1, 0.2s; ganak-verified)
+
+**10,445v / 41,110-cl (large), band=HIGH, log2_cost=587.6, sep_ratio=0.038 / sepsize=401, arjun substantial=True.** **UNSATISFIABLE — count = 0.** cocoa-plain round 1, 0.2s; `ganak --prob 0` = `s UNSATISFIABLE`, count 0 (0.42s) — match ✓. **Fourth UNSAT** (061/089/091/123); both engines agree → genuine. Large + band=high, but the contradiction surfaces instantly under BCP/conflict (arjun=True notwithstanding).
