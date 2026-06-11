@@ -2979,3 +2979,13 @@ So 127 is a genuine hard instance for the current portfolio: cleanly decomposabl
 ## mc2026_track1_137 — SOLVED, count = 18 (cocoa-reactive r1, 0.9s; ganak-verified)
 
 **6316v / 20,932-cl (sparse, ~3.3 cl/var), band=MID, log2_cost=63.0, sep_ratio=0.0079 / sepsize=55 (tiny separator), max_path=51.0, n_leaves=8354, arjun substantial=False.** SOLVED by **cocoa-reactive** in round 1, **0.9s**, count = **18**; `ganak --prob 0` = 18 (match ✓). The tiny root separator (0.0079) made it fully decomposable despite 6316 vars → instant solve, small count. (Reminder from 127: a tiny root_sep doesn't *guarantee* easiness — but here, with band=mid and a shallow tree, it delivered.)
+
+## mc2026_track1_139 — TIMEOUT, both engines lose (count unknown) — arjun=False + deep-wall pattern
+
+**4029v / 3876-cl (UNDERconstrained, ~0.96 cl/var — fewer clauses than vars), band=HIGH, log2_cost=161.8, sep_ratio=0.028 / sepsize=113 (tiny separator), max_path=153.0, n_leaves=3876, arjun substantial=False.** **TIMEOUT — neither engine returned a count in the 60-min budget.**
+
+COCOA: all 8 configs deep (funnel 8→4→2→1 over ~14 min; r1 closed_bits clustered ~3902–3918, n_root≈4029 = the full var count since arjun=False ⇒ no preprocessing reduction → **~111–127 bits unclosed**, leader ~111; vel ~0.04–0.10 b/s, decelerating). Leader **cocoa-reactive** monitored, walled, escape-tree handed off at **~+15.7 min** (10-bail streak).
+
+ganak-handoff: ran its full **2659s (~44.3 min)** budget — RSS grew to **14.8 GB**, 100% CPU, and the `[ganak~live]` heartbeat stayed **BLANK the entire run** (never emitted parseable count-phase stats → never cleanly entered/finished counting; contrast 131, where it flipped populated ~+8 min then solved). No count.
+
+**Second both-lose of the sweep (after 127), but a *predictable* one.** Unlike 127 (arjun=True surprise both-lose), 139 fits the established **arjun=False + deep-wall both-lose pattern** (029/033/047/069/081/083/085 — all arjun=False). The tiny root separator (0.028) did NOT save it (same lesson as 127: tiny root_sep ⇏ easy). Underconstrained/huge-count formula with no definability structure for Arjun to exploit ⇒ neither COCOA's decomposition search nor ganak's caching cracks it in an hour. **Count remains unknown.**
