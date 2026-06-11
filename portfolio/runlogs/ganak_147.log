@@ -1,0 +1,1046 @@
+c o Ganak SHA1: 70de63c2638b19d63bc8d68a494993bb70f274a8
+c o Arjun SHA1: 70de63c2638b19d63bc8d68a494993bb70f274a8
+c o SBVA SHA1: 70de63c2638b19d63bc8d68a494993bb70f274a8
+c o CMS SHA1: 70de63c2638b19d63bc8d68a494993bb70f274a8
+c o ApproxMC SHA1: GIT-hash-notfound
+c o Using ideas by JM Lagniez, and Pierre Marquis
+c o     from paper: Improving Model Counting [..] IJCAI 2016
+c o Using VMTF, picosat, CaDiCaL, and CadiBack code by Armin Biere
+c o CMS is MIT licensed
+c o Using code from 'When Boolean Satisfiability Meets Gauss-E. in a Simplex Way'
+c o       by C.-S. Han and J.-H. Roland Jiang in CAV 2012. Fixes by M. Soos
+c o Using CCAnr from 'CCAnr: A Conf. Checking Based Local Search Solver [...]'
+c o       by Shaowei Cai, Chuan Luo, and Kaile Su, SAT 2015
+c o Using Oracle code from 'Integrating Tree Decompositions [...]'
+c o       by Tuukka Korhonen and Matti Jarvisalo, CP 2021
+c o Using Graph library by Tuukka Korhonen and Matti Jarvisalo
+c o Using Flowcutter by Ben Strasser
+c o Ganak compilation env CMAKE_CXX_COMPILER = /usr/bin/c++ | CMAKE_CXX_FLAGS =  -fno-stack-protector -msse4.2 -Wnull-dereference -Wdouble-promotion -Wshadow -Wformat=2 -Wextra-semi -pedantic | COMPILE_DEFINES =  -DNDEBUG -D_FORTIFY_SOURCE=0 | BUILD_SHARED_LIBS = OFF | ZLIB_FOUND = FALSE | ENABLE_ASSERTIONS = OFF | 
+c o called with: /Users/konstantin.kutzkov/Desktop/Code/COCOA/ganak-canonical/build/ganak --prob 0 /Users/konstantin.kutzkov/Desktop/Code/SharpSAT/temp_cnf/mc2026_public/mc2026_track1_147.cnf
+c o CNF projection set size: 1541
+c o --> Executing strategy token: clean-cls
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 361 BP 0M T: 0.00
+c o [vrep] vars 361 lits 4948 rem-bin-cls 1444 rem-long-cls 0 BP 0M T: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 2.5
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o [0m[arjun-simp] probing all sampling variables[0m
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 2.5
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o [0m[arjun-simp] Removed set       : 361 new size: 1180[0m
+c o [0m[arjun-simp] Removed eq lits: 361 new size: 819[0m
+c o [0m[arjun-simp] probe removed: 722 perc: 46.85 T: 0.00[0m
+c o [0m[arjun-simp] Removed eq lits: 0 new size: 819[0m
+c o [0m[arjun-simp] Removed set       : 0 new size: 819[0m
+c o [0m[arjun-simp] get-empties removed: 0 perc: 0.00 total empties now: 0 T: 0.00[0m
+c o [0m[arjun-simp] CMS::simplify() with no BVE, intree probe...[0m
+c o --> Executing strategy token: str-impl
+c [impl-str] lit bin: 0 set-var: 0 T: 0.00 T-out: N T-r: 100.00% w-visit: 3082
+c o --> Executing strategy token: intree-probe
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [intree] Set 0 vars hyper-added: 0 trans-irred: 0 trans-red: 0 T: 0.00 T-out: N T-r: 0.00%
+c o Executing OCC strategy token(s): 'occ-ternary-res,occ-backw-sub,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-ternary-res
+c o [occ-ternary-res] Ternary res-tri: 24 res-bin: 0 sub: 0 str: 12 T: 0.00 T-out: N T-r: 99.64%
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 3300/3300 (100.0%) T: 0.00 T-out: N T-r: 99.89%
+c o --> Executing strategy token: distill-litrem
+c [distill-litrem] useful: 0/9828/3276 lits-rem: 0 0-depth-assigns: 0 T: 0.00 T-out: N
+c o --> Executing strategy token: must-distill-cls
+c o [distill-long-irred] cls tried: 3276/3276 T: 0.00 T-out: N T-r: 99.57%
+c o [distill-long-irred] cls tried: 3276/3276 T: 0.00 T-out: N T-r: 99.49%
+c o --> Executing strategy token: distill-bins
+c o [distill-bin] useful: 0/0/0 lits-rem: 0 cl-rem: 0 0-depth-assigns: 0 T: 0.00 T-out: N
+c o --> Executing strategy token: oracle-vivif-veryfast
+c o --> Executing strategy token: must-renumber
+c o [oracle-bin] potential pairs: 2454 T: 0.0
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 3 BP 0M T: 0.00
+c o [vrep] vars 3 lits 80 rem-bin-cls 18 rem-long-cls 12 BP 0M T: 0.00
+c o [oracle-vivif] lits-rem: 0 learnt-units: 0 T-out: Y T-remain: 67.5% T: 1.07
+c o [oracle-bin] bin-added: 0 equiv-added: 0 T-out: Y T-remain: 99.03% T: 0.02
+c o [oracle-vivif] cache usefulness: 99% total T: 1.09
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 2.5000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 3082
+c o --> Executing strategy token: breakid
+c o Executing OCC strategy token(s): 'occ-backw-sub-str,occ-clean-implicit,occ-bve,occ-bva,occ-ternary-res,occ-xor,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub-str
+c o [occ-backw-sub-str-long-w-bins] subs: 0 str: 0 tried: 0 0-depth ass: 0 T: 0.00 T-out: N T-r: 100.00%
+c o [occ-backw-sub-long-w-long] rem cl: 12 tried: 3276/3276 (100.0%) T: 0.00 T-out: N T-r: 99.89%
+c o [occ-backw-sub-str-long-w-long] sub: 0 str: 0 tried: 9828/3276 (300.0)  T: 0.00 T-out: N T-r: 99.47%
+c o Executing OCC strategy token: occ-clean-implicit
+c o Executing OCC strategy token: occ-bve
+c o Executing OCC strategy token: occ-bva
+c o Executing OCC strategy token: occ-ternary-res
+c o [occ-ternary-res] Ternary res-tri: 0 res-bin: 0 sub: 0 str: 0 T: 0.00 T-out: N T-r: 99.65%
+c o Executing OCC strategy token: occ-xor
+c o --> Executing strategy token: card-find
+c o --> Executing strategy token: cl-consolidate
+c o Not consolidating memory.
+c o --> Executing strategy token: scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: renumber
+c o --> Executing strategy token: louvain-comms
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 2.5000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o [0m[arjun-simp] Removed set       : 0 new size: 819[0m
+c o [0m[arjun-simp] CMS::simplify() with no BVE finished. T: 1.1004[0m
+c o [0mWARNING: Turning off gates, because the sampling size is small, so we can just do it. Size: 819[0m
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: clean-cls
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 3082
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 2.5000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: clean-cls
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 3082
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 2.5000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o [0m[arjun-simp] Removed eq lits: 3 new size: 816[0m
+c o [0m[arjun-simp] Removed set       : 0 new size: 816[0m
+c o [0m[arjun-simp] get-empties removed: 0 perc: 0.00 total empties now: 0 T: 0.00[0m
+c o [0m[arjun-simp] probing all sampling variables[0m
+c o [0m[arjun-simp] Removed set       : 0 new size: 816[0m
+c o [0m[arjun-simp] Removed eq lits: 0 new size: 816[0m
+c o [0m[arjun-simp] probe removed: 0 perc: 0.00 T: 0.00[0m
+c o [0m[arjun-simp] Removed eq lits: 0 new size: 816[0m
+c o [0m[arjun-simp] Removed set       : 0 new size: 816[0m
+c o [0m[arjun-simp] get-empties removed: 0 perc: 0.00 total empties now: 0 T: 0.00[0m
+c o [0m[arjun] simplification finished  removed: 725 perc: 47.05 T: 1.10[0m
+c o [0m[arjun] Duplicating CNF...[0m
+c o [0m[arjun] Duplicated CNF. T: 0.00[0m
+c o [0m[arjun] CMS::simplify() with *only* BVE...[0m
+c o Executing OCC strategy token(s): 'occ-bve,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 722
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve
+c o [occ-empty-res] Empty resolvent elimed: 0 T: 0.00 T-out: N
+c o [occ-bve] iter v-elim 364
+c o cl_inc_rate=0.90, var_dec_rate=1.22 (grow=0)
+c o Reduced to 1632 vars, 6532 cls (grow=0)
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=3)
+c o Reduced to 1632 vars, 6532 cls (grow=3)
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=4)
+c o Reduced to 1632 vars, 6532 cls (grow=4)
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=6)
+c o Reduced to 1632 vars, 6532 cls (grow=6)
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=9)
+c o Reduced to 1632 vars, 6532 cls (grow=9)
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=13)
+c o Reduced to 1632 vars, 6532 cls (grow=13)
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=16)
+c o Reduced to 1632 vars, 6532 cls (grow=16)
+c o x n vars       : 1632
+c o #try to eliminate:   364
+c o #var-elim        :   364
+c o #T-o: N
+c o #T-r: 100.00%
+c o #T  : 0.00
+c o [occur] 0.00 is overhead
+c o [occur] link-in T: 0.00 cleanup T: 0.00
+c o [occ-xor-bve] elimed: 0 T: 0.00 T-out: N
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 2.5000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o [0m[arjun] CMS::simplify() with *only* BVE finished. T: 0.0014[0m
+c o [0m[arjun] Adding fixed clauses time: 0.0002[0m
+c o [0m[backward FAST] Start unknown size: 816[0m
+c o [0m[31m[arjun] backward round finished. U:  I: 49 T: 21.28[0m
+c o [0m[arjun] run_minimize_indep finished T: 22.39[0m
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 366 BP 0M T: 0.00
+c o [vrep] vars 366 lits 6540 rem-bin-cls 2186 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: full-probe
+c o [full-probe]  bin_only: 0 set: 0 repl: 0 T: 0.00 T-out: N T-r: 99.93%
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 3082
+c o --> Executing strategy token: sub-cls-with-bin
+c o [distill] watch-based irred--  cl tried     3276 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3276/3276 T: 0.00 T-out: N T-r: 99.98%
+c o Executing OCC strategy token(s): 'occ-backw-sub,occ-resolv-subs,occ-rem-with-orgates,occ-ternary-res,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 12 tried: 3276/3276 (100.0%) T: 0.00 T-out: N T-r: 99.91%
+c o Executing OCC strategy token: occ-resolv-subs
+c o [occ-resolv-subs] removed: 0 checked: 22168 T: 0.0
+c o Executing OCC strategy token: occ-rem-with-orgates
+c o [occ-gates] found:     0 avg-s: 0.0 T: 0.00 T-out: N T-r: 99.93%
+c o [occ-gate-based-lit-rem] lit-rem: 0 cl-rem: 0 T: 0.00 T-out: N
+c o Executing OCC strategy token: occ-ternary-res
+c o [occ-ternary-res] Ternary res-tri: 0 res-bin: 0 sub: 0 str: 0 T: 0.00 T-out: N T-r: 99.70%
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o Executing OCC strategy token(s): 'occ-bve,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve
+c o [occ-empty-res] Empty resolvent elimed: 1 T: 0.00 T-out: N
+c o [occ-bve] iter v-elim 289
+c o cl_inc_rate=0.99, var_dec_rate=1.55 (grow=0)
+c o Reduced to 524 vars, 3228 cls (grow=0)
+c o x n vars       : 524
+c o #try to eliminate:  1178
+c o #var-elim        :   289
+c o #T-o: N
+c o #T-r: 100.00%
+c o #T  : 0.00
+c o [occur] 0.00 is overhead
+c o [occur] link-in T: 0.00 cleanup T: 0.00
+c o [occ-xor-bve] elimed: 0 T: 0.00 T-out: N
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 3082
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3228/3228 T: 0.00 T-out: N T-r: 99.97%
+c o --> Executing strategy token: intree-probe
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [intree] Set 0 vars hyper-added: 0 trans-irred: 0 trans-red: 0 T: 0.00 T-out: N T-r: -0.03%
+c o Executing OCC strategy token(s): 'occ-backw-sub-str,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub-str
+c o [occ-backw-sub-str-long-w-bins] subs: 0 str: 0 tried: 0 0-depth ass: 0 T: 0.00 T-out: N T-r: 100.00%
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 3228/3228 (100.0%) T: 0.00 T-out: N T-r: 99.84%
+c o [occ-backw-sub-str-long-w-long] sub: 0 str: 0 tried: 9684/3228 (300.0)  T: 0.00 T-out: N T-r: 99.33%
+c o --> Executing strategy token: sub-str-cls-with-bin
+c o [distill] watch-based irred--  cl tried     6456 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: clean-cls
+c o --> Executing strategy token: distill-cls
+c o [distill-long-irred] cls tried: 3228/3228 T: 0.00 T-out: N T-r: 99.97%
+c o [distill-long-irred] cls tried: 3228/3228 T: 0.00 T-out: N T-r: 99.96%
+c o --> Executing strategy token: distill-bins
+c o [distill-bin] useful: 0/0/0 lits-rem: 0 cl-rem: 0 0-depth-assigns: 0 T: 0.00 T-out: N
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: full-probe
+c o [full-probe]  bin_only: 0 set: 0 repl: 0 T: 0.00 T-out: N T-r: 99.93%
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 3082
+c o --> Executing strategy token: sub-cls-with-bin
+c o [distill] watch-based irred--  cl tried     3228 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3228/3228 T: 0.00 T-out: N T-r: 99.97%
+c o Executing OCC strategy token(s): 'occ-backw-sub,occ-resolv-subs,occ-rem-with-orgates,occ-ternary-res,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 3228/3228 (100.0%) T: 0.00 T-out: N T-r: 99.84%
+c o Executing OCC strategy token: occ-resolv-subs
+c o [occ-resolv-subs] removed: 0 checked: 44320 T: 0.0
+c o Executing OCC strategy token: occ-rem-with-orgates
+c o [occ-gates] found:     0 avg-s: 0.0 T: 0.00 T-out: N T-r: 99.92%
+c o [occ-gate-based-lit-rem] lit-rem: 0 cl-rem: 0 T: 0.00 T-out: N
+c o Executing OCC strategy token: occ-ternary-res
+c o [occ-ternary-res] Ternary res-tri: 0 res-bin: 0 sub: 0 str: 0 T: 0.00 T-out: N T-r: 99.99%
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o Executing OCC strategy token(s): 'occ-bve,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve
+c o [occ-empty-res] Empty resolvent elimed: 0 T: 0.00 T-out: N
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=0)
+c o Reduced to 524 vars, 3228 cls (grow=0)
+c o x n vars       : 524
+c o #try to eliminate:   475
+c o #var-elim        :     0
+c o #T-o: N
+c o #T-r: 100.00%
+c o #T  : 0.00
+c o [occur] 0.00 is overhead
+c o [occur] link-in T: 0.00 cleanup T: 0.00
+c o [occ-xor-bve] elimed: 0 T: 0.00 T-out: N
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 3082
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3228/3228 T: 0.00 T-out: N T-r: 99.97%
+c o --> Executing strategy token: intree-probe
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [intree] Set 0 vars hyper-added: 0 trans-irred: 0 trans-red: 0 T: 0.00 T-out: N T-r: -0.09%
+c o Executing OCC strategy token(s): 'occ-backw-sub-str,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub-str
+c o [occ-backw-sub-str-long-w-bins] subs: 0 str: 0 tried: 0 0-depth ass: 0 T: 0.00 T-out: N T-r: 100.00%
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 3228/3228 (100.0%) T: 0.00 T-out: N T-r: 99.84%
+c o [occ-backw-sub-str-long-w-long] sub: 0 str: 0 tried: 9684/3228 (300.0)  T: 0.00 T-out: N T-r: 99.33%
+c o --> Executing strategy token: sub-str-cls-with-bin
+c o [distill] watch-based irred--  cl tried     6456 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: clean-cls
+c o --> Executing strategy token: distill-cls
+c o [distill-long-irred] cls tried: 3228/3228 T: 0.00 T-out: N T-r: 99.97%
+c o [distill-long-irred] cls tried: 3228/3228 T: 0.00 T-out: N T-r: 99.96%
+c o --> Executing strategy token: distill-bins
+c o [distill-bin] useful: 0/0/0 lits-rem: 0 cl-rem: 0 0-depth-assigns: 0 T: 0.00 T-out: N
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o [backbone-simpl] ccnr sols: 0 drop_cands: 0 T: 2.79
+c o [backbone-simpl] cadiback called with -- lits: 11940 num cls: 3589 num vars: 1541
+c o [backbone-simpl] res: 10 num units added: 1 num eq added: 2 num bins: 0 T: 44.60
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 3 BP 0M T: 0.00
+c o [vrep] vars 3 lits 84 rem-bin-cls 12 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: oracle-vivif-sparsify
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [oracle-bin] potential pairs: 2158 T: 0.0002
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 2 BP 0M T: 0.00
+c o [vrep] vars 2 lits 14290 rem-bin-cls 18 rem-long-cls 8400 BP 0M T: 0.00
+c o [oracle-vivif] lits-rem: 16 learnt-units: 0 T-out: N T-remain: 18.9444% T: 23.21
+c o [oracle-bin] bin-added: 4 equiv-added: 2 T-out: N T-remain: 100.00% T: 0.00
+c o [oracle-vivif] cache usefulness: 100% total T: 23.22
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 1040
+c o Executing OCC strategy token(s): 'occ-backw-sub,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 25778/25778 (100.0%) T: 0.00 T-out: N T-r: 99.05%
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [oracle-sparsify] removed: 0 of which bin: 0 tot considered: 3204 ccnr useful: 0 oracle uknown: 1 cache useful: 0% learnt-units: 0 T: 2.74 buildT: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: full-probe
+c o [full-probe]  bin_only: 0 set: 0 repl: 0 T: 0.00 T-out: N T-r: 99.50%
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 1036
+c o --> Executing strategy token: sub-cls-with-bin
+c o [distill] watch-based irred--  cl tried     3204 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3204/3204 T: 0.00 T-out: N T-r: 99.79%
+c o Executing OCC strategy token(s): 'occ-backw-sub,occ-resolv-subs,occ-rem-with-orgates,occ-ternary-res,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 25778/25778 (100.0%) T: 0.00 T-out: N T-r: 99.05%
+c o Executing OCC strategy token: occ-resolv-subs
+c o [occ-resolv-subs] removed: 0 checked: 44568 T: 0.0
+c o Executing OCC strategy token: occ-rem-with-orgates
+c o [occ-gates] found:     0 avg-s: 0.0 T: 0.00 T-out: N T-r: 99.92%
+c o [occ-gate-based-lit-rem] lit-rem: 0 cl-rem: 0 T: 0.00 T-out: N
+c o Executing OCC strategy token: occ-ternary-res
+c o [occ-ternary-res] Ternary res-tri: 0 res-bin: 0 sub: 0 str: 0 T: 0.00 T-out: N T-r: 99.77%
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o Executing OCC strategy token(s): 'occ-bve,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve
+c o [occ-empty-res] Empty resolvent elimed: 0 T: 0.00 T-out: N
+c o [occ-bve] iter v-elim 6
+c o cl_inc_rate=0.99, var_dec_rate=1.01 (grow=0)
+c o Reduced to 512 vars, 3172 cls (grow=0)
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=3)
+c o Reduced to 512 vars, 3172 cls (grow=3)
+c o [occ-bve] iter v-elim 56
+c o cl_inc_rate=1.03, var_dec_rate=1.12 (grow=4)
+c o Reduced to 456 vars, 3260 cls (grow=4)
+c o x n vars       : 456
+c o #try to eliminate:  1576
+c o #var-elim        :    62
+c o #T-o: N
+c o #T-r: 100.00%
+c o #T  : 0.01
+c o [occur] 0.00 is overhead
+c o [occur] link-in T: 0.00 cleanup T: 0.00
+c o [occ-xor-bve] elimed: 0 T: 0.00 T-out: N
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 1036
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.86%
+c o --> Executing strategy token: intree-probe
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [intree] Set 0 vars hyper-added: 0 trans-irred: 0 trans-red: 0 T: 0.00 T-out: N T-r: -0.30%
+c o Executing OCC strategy token(s): 'occ-backw-sub-str,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub-str
+c o [occ-backw-sub-str-long-w-bins] subs: 0 str: 0 tried: 0 0-depth ass: 0 T: 0.00 T-out: N T-r: 100.00%
+c o [occ-backw-sub-long-w-long] rem cl: 5 tried: 15932/15932 (100.0%) T: 0.00 T-out: N T-r: 99.30%
+c o [occ-backw-sub-str-long-w-long] sub: 0 str: 0 tried: 47796/15932 (300.0)  T: 0.00 T-out: N T-r: 97.68%
+c o --> Executing strategy token: sub-str-cls-with-bin
+c o [distill] watch-based irred--  cl tried     6520 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: clean-cls
+c o --> Executing strategy token: distill-cls
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.86%
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.84%
+c o --> Executing strategy token: distill-bins
+c o [distill-bin] useful: 0/0/0 lits-rem: 0 cl-rem: 0 0-depth-assigns: 0 T: 0.00 T-out: N
+c o Executing OCC strategy token(s): 'occ-backw-sub,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 15927/15927 (100.0%) T: 0.00 T-out: N T-r: 99.30%
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: full-probe
+c o [full-probe]  bin_only: 0 set: 0 repl: 0 T: 0.00 T-out: N T-r: 99.72%
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 1036
+c o --> Executing strategy token: sub-cls-with-bin
+c o [distill] watch-based irred--  cl tried     3260 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.86%
+c o Executing OCC strategy token(s): 'occ-backw-sub,occ-resolv-subs,occ-rem-with-orgates,occ-ternary-res,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 15927/15927 (100.0%) T: 0.00 T-out: N T-r: 99.30%
+c o Executing OCC strategy token: occ-resolv-subs
+c o [occ-resolv-subs] removed: 0 checked: 58448 T: 0.0
+c o Executing OCC strategy token: occ-rem-with-orgates
+c o [occ-gates] found:     0 avg-s: 0.0 T: 0.00 T-out: N T-r: 99.91%
+c o [occ-gate-based-lit-rem] lit-rem: 0 cl-rem: 0 T: 0.00 T-out: N
+c o Executing OCC strategy token: occ-ternary-res
+c o [occ-ternary-res] Ternary res-tri: 0 res-bin: 0 sub: 0 str: 0 T: 0.00 T-out: N T-r: 99.94%
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o Executing OCC strategy token(s): 'occ-bve,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve
+c o [occ-empty-res] Empty resolvent elimed: 0 T: 0.00 T-out: N
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=0)
+c o Reduced to 456 vars, 3260 cls (grow=0)
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=3)
+c o Reduced to 456 vars, 3260 cls (grow=3)
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=4)
+c o Reduced to 456 vars, 3260 cls (grow=4)
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=6)
+c o Reduced to 456 vars, 3260 cls (grow=6)
+c o x n vars       : 456
+c o #try to eliminate:  1628
+c o #var-elim        :     0
+c o #T-o: N
+c o #T-r: 100.00%
+c o #T  : 0.01
+c o [occur] 0.00 is overhead
+c o [occur] link-in T: 0.00 cleanup T: 0.00
+c o [occ-xor-bve] elimed: 0 T: 0.00 T-out: N
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 1036
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.86%
+c o --> Executing strategy token: intree-probe
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [intree] Set 0 vars hyper-added: 0 trans-irred: 0 trans-red: 0 T: 0.00 T-out: N T-r: -0.40%
+c o Executing OCC strategy token(s): 'occ-backw-sub-str,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub-str
+c o [occ-backw-sub-str-long-w-bins] subs: 0 str: 0 tried: 0 0-depth ass: 0 T: 0.00 T-out: N T-r: 100.00%
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 15927/15927 (100.0%) T: 0.00 T-out: N T-r: 99.30%
+c o [occ-backw-sub-str-long-w-long] sub: 0 str: 0 tried: 47781/15927 (300.0)  T: 0.00 T-out: N T-r: 97.68%
+c o --> Executing strategy token: sub-str-cls-with-bin
+c o [distill] watch-based irred--  cl tried     6520 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: clean-cls
+c o --> Executing strategy token: distill-cls
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.86%
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.83%
+c o --> Executing strategy token: distill-bins
+c o [distill-bin] useful: 0/0/0 lits-rem: 0 cl-rem: 0 0-depth-assigns: 0 T: 0.00 T-out: N
+c o Executing OCC strategy token(s): 'occ-backw-sub,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 15927/15927 (100.0%) T: 0.00 T-out: N T-r: 99.30%
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: oracle-vivif-fast
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [oracle-bin] potential pairs: 2090 T: 0.0002
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [oracle-vivif] lits-rem: 0 learnt-units: 0 T-out: N T-remain: 99.3652% T: 0.05
+c o [oracle-bin] bin-added: 0 equiv-added: 0 T-out: N T-remain: 100.00% T: 0.00
+c o [oracle-vivif] cache usefulness: 100% total T: 0.06
+c o --> Executing strategy token: oracle-sparsify-fast
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 912
+c o Executing OCC strategy token(s): 'occ-backw-sub,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 21015/21015 (100.0%) T: 0.00 T-out: N T-r: 99.10%
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [oracle-sparsify] removed: 0 of which bin: 0 tot considered: 3260 ccnr useful: 0 oracle uknown: 1 cache useful: 0% learnt-units: 0 T: 0.90 buildT: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o Executing OCC strategy token(s): 'occ-bve,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve
+c o [occ-empty-res] Empty resolvent elimed: 0 T: 0.00 T-out: N
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=0)
+c o Reduced to 456 vars, 3260 cls (grow=0)
+c o x n vars       : 456
+c o #try to eliminate:   407
+c o #var-elim        :     0
+c o #T-o: N
+c o #T-r: 100.00%
+c o #T  : 0.00
+c o [occur] 0.00 is overhead
+c o [occur] link-in T: 0.00 cleanup T: 0.00
+c o [occ-xor-bve] elimed: 0 T: 0.00 T-out: N
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o [empty] empty_occ: 0 T: 0.00
+c o Executing OCC strategy token(s): 'occ-bve-empty,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve-empty
+c o [occ-empty-res] Empty resolvent elimed: 0 T: 0.00 T-out: N
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o [0m[puura] new_empty_sampl_vars size: 0[0m
+c o [get-cnf] Checking for variables mapping to same new var to set AIG definitions...
+c o solver orig num vars: 1541 solver simp num vars: 456
+c o [0m[31m[puura] Done. final vars: 456 final cls: 3260 T: 71.64[0m
+c o [0m[31m[autarky] Found autarkies: 0 autarky vars: 0 T-out: N T: 0.68[0m
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: full-probe
+c o [full-probe]  bin_only: 0 set: 0 repl: 0 T: 0.00 T-out: N T-r: 99.59%
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 912
+c o --> Executing strategy token: sub-cls-with-bin
+c o [distill] watch-based irred--  cl tried     3260 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.80%
+c o Executing OCC strategy token(s): 'occ-backw-sub,occ-resolv-subs,occ-rem-with-orgates,occ-ternary-res,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 21015/21015 (100.0%) T: 0.00 T-out: N T-r: 99.10%
+c o Executing OCC strategy token: occ-resolv-subs
+c o [occ-resolv-subs] removed: 0 checked: 58448 T: 0.0
+c o Executing OCC strategy token: occ-rem-with-orgates
+c o [occ-gates] found:     0 avg-s: 0.0 T: 0.00 T-out: N T-r: 99.91%
+c o [occ-gate-based-lit-rem] lit-rem: 0 cl-rem: 0 T: 0.00 T-out: N
+c o Executing OCC strategy token: occ-ternary-res
+c o [occ-ternary-res] Ternary res-tri: 0 res-bin: 0 sub: 0 str: 0 T: 0.00 T-out: N T-r: 99.83%
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o Executing OCC strategy token(s): 'occ-bve,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve
+c o [occ-empty-res] Empty resolvent elimed: 0 T: 0.00 T-out: N
+c o [occ-bve] iter v-elim 0
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=0)
+c o Reduced to 456 vars, 3260 cls (grow=0)
+c o x n vars       : 456
+c o #try to eliminate:   407
+c o #var-elim        :     0
+c o #T-o: N
+c o #T-r: 100.00%
+c o #T  : 0.00
+c o [occur] 0.00 is overhead
+c o [occur] link-in T: 0.00 cleanup T: 0.00
+c o [occ-xor-bve] elimed: 0 T: 0.00 T-out: N
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 912
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.80%
+c o --> Executing strategy token: intree-probe
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [intree] Set 0 vars hyper-added: 0 trans-irred: 0 trans-red: 0 T: 0.00 T-out: N T-r: -0.33%
+c o Executing OCC strategy token(s): 'occ-backw-sub-str,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub-str
+c o [occ-backw-sub-str-long-w-bins] subs: 0 str: 0 tried: 0 0-depth ass: 0 T: 0.00 T-out: N T-r: 100.00%
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 21015/21015 (100.0%) T: 0.00 T-out: N T-r: 99.10%
+c o [occ-backw-sub-str-long-w-long] sub: 0 str: 0 tried: 63045/21015 (300.0)  T: 0.00 T-out: N T-r: 97.04%
+c o --> Executing strategy token: sub-str-cls-with-bin
+c o [distill] watch-based irred--  cl tried     6520 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: clean-cls
+c o --> Executing strategy token: distill-cls
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.80%
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.77%
+c o --> Executing strategy token: distill-bins
+c o [distill-bin] useful: 0/0/0 lits-rem: 0 cl-rem: 0 0-depth-assigns: 0 T: 0.00 T-out: N
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: oracle-vivif-sparsify
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [oracle-bin] potential pairs: 2090 T: 0.0002
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [oracle-vivif] lits-rem: 0 learnt-units: 0 T-out: N T-remain: 99.8852% T: 0.03
+c o [oracle-bin] bin-added: 0 equiv-added: 0 T-out: N T-remain: 100.00% T: 0.00
+c o [oracle-vivif] cache usefulness: 100% total T: 0.03
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 912
+c o Executing OCC strategy token(s): 'occ-backw-sub,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o Mem for watch alloc    : 0           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 24113/24113 (100.0%) T: 0.00 T-out: N T-r: 98.98%
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [oracle-sparsify] removed: 0 of which bin: 0 tot considered: 3260 ccnr useful: 0 oracle uknown: 1 cache useful: 0% learnt-units: 0 T: 2.20 buildT: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: full-probe
+c o [full-probe]  bin_only: 0 set: 0 repl: 0 T: 0.00 T-out: N T-r: 99.53%
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 912
+c o --> Executing strategy token: sub-cls-with-bin
+c o [distill] watch-based irred--  cl tried     3260 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3260/3260 T: 0.00 T-out: N T-r: 99.72%
+c o Executing OCC strategy token(s): 'occ-backw-sub,occ-resolv-subs,occ-rem-with-orgates,occ-ternary-res,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 24113/24113 (100.0%) T: 0.00 T-out: N T-r: 98.98%
+c o Executing OCC strategy token: occ-resolv-subs
+c o [occ-resolv-subs] removed: 0 checked: 58448 T: 0.0
+c o Executing OCC strategy token: occ-rem-with-orgates
+c o [occ-gates] found:     0 avg-s: 0.0 T: 0.00 T-out: N T-r: 99.91%
+c o [occ-gate-based-lit-rem] lit-rem: 0 cl-rem: 0 T: 0.00 T-out: N
+c o Executing OCC strategy token: occ-ternary-res
+c o [occ-ternary-res] Ternary res-tri: 0 res-bin: 0 sub: 0 str: 0 T: 0.00 T-out: N T-r: 99.82%
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o Executing OCC strategy token(s): 'occ-bve,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve
+c o [occ-empty-res] Empty resolvent elimed: 0 T: 0.00 T-out: N
+c o [occ-bve] iter v-elim 2
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=0)
+c o Reduced to 454 vars, 3248 cls (grow=0)
+c o x n vars       : 454
+c o #try to eliminate:   418
+c o #var-elim        :     2
+c o #T-o: N
+c o #T-r: 100.00%
+c o #T  : 0.00
+c o [occur] 0.00 is overhead
+c o [occur] link-in T: 0.00 cleanup T: 0.00
+c o [occ-xor-bve] elimed: 0 T: 0.00 T-out: N
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 912
+c o --> Executing strategy token: distill-cls-onlyrem
+c o [distill-long-irred] cls tried: 3248/3248 T: 0.00 T-out: N T-r: 99.72%
+c o --> Executing strategy token: intree-probe
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [intree] Set 0 vars hyper-added: 0 trans-irred: 0 trans-red: 0 T: 0.00 T-out: N T-r: -0.82%
+c o Executing OCC strategy token(s): 'occ-backw-sub-str,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub-str
+c o [occ-backw-sub-str-long-w-bins] subs: 0 str: 0 tried: 0 0-depth ass: 0 T: 0.00 T-out: N T-r: 100.00%
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 24090/24090 (100.0%) T: 0.00 T-out: N T-r: 98.98%
+c o [occ-backw-sub-str-long-w-long] sub: 0 str: 0 tried: 72270/24090 (300.0)  T: 0.00 T-out: N T-r: 96.65%
+c o --> Executing strategy token: sub-str-cls-with-bin
+c o [distill] watch-based irred--  cl tried     6496 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o [distill] watch-based   red--  cl tried        0 cl-sh     0 cl-rem    0 lit-rem      0 T: 0.00 T-out: N
+c o --> Executing strategy token: clean-cls
+c o --> Executing strategy token: distill-cls
+c o [distill-long-irred] cls tried: 3248/3248 T: 0.00 T-out: N T-r: 99.72%
+c o [distill-long-irred] cls tried: 3248/3248 T: 0.00 T-out: N T-r: 99.72%
+c o --> Executing strategy token: distill-bins
+c o [distill-bin] useful: 0/0/0 lits-rem: 0 cl-rem: 0 0-depth-assigns: 0 T: 0.00 T-out: N
+c o Executing OCC strategy token(s): 'occ-backw-sub,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 24090/24090 (100.0%) T: 0.00 T-out: N T-r: 98.98%
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: oracle-vivif-fast
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [oracle-bin] potential pairs: 2082 T: 0.0002
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o [oracle-vivif] lits-rem: 0 learnt-units: 0 T-out: N T-remain: 99.2854% T: 0.06
+c o [oracle-bin] bin-added: 0 equiv-added: 0 T-out: N T-remain: 100.00% T: 0.00
+c o [oracle-vivif] cache usefulness: 100% total T: 0.07
+c o --> Executing strategy token: oracle-sparsify-fast
+c o --> Executing strategy token: sub-impl
+c o [impl-sub] bin: 0 T: 0.00 T-out: N w-visit: 908
+c o Executing OCC strategy token(s): 'occ-backw-sub,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-backw-sub
+c o [occ-backw-sub-long-w-long] rem cl: 0 tried: 30143/30143 (100.0%) T: 0.00 T-out: N T-r: 98.74%
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [oracle-sparsify] removed: 0 of which bin: 0 tot considered: 3248 ccnr useful: 0 oracle uknown: 1 cache useful: 0% learnt-units: 0 T: 0.96 buildT: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o Executing OCC strategy token(s): 'occ-bve,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 1           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve
+c o [occ-empty-res] Empty resolvent elimed: 0 T: 0.00 T-out: N
+c o [occ-bve] iter v-elim 1
+c o cl_inc_rate=1.00, var_dec_rate=1.00 (grow=0)
+c o Reduced to 453 vars, 3244 cls (grow=0)
+c o x n vars       : 453
+c o #try to eliminate:   410
+c o #var-elim        :     1
+c o #T-o: N
+c o #T-r: 100.00%
+c o #T  : 0.00
+c o [occur] 0.00 is overhead
+c o [occur] link-in T: 0.00 cleanup T: 0.00
+c o [occ-xor-bve] elimed: 0 T: 0.00 T-out: N
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o --> Executing strategy token: must-scc-vrepl
+c o [scc] new: 0 BP 0M T: 0.00
+c o [vrep] vars 0 lits 0 rem-bin-cls 0 rem-long-cls 0 BP 0M T: 0.00
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 2           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o [empty] empty_occ: 0 T: 0.00
+c o Executing OCC strategy token(s): 'occ-bve-empty,
+c o [occ] mem usage for occur      0 MB
+c o [occ] Linked in IRRED BIN by default: 0
+c o [occ] Linked in RED   BIN by default: 0
+c o [occ] mem usage for occur      0 MB
+c o Mem for watch alloc    : 2           MB (0.00      %)
+c o Mem for watch array    : 0           MB (0.00      %)
+c o Executing OCC strategy token: occ-bve-empty
+c o [occ-empty-res] Empty resolvent elimed: 0 T: 0.00 T-out: N
+c o --> Executing strategy token: must-renumber
+c o [renumber] T: 0.00
+c o [consolidate] mini T: 0.00
+c o global_timeout_multiplier: 3.3000
+c o [branch] rebuilding order heap for all branchings. Current branching: vsids
+c o [0m[puura] new_empty_sampl_vars size: 0[0m
+c o [get-cnf] Checking for variables mapping to same new var to set AIG definitions...
+c o solver orig num vars: 456 solver simp num vars: 453
+c o [0m[31m[puura] Done. final vars: 453 final cls: 3244 T: 3.38[0m
+c o [0m[arjun-sbva] entering SBVA with     vars: 453     cls:   3244 opt sampl: 453[0m
+c o [0m[arjun-sbva] exited SBVA with       vars: 453     cls:   3244[0m
+c o [0m[arjun-sbva] K steps remaining: 225.10 T-out: No T: 0.00[0m
+c o Arjun T: 98.10
+c o Found 1 disconnected component(s)
+c o [par] Using non-parallel counting
+c o ind size: 49 nvars: 453
+c o opt ind size: 453 ind size: 49 nvars: 453
+c o Sampling set size: 49
+c o Opt sampling set size: 453
+c o Bin irred/red      0          0         
+c o Long irred cls/tri 2712       532       
+c o Long red cls/tri   26777      13        
+c o [td] nodes: 453 nvars: 453 edges: 2078
+c o [td] Primal graph   nodes: 453 edges: 2078 density: 0.010 edge/var: 4.587
+c o [td] min degree heuristic
+c o [td] #bags 244, tw 60, elapsed 0.002 s
+c o [td] min shortcut heuristic
+c o [td] #bags 288, tw 58, elapsed 0.052 s
+c o [td] run with 0.0/0.1/0.2 min balance and node_min_expansion in endless loop with varying seed
+c o [td] #bags 35 tw 53 elapsed 0.064 s
+c o [td] #bags 31 tw 52 elapsed 0.094 s
+c o [td] #bags 31 tw 51 elapsed 0.418 s
+c o [td] iter 100 width: 51 stepsK remain: 97 T: 1.048
+c o [td] iter 200 width: 51 stepsK remain: 94 T: 2.010
+c o [td] iter 300 width: 51 stepsK remain: 91 T: 2.968
+c o [td] iter 400 width: 51 stepsK remain: 88 T: 3.929
+c o [td] iter 500 width: 51 stepsK remain: 86 T: 4.888
+c o [td] iter 600 width: 51 stepsK remain: 83 T: 5.841
+c o [td] iter 700 width: 51 stepsK remain: 80 T: 6.803
+c o [td] iter 800 width: 51 stepsK remain: 77 T: 7.766
+c o [td] centroid bag id: 0 bag size: 36
+c o [td] centroid bag id: 0 bag size: 36
+c o [td] weight: 7.000 nodes: 453 rt/width(=rt): 8.882 rt*conf.td_exp_mult: 9.771 conf.td_exp_mult: 1.100 conf.td_divider: 1000.000 max ord diff: 4
+c o [td] decompose time: 8.728
+c o [rdb] cls before: 36791 after: 36791 low lbd: 3 lbd cutoff: 2 target computed: 20000 cannot be del : 45 used: 36788 rdb: 1
+c o [mem] consolidate  old-sz: 4871K new-sz: 1353K new bits offs: 18 T: 0.00
+c o [rdb] cls before: 25725 after: 17054 low lbd: 19 lbd cutoff: 2 target computed: 20000 cannot be del : 57 used: 15606 rdb: 4
+c o [rdb] cls before: 26351 after: 15997 low lbd: 86 lbd cutoff: 2 target computed: 20000 cannot be del : 42 used: 13242 rdb: 7
+c o [mem] consolidate  old-sz: 5113K new-sz: 1370K new bits offs: 18 T: 0.00
+c o [rdb] cls before: 27379 after: 17330 low lbd: 95 lbd cutoff: 2 target computed: 20000 cannot be del : 16 used: 13169 rdb: 10
+c o [mem] consolidate  old-sz: 4842K new-sz: 1555K new bits offs: 18 T: 0.00
+c o [rdb] cls before: 27341 after: 17640 low lbd: 95 lbd cutoff: 2 target computed: 20000 cannot be del : 42 used: 13539 rdb: 13
+c o [mem] consolidate  old-sz: 4121K new-sz: 1457K new bits offs: 18 T: 0.00
+c o [rdb] cls before: 28612 after: 18378 low lbd: 95 lbd cutoff: 2 target computed: 20000 cannot be del : 53 used: 14015 rdb: 16
+c o [mem] consolidate  old-sz: 4009K new-sz: 1466K new bits offs: 18 T: 0.00
+c o [rdb] cls before: 27318 after: 17266 low lbd: 95 lbd cutoff: 2 target computed: 20000 cannot be del : 47 used: 12439 rdb: 19
+c o [mem] consolidate  old-sz: 4108K new-sz: 1495K new bits offs: 18 T: 0.00
+c o [rdb] cls before: 27715 after: 17942 low lbd: 95 lbd cutoff: 2 target computed: 20000 cannot be del : 22 used: 12919 rdb: 22
+c o [mem] consolidate  old-sz: 5084K new-sz: 1500K new bits offs: 18 T: 0.00
+c o [rdb] cls before: 28233 after: 18170 low lbd: 96 lbd cutoff: 2 target computed: 20000 cannot be del : 52 used: 12886 rdb: 25
+c o [rst-cube] Num restarts: 0 orig cubes this rst: 1 final cubes this rst: 1 total orig cubes: 1 total final cubes: 1
+c o total time so far: 135.26
+c o decisions K                    355       -- Kdec/s:     9.58     
+c o conflicts                      279380       -- confl/s:    7519.60  
+c o rem lits triedK/rem lits remK  200       0         
+c o shrink tried/useful%/lits rem  279380    77.8130   1190971   
+c o avg clsz/rem lits avg/finalavg 24.6394   18.2326   18.2326  
+c o rdbs/low lbd/rem               27    96     278352
+c o looks/look-computes            0/0
+c o sat call/sat/unsat/confl/rst  0     0     0     0     0     
+c o buddy called /unsat ratio           0     / 0.0000 
+c o buddy avg num bin/long cls/vs  0.0000 / 0.0000 / 0.0000
+c o buddy max num bin/long cls/vs  0     / 0     / 0    
+c o orig cubes/lit-r avg/exten avg 1     / 0.00  / 0.00 
+c o cubes orig/symm/final          1     / 0     / 1    
+c o cubes resolved/flp-removed     0     / 0    
+c o tot restarts                   0    
+c o comp sortsK/avg sz             355   / 1.00000000
+c o comps recordK/non-reset ratio  355 / 0.53
+c o vivif: try/cls/clviv/litsravg  8         18599     843       0.86      
+c o toplev subs runs/bins/long-cls 0         0         0         0         0         
+c o toplevel probes/fail/bprop     0         0         0         
+c o Mem used                       0.00 GB
+c o cache pollutions call/removed  619418/203518
+c o cache entries K                152
+c o MB cache                       182.767
+c o cache K (lookup/ stores/ hits/ dels) 355    355    0      0       -- Klookup/s:  9.58     
+c o cache miss rate                1.000
+c o avg hit/store num vars 0.000 / 408.791
+c o 
+c o intermediate count: 65536
+c o Total time [Arjun+GANAK]: 135.27
+s SATISFIABLE
+c s type mc
+c s log10-estimate 4.81647993e+00
+c s exact arb int 65536
+c s pac guarantees epsilon: 0 delta: 0
