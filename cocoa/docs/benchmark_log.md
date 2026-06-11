@@ -3053,3 +3053,13 @@ COCOA: the tiny separator gave a *partial* decomposition — the cascade configs
 **ganak: arjun=True did NOT rescue it (unlike 131) — its component cache was useless.** Ran the full ~44-min budget; RSS ballooned to 18.2 GB but the final leader_sample tells the story: **0 conflicts, 0 cubes, 0 cache entries, cache_miss_rate=1.000** (every component lookup missed), klookup_s≈16.7k. So ganak was enumerating components against a 100%-miss cache (no repeated substructure to exploit) with no CDCL conflict pruning — effectively brute force on 51k vars. No count. Clean full-budget timeout (no crash/watchdog).
 
 **Sixth both-lose (127/139/141/143/159/161), and the SECOND arjun=True both-lose (127, 161).** Confirms again arjun=True is no guarantee: here the post-Arjun residual was too large + structurally uncacheable for ganak at scale — a distinct mechanism from 159's arjun=False deep-wall ("uncacheable scale" vs deep tail). **Monitoring tell:** a populated-but-zero heartbeat (`cache_K=0`, `cache_miss_rate=1.0`, 0 conflicts) while RSS balloons = ganak brute-forcing with a useless cache → reliable timeout signature. **Count remains unknown.**
+
+## mc2026_track1_163 — TIMEOUT, both engines lose (count unknown) — large-sep + arjun=False; ganak preprocessing-bound
+
+**4872v / 51,385-cl (~10.5 cl/var, dense), band=HIGH, log2_cost=3442.3, sep_ratio=0.585 / sepsize=2856 (LARGE separator), max_path=3438.0, n_leaves=30021, arjun substantial=False.** **TIMEOUT — neither engine returned a count in the 60-min budget.**
+
+COCOA: despite the large separator, the cascade configs (nosep/sep-cascade) decomposed to closed_bits 4023 / **pct 52.8% — ~0.92 bits unclosed** (n_root≈4024), then STALLED on the last component (a burst-from-load, no further progress through rounds 2–3 — the 025/121 "stuck on the final bit" pattern). plain/cache-max stuck ~9 bits short. Leader cocoa-nosep-cascade frozen at 52.8%, handed off at ~+14 min.
+
+ganak: ran the full ~44-min budget but spent ALL of it in PREPROCESSING — `[ganak~live]` blank (`cache_K=-`) from start to active 2642s, RSS to 13.3 GB, never reached a parseable counting phase. The dense + large-separator structure was too hard to simplify (cadiback/CMS distill) in 44 min. No count. Clean full-budget timeout.
+
+**Seventh both-lose (127/139/141/143/159/161/163).** The 121 hope (stuck ~1-bit residual ⇒ ganak cracks the small remainder) did NOT pan out — and the differentiator vs 121 is density: 121 was 5259v/**15.7k**-cl (ganak preprocessed fast → solved in 94s), 163 is 4872v/**51.4k**-cl, so ganak's preprocessing never finished. Reinforces the arjun=False + large-separator + band=high both-lose class (029/033/…/163). **Count remains unknown.**
