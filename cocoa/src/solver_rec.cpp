@@ -639,7 +639,13 @@ mpz_class Solver::solveComponent(Component &comp,
 		// Env-gated L2-store-time verifier (no-op unless SHARPSAT_VERIFY_*
 		// env vars are set). Implementation lives in solver_diagnostics.cpp.
 		verifyL2Store(comp, cached_key, result, depth);
-		{
+		// Timeout gate: on the timeout unwind solveComponentImpl returns 0,
+		// which would otherwise be persisted as a wrong-zero entry for a
+		// component whose true count is positive (harmless to THIS run's
+		// final answer -- it ends TIMEOUT -- but diveSample probes the
+		// warmed cache after a time-limited solve, and the -cachePurge
+		// timeout gate deliberately skips purging these).
+		if (!stopwatch_.timeBoundBrokenCached()) {
 			OpTimer _t(this, OP_L2_STORE);
 			comp_manager_.contentCache().store(cached_key, structural);
 		}
@@ -1563,7 +1569,9 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				// (under "Complication 3: subtle store semantics").
 				// Populate L1 so future visits to the same ID-set skip
 				// the canonical build.
-				{
+				// Timeout gate: see the entry-path L2 store comment --
+				// sub_count is 0 on the timeout unwind, not a real count.
+				if (!stopwatch_.timeBoundBrokenCached()) {
 					OpTimer _t(this, OP_L1_STORE);
 					comp_manager_.contentCache().l1_store(id_key, sub_count);
 				}
