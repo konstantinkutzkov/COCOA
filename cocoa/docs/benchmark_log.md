@@ -3073,3 +3073,7 @@ COCOA: all configs walled — the leading ~20-bit group (plain/cache-max/reactiv
 ganak: ran the full ~44-min budget entirely in PREPROCESSING — `[ganak~live]` blank (`cache_K=-`) from start to active 2642s, RSS to 13.3 GB, never reached counting. Despite being smaller than 161 (11.7k vs 51k vars) and arjun=True, the simplification (cadiback/CMS distill) didn't finish. No count. Clean full-budget timeout.
 
 **Eighth both-lose (127/139/141/143/159/161/163/165), THIRD arjun=True one (127/161/165), and the FOURTH CONSECUTIVE (159/161/163/165).** arjun=True keeps failing to deliver in this band=high region — ganak's *preprocessing* is the bottleneck, not Arjun specifically (it never even reaches counting). The sweep has hit a hard band=high cluster (159–165 all both-lose). **Count remains unknown.**
+
+## mc2026_track1_167 — SOLVED, count = 10 (cocoa-plain r1, 0.1s; ganak-verified)
+
+**15v / 34-cl (tiny), band=LOW, log2_cost=7.9, sep_ratio=0.2 / sepsize=3, max_path=6.0, n_leaves=7, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **10**; `ganak --prob 0` = 10 (match ✓). Trivial 15-var instance — instant for both. Breaks the four-instance both-lose streak (159–165).
