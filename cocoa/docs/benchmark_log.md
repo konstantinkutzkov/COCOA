@@ -3063,3 +3063,13 @@ COCOA: despite the large separator, the cascade configs (nosep/sep-cascade) deco
 ganak: ran the full ~44-min budget but spent ALL of it in PREPROCESSING — `[ganak~live]` blank (`cache_K=-`) from start to active 2642s, RSS to 13.3 GB, never reached a parseable counting phase. The dense + large-separator structure was too hard to simplify (cadiback/CMS distill) in 44 min. No count. Clean full-budget timeout.
 
 **Seventh both-lose (127/139/141/143/159/161/163).** The 121 hope (stuck ~1-bit residual ⇒ ganak cracks the small remainder) did NOT pan out — and the differentiator vs 121 is density: 121 was 5259v/**15.7k**-cl (ganak preprocessed fast → solved in 94s), 163 is 4872v/**51.4k**-cl, so ganak's preprocessing never finished. Reinforces the arjun=False + large-separator + band=high both-lose class (029/033/…/163). **Count remains unknown.**
+
+## mc2026_track1_165 — TIMEOUT, both engines lose (count unknown) — arjun=True but ganak preprocessing-bound (again)
+
+**11,731v / 40,805-cl (~3.5 cl/var), band=HIGH, log2_cost=1660.2, sep_ratio=0.158 / sepsize=1860 (moderate separator), max_path=1654.0, n_leaves=6488, arjun substantial=True.** **TIMEOUT — neither engine returned a count in the 60-min budget.**
+
+COCOA: all configs walled — the leading ~20-bit group (plain/cache-max/reactive/unified-sep at closed_bits 9673, n_root≈9693) frozen flat through rounds 1–3; the cascade configs were *far* deeper here (~203 bits, the opposite of 161/163 — branch advantage is instance-specific). Leader cocoa-plain frozen at ~20 bits, handed off at ~+14 min.
+
+ganak: ran the full ~44-min budget entirely in PREPROCESSING — `[ganak~live]` blank (`cache_K=-`) from start to active 2642s, RSS to 13.3 GB, never reached counting. Despite being smaller than 161 (11.7k vs 51k vars) and arjun=True, the simplification (cadiback/CMS distill) didn't finish. No count. Clean full-budget timeout.
+
+**Eighth both-lose (127/139/141/143/159/161/163/165), THIRD arjun=True one (127/161/165), and the FOURTH CONSECUTIVE (159/161/163/165).** arjun=True keeps failing to deliver in this band=high region — ganak's *preprocessing* is the bottleneck, not Arjun specifically (it never even reaches counting). The sweep has hit a hard band=high cluster (159–165 all both-lose). **Count remains unknown.**
