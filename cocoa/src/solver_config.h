@@ -548,6 +548,19 @@ struct SolverConfiguration {
   // fires. Empty = don't dump (just abort with diagnostic to stderr).
   std::string brute_force_cache_dump_dir = "";
 
+  // Learned-clause cache-pollution defense (-cachePurge). Reinstates the
+  // purge removed in commit e9f8df6 (ancestor 9ff3ea4 solver.cpp:325,
+  // removeAllCachePollutionsOf): a component count computed while a
+  // globally-learned clause pruned inside it is valid only while all
+  // sibling components are satisfiable, so stores made under a branch
+  // arm that resolves to 0 must not outlive the arm. Root cause of the
+  // mc2026_track1_169 undercount; see docs/cache_soundness_fix_plan.md.
+  //   0 = off (DEFAULT until Stages 1-3 of the validation pass; the
+  //       flip to 1 is a separate one-character commit)
+  //   1 = purge stores made under failed branch arms
+  //   2 = diagnostic: mark + count would-be-purged entries, change nothing
+  int cache_purge_mode = 0;
+
   // ===============================================================
   // END diagnostic flags
   // ===============================================================

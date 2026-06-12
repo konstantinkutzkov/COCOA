@@ -10,6 +10,7 @@
 #define CONTENT_CACHE_H_
 
 #include <unordered_map>
+#include <unordered_set>
 #include <cassert>
 #include <cstdint>
 #include <iostream>
@@ -56,6 +57,8 @@ struct IdKeyHasher {
 class ContentCache {
 public:
   // Returns: MISS if not cached; HIT if cached.
+  // NOTE: dead code in production (zero call sites; both live L2 hit
+  // paths use peek()). Kept for ABI/diagnostics.
   bool lookup(const CanonicalKey &key, mpz_class &count) {
     auto it = cache_.find(key);
     if (it != cache_.end()) {
@@ -91,6 +94,14 @@ public:
     bool is_new = (existing == cache_.end());
     cache_[key] = count;
     if (is_new) cur_bytes_ += l2_entry_bytes(key, count);
+    // -cachePurge journal: record stores made inside an open branch arm
+    // so popMarkFailed() can purge them. No mark open (root decomposition
+    // spine) => nothing to journal: a zero there ends the run with the
+    // always-correct live count.
+    if (purge_mode_ != 0 && !marks_.empty() && !journal_saturated_) {
+      journal_l2_.push_back(key);
+      noteJournalGrowth();
+    }
     stats_stores++;
     stats_store_vars_sum += key.num_vars;
     if (key.num_vars > stats_max_store_size) stats_max_store_size = key.num_vars;
@@ -101,6 +112,16 @@ public:
   bool peek(const CanonicalKey &key, mpz_class &out) const {
     auto it = cache_.find(key);
     if (it == cache_.end()) return false;
+    // -cachePurge mode 2: count hits landing on entries a real purge
+    // would have erased — the run's soundness exposure AND the upper
+    // bound on memoization lost to mode 1. Var-weighted sum because
+    // recompute cost scales with component size (the mean misleads;
+    // see the hit-bucket comment below). Valid only with deriv/dive
+    // features off (their diagnostic peeks would inflate the counts).
+    if (purge_mode_ == 2 && !dead_l2_.empty() && dead_l2_.count(key)) {
+      stats_dead_hits++;
+      stats_dead_hit_vars_sum += key.num_vars;
+    }
     out = it->second;
     return true;
   }
@@ -113,6 +134,9 @@ public:
   bool l1_lookup(const IdKey &k, mpz_class &count) {
     auto it = l1_cache_.find(k);
     if (it == l1_cache_.end()) { stats_l1_misses++; return false; }
+    // -cachePurge mode 2: see peek().
+    if (purge_mode_ == 2 && !dead_l1_.empty() && dead_l1_.count(k))
+      stats_dead_hits_l1++;
     count = it->second;
     stats_l1_hits++;
     return true;
@@ -126,10 +150,115 @@ public:
     bool is_new = (l1_cache_.find(k) == l1_cache_.end());
     l1_cache_[k] = count;
     if (is_new) cur_bytes_ += l1_entry_bytes(k, count);
+    // -cachePurge journal: see store().
+    if (purge_mode_ != 0 && !marks_.empty() && !journal_saturated_) {
+      journal_l1_.push_back(k);
+      noteJournalGrowth();
+    }
     stats_l1_stores++;
   }
 
   size_t l1_size() const { return l1_cache_.size(); }
+
+  // ---------------------------------------------------------------
+  // Learned-clause cache-pollution defense (-cachePurge).
+  //
+  // Reinstates the protection removed in commit e9f8df6 (the ancestor
+  // 9ff3ea4 had `removeAllCachePollutionsOf` in solver.cpp:325). A
+  // component count computed while a globally-learned clause pruned
+  // inside its solve equals the pure local count ONLY while every
+  // sibling component in the residual is satisfiable (containment
+  // theorem); in a context where a sibling is UNSAT the node product
+  // is 0 anyway, but the too-small count must not OUTLIVE that
+  // context via the cache. Therefore: every store made inside an open
+  // branch arm is journaled, and when an arm resolves to 0 (genuine
+  // failure, not timeout) the journaled range is purged.
+  //
+  //   purge_mode_ 0 = off (journal fully inert; today's behavior)
+  //               1 = purge stores made under failed branch arms
+  //               2 = diagnostic: mark would-be-purged entries dead and
+  //                   count hits on them; results unchanged
+  //
+  // Discipline (load-bearing): popMarkSuccess() does NOT truncate the
+  // journal — an ancestor arm may still fail and must purge entries
+  // stored under its completed-successful descendants (the
+  // C1-stored-then-sibling-C2-UNSAT case). Journals clear only when
+  // the outermost mark pops. popMarkFailed() truncates to its mark, so
+  // each journal slot is purged at most once (hard work ceiling).
+  // ---------------------------------------------------------------
+  void pushMark() {
+    marks_.emplace_back(journal_l2_.size(), journal_l1_.size());
+  }
+
+  void popMarkSuccess() {
+    assert(!marks_.empty());
+    marks_.pop_back();
+    if (marks_.empty()) {
+      journal_l2_.clear();
+      journal_l1_.clear();
+      journal_saturated_ = false;
+    }
+  }
+
+  void popMarkFailed() {
+    assert(!marks_.empty());
+    auto mk = marks_.back();
+    marks_.pop_back();
+    stats_purge_events++;
+    if (purge_mode_ == 1) {
+      if (journal_saturated_) {
+        // Saturated journal: some stores under this arm were NOT
+        // journaled, so the only sound erase is everything. Pure
+        // memoization loss (cache is memoization only).
+        stats_purged_l2 += cache_.size();
+        stats_purged_l1 += l1_cache_.size();
+        cache_.clear();
+        l1_cache_.clear();
+        cur_bytes_ = 0;
+        journal_l2_.clear();
+        journal_l1_.clear();
+        for (auto &m : marks_) m = {0, 0};
+        journal_saturated_ = false;
+        return;
+      }
+      for (size_t i = mk.first; i < journal_l2_.size(); ++i) {
+        auto it = cache_.find(journal_l2_[i]);
+        if (it != cache_.end()) {  // may already be evicted — fine
+          cur_bytes_ -= l2_entry_bytes(it->first, it->second);
+          cache_.erase(it);
+          stats_purged_l2++;
+        }
+      }
+      for (size_t i = mk.second; i < journal_l1_.size(); ++i) {
+        auto it = l1_cache_.find(journal_l1_[i]);
+        if (it != l1_cache_.end()) {
+          cur_bytes_ -= l1_entry_bytes(it->first, it->second);
+          l1_cache_.erase(it);
+          stats_purged_l1++;
+        }
+      }
+    } else if (purge_mode_ == 2) {
+      for (size_t i = mk.first; i < journal_l2_.size(); ++i) {
+        dead_l2_.insert(journal_l2_[i]);
+        stats_dead_marked++;
+      }
+      for (size_t i = mk.second; i < journal_l1_.size(); ++i) {
+        dead_l1_.insert(journal_l1_[i]);
+        stats_dead_marked++;
+      }
+    }
+    journal_l2_.resize(mk.first);
+    journal_l1_.resize(mk.second);
+    if (marks_.empty()) {
+      journal_l2_.clear();
+      journal_l1_.clear();
+      journal_saturated_ = false;
+    }
+  }
+
+  bool marksEmpty() const { return marks_.empty(); }
+  size_t dead_l2_size() const { return dead_l2_.size(); }
+  size_t dead_l1_size() const { return dead_l1_.size(); }
 
   // Configuration: cache memory budget in BYTES (0 = unbounded). Default
   // ~20 GB -- conservative headroom under the competition's 32 GB HARD
@@ -142,6 +271,28 @@ public:
   uint64_t max_bytes_ = 20000ULL * 1000000ULL;
   uint64_t cur_bytes_ = 0;
   unsigned long stats_evictions = 0;
+
+  // -cachePurge mode (see the pollution-defense block above). Wired from
+  // config_.cache_purge_mode in solver.cpp next to the -cs cap.
+  int purge_mode_ = 0;
+  // Journal byte cap (keys only). The journal clears only when the
+  // OUTERMOST open arm completes, so its peak tracks the store volume of
+  // the largest outermost arm (~150 MB at probe169 scale). On overflow:
+  // stop journaling (saturate); if a saturated scope later FAILS in mode
+  // 1, flush both maps entirely (sound, pure memoization loss). 0 = uncapped.
+  uint64_t journal_max_bytes_ = 2000ULL * 1000000ULL;
+
+  // -cachePurge statistics (all inert at mode 0).
+  unsigned long stats_purge_events = 0;
+  unsigned long stats_purged_l2 = 0;
+  unsigned long stats_purged_l1 = 0;
+  uint64_t stats_journal_peak = 0;
+  unsigned long stats_journal_overflows = 0;
+  unsigned long stats_dead_marked = 0;
+  // mutable: bumped inside const peek().
+  mutable unsigned long stats_dead_hits = 0;
+  mutable unsigned long stats_dead_hits_l1 = 0;
+  mutable unsigned long long stats_dead_hit_vars_sum = 0;
 
   // Statistics
   unsigned long stats_hits = 0;
@@ -178,6 +329,25 @@ public:
 private:
   std::unordered_map<CanonicalKey, mpz_class, CanonicalKeyHash> cache_;
   std::unordered_map<IdKey, mpz_class, IdKeyHasher> l1_cache_;
+
+  // -cachePurge state: store journals (keys by value), the per-arm
+  // watermark stack, and (mode 2 only) the dead-entry marks.
+  std::vector<CanonicalKey> journal_l2_;
+  std::vector<IdKey> journal_l1_;
+  std::vector<std::pair<size_t, size_t>> marks_;
+  std::unordered_set<CanonicalKey, CanonicalKeyHash> dead_l2_;
+  std::unordered_set<IdKey, IdKeyHasher> dead_l1_;
+  bool journal_saturated_ = false;
+
+  void noteJournalGrowth() {
+    uint64_t jb = (uint64_t)journal_l2_.size() * sizeof(CanonicalKey)
+                + (uint64_t)journal_l1_.size() * sizeof(IdKey);
+    if (jb > stats_journal_peak) stats_journal_peak = jb;
+    if (journal_max_bytes_ > 0 && jb > journal_max_bytes_) {
+      journal_saturated_ = true;
+      stats_journal_overflows++;
+    }
+  }
 
   // Estimated heap footprint of one cache entry: key + mpz limbs + a fixed
   // NODE_OVERHEAD approximating the unordered_map node pointer, malloc

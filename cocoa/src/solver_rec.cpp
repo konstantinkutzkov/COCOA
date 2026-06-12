@@ -2144,6 +2144,29 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 	return A + B;
 }
 
+// RAII purge scope for ONE branch arm (-cachePurge; see content_cache.h's
+// pollution-defense block). Marks the cache journal at arm entry; the arm
+// reports its outcome via finish(failed) where failed = "resolved to 0 and
+// not by timeout". FAIL-CLOSED: if any exit path forgets finish(), the
+// destructor purges the range — a pure memoization loss — rather than
+// silently keeping suspect entries (popMarkSuccess by default would
+// resurrect the pollution bug class on any future early return).
+struct BranchPurgeScope {
+	ContentCache &cc;
+	bool active;
+	BranchPurgeScope(ContentCache &c, bool a) : cc(c), active(a) {
+		if (active) cc.pushMark();
+	}
+	void finish(bool failed) {
+		if (!active) return;
+		if (failed) cc.popMarkFailed(); else cc.popMarkSuccess();
+		active = false;
+	}
+	~BranchPurgeScope() {
+		if (active) cc.popMarkFailed();
+	}
+};
+
 mpz_class Solver::branchOnLiteral(LiteralID lit,
                                    Component &comp,
                                    vector<CutNode> separator,
@@ -2152,6 +2175,13 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
                                    int reactive_metis_skip_until_depth,
                                    double child_abstract_budget) {
 	unsigned lit_save = literal_stack_.size();
+	// -cachePurge: journal-mark this branch arm. Constructed before ANY
+	// path that can recurse (the T_TRI passthrough below both stores and
+	// can return 0); the F_TRI return purges a provably empty range (a
+	// no-op — no recursion happens before it).
+	BranchPurgeScope purge_scope(
+	    comp_manager_.contentCache(),
+	    config_.cache_purge_mode != 0 && config_.perform_component_caching);
 	// Invariants T1+T2 (gated): snapshot trail state for restore-check.
 	std::size_t snap_removed_size = 0;
 	std::size_t snap_lscope_size  = 0;
@@ -2175,10 +2205,12 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		}
 		// Literal already T_TRI: no decision made, pass budget
 		// through unchanged.
-		return solveComponent(comp, std::move(separator), separator_reset,
+		mpz_class r = solveComponent(comp, std::move(separator), separator_reset,
 		                      depth, nd_node,
 		                      reactive_metis_skip_until_depth,
 		                      child_abstract_budget);
+		purge_scope.finish(r == 0 && !stopwatch_.timeBoundBrokenCached());
+		return r;
 	}
 
 	// Push a placeholder StackLevel BEFORE setLiteralIfFree so:
@@ -2399,6 +2431,10 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 			}
 		}
 	}
+	// -cachePurge: a 0 result here (BCP conflict or an UNSAT subtree, not
+	// timeout) means every store made under this arm may be context-
+	// poisoned by learned-clause pruning — purge the journaled range.
+	purge_scope.finish(result == 0 && !stopwatch_.timeBoundBrokenCached());
 	stack_.pop_back();
 	return result;
 }
@@ -2411,6 +2447,11 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
                                   int reactive_metis_skip_until_depth,
                                   double child_abstract_budget) {
 	unsigned lit_save = literal_stack_.size();
+	// -cachePurge: journal-mark this branch arm (single exit below; all
+	// three zero paths fall through to it).
+	BranchPurgeScope purge_scope(
+	    comp_manager_.contentCache(),
+	    config_.cache_purge_mode != 0 && config_.perform_component_caching);
 	std::size_t snap_removed_size = 0;
 	std::size_t snap_lscope_size  = 0;
 	if (config_.check_learn_invariants) {
@@ -2616,6 +2657,8 @@ mpz_class Solver::branchOnClause(ClauseOfs cl_ofs,
 			std::abort();
 		}
 	}
+	// -cachePurge: see branchOnLiteral's exit comment.
+	purge_scope.finish(result == 0 && !stopwatch_.timeBoundBrokenCached());
 	// Pop the outer StackLevel pushed at branchOnClause entry. The
 	// negate arm no longer pushes per-¬lit StackLevels (branch-constraint
 	// vars share the outer DL).

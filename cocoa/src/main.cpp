@@ -50,6 +50,7 @@ int main(int argc, char *argv[]) {
     cout << "\t -checkLearnInvariants\t assert antecedent-in-scope at conflict-analysis and force-set time. Debug aid for t1_011-style order-dependent bugs. Aborts on violation." << endl;
     cout << "\t -bruteForceCacheCheck N\t at every cache store/hit, if sub-component has <=N active vars, brute-force verify. Aborts on mismatch. Try N=18." << endl;
     cout << "\t -bruteForceCacheDumpDir DIR\t dump offending sub-components here when -bruteForceCacheCheck mismatches." << endl;
+    cout << "\t -cachePurge n\t learned-clause cache-pollution defense: 0=off (default) 1=purge stores under failed branch arms 2=diagnostic count-only" << endl;
     cout << "\t" << endl;
 
     return -1;
@@ -311,6 +312,11 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(argv[i], "-bruteForceCacheDumpDir") == 0) {
       if (argc <= i + 1) { cout << "-bruteForceCacheDumpDir needs a path\n"; return -1; }
       theSolver.config().brute_force_cache_dump_dir = argv[i + 1]; i++;
+    } else if (strcmp(argv[i], "-cachePurge") == 0) {
+      if (argc <= i + 1) { cout << "-cachePurge needs 0|1|2\n"; return -1; }
+      int m = atoi(argv[i + 1]); i++;
+      if (m < 0 || m > 2) { cout << "-cachePurge: mode must be 0, 1 or 2\n"; return -1; }
+      theSolver.config().cache_purge_mode = m;
     } else if (strcmp(argv[i], "-wlIter") == 0) {
       if (argc <= i + 1) { cout << "-wlIter needs an int\n"; return -1; }
       theSolver.config().wl_iterations = atoi(argv[i + 1]); i++;

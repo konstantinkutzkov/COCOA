@@ -614,6 +614,9 @@ void Solver::solve(const string &file_name) {
 		// memoization: forces recompute on a miss, never a wrong count).
 		if (statistics_.maximum_cache_size_bytes_ > 0)
 			comp_manager_.contentCache().max_bytes_ = statistics_.maximum_cache_size_bytes_;
+		// Wire the -cachePurge mode (learned-clause pollution defense;
+		// see content_cache.h + docs/cache_soundness_fix_plan.md).
+		comp_manager_.contentCache().purge_mode_ = config_.cache_purge_mode;
 
 		// Compute fixed branching order if requested. Must happen after
 		// comp_manager_.initialize() (so clauseIdToOfs is populated).
@@ -804,6 +807,29 @@ void Solver::solve(const string &file_name) {
 		          << " total_lookups=" << (cc.stats_l1_hits + cc.stats_l1_misses)
 		          << " total_hits=" << (cc.stats_hits + cc.stats_l1_hits)
 		          << std::endl;
+		// -cachePurge exposure line: durably recorded in every runlog so
+		// mode-2 measurements and mode-1 purge activity are never lost.
+		std::cerr << "CACHE_PURGE_STATS"
+		          << " purge_mode=" << cc.purge_mode_
+		          << " purges=" << cc.stats_purge_events
+		          << " purged_l2=" << cc.stats_purged_l2
+		          << " purged_l1=" << cc.stats_purged_l1
+		          << " journal_peak=" << cc.stats_journal_peak
+		          << " journal_overflows=" << cc.stats_journal_overflows
+		          << " dead_marked=" << cc.stats_dead_marked
+		          << " dead_distinct_l2=" << cc.dead_l2_size()
+		          << " dead_distinct_l1=" << cc.dead_l1_size()
+		          << " dead_hits=" << cc.stats_dead_hits
+		          << " dead_hits_l1=" << cc.stats_dead_hits_l1
+		          << " dead_hit_vars_sum=" << cc.stats_dead_hit_vars_sum
+		          << std::endl;
+		// Balance check (works in Release where assert() is compiled out):
+		// a non-empty mark stack here means a BranchPurgeScope exit was
+		// missed — the fail-closed destructor should make this impossible,
+		// so any sighting is a finding.
+		if (!cc.marksEmpty())
+			std::cerr << "*** CACHE_PURGE_MARK_IMBALANCE (BranchPurgeScope leak) ***"
+			          << std::endl;
 	}
 
 	// Final Phase 3 stats (one-shot, regardless of 60s cadence).

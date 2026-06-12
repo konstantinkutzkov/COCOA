@@ -77,6 +77,14 @@ public:
     return last_time_bound_result_;
   }
 
+  // Read-only view of the throttled timeout flag: does NOT advance the
+  // poll counter, so predicates that only ask "has the deadline already
+  // been seen to pass?" leave the shared throttle state untouched (and
+  // mode-0 -cachePurge stays bit-identical to a build without it).
+  // Sticky-true once set, same as the cached value above; refreshed by
+  // the existing timeBoundBroken() polls at solveComponent/Impl entry.
+  bool timeBoundBrokenCached() const { return last_time_bound_result_; }
+
   bool start() {
     bool ret = gettimeofday(&last_interval_start_, NULL);
     start_time_ = stop_time_ = last_interval_start_;
