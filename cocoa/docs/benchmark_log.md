@@ -3077,3 +3077,21 @@ ganak: ran the full ~44-min budget entirely in PREPROCESSING — `[ganak~live]` 
 ## mc2026_track1_167 — SOLVED, count = 10 (cocoa-plain r1, 0.1s; ganak-verified)
 
 **15v / 34-cl (tiny), band=LOW, log2_cost=7.9, sep_ratio=0.2 / sepsize=3, max_path=6.0, n_leaves=7, arjun substantial=False.** SOLVED by **cocoa-plain** in round 1, **0.1s**, count = **10**; `ganak --prob 0` = 10 (match ✓). Trivial 15-var instance — instant for both. Breaks the four-instance both-lose streak (159–165).
+
+## mc2026_track1_169 — ⚠️ SOUNDNESS MISMATCH: cocoa-sep-cascade UNDERCOUNT vs ganak — sweep PAUSED, sep-cascade quarantined
+
+**636v / 1816-cl (sparse, ~2.9 cl/var), band=MID, log2_cost=65.1, sep_ratio=0.030 / sepsize=19 (metis_sep_vars=19, metis_sep_clauses=0 — variables-only separator), max_path=62.0, n_leaves=336, arjun substantial=False.**
+
+**FIRST COUNT MISMATCH OF THE ENTIRE VERIFIED SWEEP (mc2025 + mc2026).** Machine-compared full strings, both engines exited cleanly:
+- cocoa-sep-cascade ("solved", monitor phase, 1450.0s, ~7.0M decisions — the longest COCOA grind of mc2026): **2,337,405,402,708,146,114,560**
+- `ganak --prob 0` (3040.7s — also its hardest verify of the sweep): **2,337,406,655,942,795,198,464** ← the oracle
+- **Δ = 1,253,234,649,083,904 (~1.25×10¹⁵): COCOA UNDERCOUNTED by 5.4×10⁻⁷ of the count (0.000054%).**
+
+**Triage.** An undercount = skipped work — the signature of a **false cache merge** (a component wrongly treated as cache-equal to a previously-solved, smaller-count one). Flag-delta isolation:
+- cocoa-plain (`-sep 5 -cb 3`) — verified exact on many instances;
+- cocoa-**nosep**-cascade (`-unifiedPicker -decomposeAfterK 1000 -cascadeW 10 -cascadeDepth 9`) — verified exact SIX times (007/039/045/079/145/151);
+- cocoa-**sep**-cascade = the **union** of those two flag sets — and **169 was its first-ever ganak-verified count, which failed.** (cocoa-unified-sep, the sep+picker subset without cascade, has never had a verified win either — so the untested surface is {static separator × unifiedPicker/cascade}.)
+- The run used **defaults wl_iterations=1** (no `-wlIter` passed; coarsest WL canonicalization) and default hashMode.
+- Tiny relative error + first appearance on the instance with the largest cache population is consistent with **one/few rare false merges** (hash or WL-equivalence collision), rather than a systematic key omission (which should have corrupted the six exact nosep-cascade verifies). Owner's hypothesis set: (1) hash collision, (2) clause missing from the hash key, (3) caching logic error. Variables-only separator + no clause branching performed ⇒ the cb/clause-branch bookkeeping is unlikely to be the trigger here.
+
+**Actions:** (1) 169's count recorded as ganak's **2,337,406,655,942,795,198,464** (oracle); NOT credited to COCOA. (2) **cocoa-sep-cascade QUARANTINED** from the racing set pending root cause. (3) Multi-agent read-only code audit launched (key construction / lookup equality / WL canonicalization / cascade-BCP state / separator interaction / count assembly). (4) Sweep paused before 171. *This is why every count gets a ganak verification — a fast plausible answer is not a correct one.*
