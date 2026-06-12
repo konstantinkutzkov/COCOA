@@ -54,6 +54,22 @@ struct IdKeyHasher {
   size_t operator()(const IdKey &k) const { return k.hash_lo; }
 };
 
+// Cache entry: the structural count plus the -cachePurge TAINT bit.
+// tainted = a non-local ("phantom") learned/redundant clause fired during
+// the subtree that computed this count, OR the count consumed a tainted
+// cache entry — i.e., the value is certified equal to the pure component
+// count only while its storing context's siblings are all satisfiable.
+// Tainted entries are journaled (purgeable); pure entries never need
+// purging (restriction-of-resolution + component-connectivity argument).
+// Taint must propagate THROUGH hits: a consumer that multiplies in a
+// tainted value inherits the context-dependence.
+struct CacheVal {
+  mpz_class count;
+  bool tainted = false;
+  CacheVal() = default;
+  CacheVal(const mpz_class &c, bool t) : count(c), tainted(t) {}
+};
+
 class ContentCache {
 public:
   // Returns: MISS if not cached; HIT if cached.
@@ -62,7 +78,7 @@ public:
   bool lookup(const CanonicalKey &key, mpz_class &count) {
     auto it = cache_.find(key);
     if (it != cache_.end()) {
-      count = it->second;
+      count = it->second.count;
       stats_hits++;
       stats_hit_vars_sum += key.num_vars;
       if (key.num_vars > stats_max_hit_size) stats_max_hit_size = key.num_vars;
@@ -73,7 +89,8 @@ public:
     return false;
   }
 
-  void store(const CanonicalKey &key, const mpz_class &count) {
+  void store(const CanonicalKey &key, const mpz_class &count,
+             bool tainted = true) {
     assert(count >= 0 && "Cached count must be non-negative");
     if (max_bytes_ > 0 && cur_bytes_ >= max_bytes_)
       evict();
@@ -81,26 +98,34 @@ public:
     // trigger if a caller forgets to lookup before store. Belt-and-
     // suspenders.
     auto existing = cache_.find(key);
-    if (existing != cache_.end() && existing->second != count) {
+    if (existing != cache_.end() && existing->second.count != count) {
       std::cerr << "\n*** CACHE_STORE_COLLISION (overwrite with different value) ***\n"
                 << "  key.hash        = 0x" << std::hex << key.hash << std::dec << "\n"
                 << "  key.num_vars    = " << key.num_vars << "\n"
                 << "  key.num_clauses = " << key.num_clauses << "\n"
-                << "  old_count = " << existing->second << "\n"
+                << "  old_count = " << existing->second.count << "\n"
                 << "  new_count = " << count << "\n";
       std::cerr.flush();
       std::abort();
     }
     bool is_new = (existing == cache_.end());
-    cache_[key] = count;
+    cache_[key] = CacheVal{count, tainted};
     if (is_new) cur_bytes_ += l2_entry_bytes(key, count);
-    // -cachePurge journal: record stores made inside an open branch arm
-    // so popMarkFailed() can purge them. No mark open (root decomposition
-    // spine) => nothing to journal: a zero there ends the run with the
-    // always-correct live count.
-    if (purge_mode_ != 0 && !marks_.empty() && !journal_saturated_) {
-      journal_l2_.push_back(key);
-      noteJournalGrowth();
+    // -cachePurge journal (Level-1 taint refinement): journal ONLY
+    // TAINTED stores made inside an open branch arm — pure counts are
+    // context-free and may survive any failure. No mark open (root
+    // decomposition spine) => nothing to journal: a zero there ends the
+    // run with the always-correct live count.
+    if (purge_mode_ != 0 && !marks_.empty()) {
+      if (tainted) {
+        stats_tainted_stores++;
+        if (!journal_saturated_) {
+          journal_l2_.push_back(key);
+          noteJournalGrowth();
+        }
+      } else {
+        stats_pure_stores++;
+      }
     }
     stats_stores++;
     stats_store_vars_sum += key.num_vars;
@@ -108,8 +133,12 @@ public:
     stats_store_buckets[size_bucket(key.num_vars)]++;
   }
 
-  // Read a stored count without updating hit-rate stats.
-  bool peek(const CanonicalKey &key, mpz_class &out) const {
+  // Read a stored count without updating hit-rate stats. If tainted_out
+  // is non-null it receives the entry's taint bit (consumers MUST inherit
+  // taint into their own solve, or the purge can be bypassed via a
+  // pure-looking parent absorbing a poisoned child value).
+  bool peek(const CanonicalKey &key, mpz_class &out,
+            bool *tainted_out = nullptr) const {
     auto it = cache_.find(key);
     if (it == cache_.end()) return false;
     // -cachePurge mode 2: count hits landing on entries a real purge
@@ -122,7 +151,8 @@ public:
       stats_dead_hits++;
       stats_dead_hit_vars_sum += key.num_vars;
     }
-    out = it->second;
+    out = it->second.count;
+    if (tainted_out) *tainted_out = it->second.tainted;
     return true;
   }
 
@@ -131,29 +161,38 @@ public:
   // L1 (identity-based) cache API. Fast-path: check L1 before
   // building the canonical key. On L1 hit the canonical build is
   // skipped entirely.
-  bool l1_lookup(const IdKey &k, mpz_class &count) {
+  bool l1_lookup(const IdKey &k, mpz_class &count,
+                 bool *tainted_out = nullptr) {
     auto it = l1_cache_.find(k);
     if (it == l1_cache_.end()) { stats_l1_misses++; return false; }
     // -cachePurge mode 2: see peek().
     if (purge_mode_ == 2 && !dead_l1_.empty() && dead_l1_.count(k))
       stats_dead_hits_l1++;
-    count = it->second;
+    count = it->second.count;
+    if (tainted_out) *tainted_out = it->second.tainted;
     stats_l1_hits++;
     return true;
   }
 
-  void l1_store(const IdKey &k, const mpz_class &count) {
+  void l1_store(const IdKey &k, const mpz_class &count, bool tainted = true) {
     assert(count >= 0 && "L1 count must be non-negative");
     // Byte-bounded: trigger the same combined L1+L2 eviction when over budget.
     if (max_bytes_ > 0 && cur_bytes_ >= max_bytes_)
       evict();
     bool is_new = (l1_cache_.find(k) == l1_cache_.end());
-    l1_cache_[k] = count;
+    l1_cache_[k] = CacheVal{count, tainted};
     if (is_new) cur_bytes_ += l1_entry_bytes(k, count);
-    // -cachePurge journal: see store().
-    if (purge_mode_ != 0 && !marks_.empty() && !journal_saturated_) {
-      journal_l1_.push_back(k);
-      noteJournalGrowth();
+    // -cachePurge journal: see store() — tainted stores only.
+    if (purge_mode_ != 0 && !marks_.empty()) {
+      if (tainted) {
+        stats_tainted_stores++;
+        if (!journal_saturated_) {
+          journal_l1_.push_back(k);
+          noteJournalGrowth();
+        }
+      } else {
+        stats_pure_stores++;
+      }
     }
     stats_l1_stores++;
   }
@@ -194,6 +233,29 @@ public:
     assert(!marks_.empty());
     marks_.pop_back();
     if (marks_.empty()) {
+      // OUTERMOST arm completed successfully: no enclosing failure exists,
+      // so every component that was open during any firing under this arm
+      // proved satisfiable -> all phantom prunings were vacuous (containment
+      // theorem) -> every surviving journaled (tainted) entry's count equals
+      // the pure count. PROMOTE them to pure so future consumers don't
+      // inherit stale taint. (Entries stored under inner FAILED arms were
+      // already purged/truncated and are not in the journal.)
+      if (purge_mode_ == 1 && !journal_saturated_) {
+        for (const auto &k : journal_l2_) {
+          auto it = cache_.find(k);
+          if (it != cache_.end() && it->second.tainted) {
+            it->second.tainted = false;
+            stats_promoted++;
+          }
+        }
+        for (const auto &k : journal_l1_) {
+          auto it = l1_cache_.find(k);
+          if (it != l1_cache_.end() && it->second.tainted) {
+            it->second.tainted = false;
+            stats_promoted++;
+          }
+        }
+      }
       journal_l2_.clear();
       journal_l1_.clear();
       journal_saturated_ = false;
@@ -224,7 +286,7 @@ public:
       for (size_t i = mk.first; i < journal_l2_.size(); ++i) {
         auto it = cache_.find(journal_l2_[i]);
         if (it != cache_.end()) {  // may already be evicted — fine
-          cur_bytes_ -= l2_entry_bytes(it->first, it->second);
+          cur_bytes_ -= l2_entry_bytes(it->first, it->second.count);
           cache_.erase(it);
           stats_purged_l2++;
         }
@@ -232,7 +294,7 @@ public:
       for (size_t i = mk.second; i < journal_l1_.size(); ++i) {
         auto it = l1_cache_.find(journal_l1_[i]);
         if (it != l1_cache_.end()) {
-          cur_bytes_ -= l1_entry_bytes(it->first, it->second);
+          cur_bytes_ -= l1_entry_bytes(it->first, it->second.count);
           l1_cache_.erase(it);
           stats_purged_l1++;
         }
@@ -289,6 +351,10 @@ public:
   uint64_t stats_journal_peak = 0;
   unsigned long stats_journal_overflows = 0;
   unsigned long stats_dead_marked = 0;
+  // Taint refinement (Level 1): journal split + outermost-success promotions.
+  unsigned long stats_tainted_stores = 0;
+  unsigned long stats_pure_stores = 0;
+  unsigned long stats_promoted = 0;
   // mutable: bumped inside const peek().
   mutable unsigned long stats_dead_hits = 0;
   mutable unsigned long stats_dead_hits_l1 = 0;
@@ -327,8 +393,8 @@ public:
   }
 
 private:
-  std::unordered_map<CanonicalKey, mpz_class, CanonicalKeyHash> cache_;
-  std::unordered_map<IdKey, mpz_class, IdKeyHasher> l1_cache_;
+  std::unordered_map<CanonicalKey, CacheVal, CanonicalKeyHash> cache_;
+  std::unordered_map<IdKey, CacheVal, IdKeyHasher> l1_cache_;
 
   // -cachePurge state: store journals (keys by value), the per-arm
   // watermark stack, and (mode 2 only) the dead-entry marks.
@@ -375,13 +441,13 @@ private:
     size_t l2rm = cache_.size() / 2;
     auto it = cache_.begin();
     for (size_t i = 0; i < l2rm && it != cache_.end(); i++) {
-      cur_bytes_ -= l2_entry_bytes(it->first, it->second);
+      cur_bytes_ -= l2_entry_bytes(it->first, it->second.count);
       it = cache_.erase(it);
     }
     size_t l1rm = l1_cache_.size() / 2;
     auto jt = l1_cache_.begin();
     for (size_t i = 0; i < l1rm && jt != l1_cache_.end(); i++) {
-      cur_bytes_ -= l1_entry_bytes(jt->first, jt->second);
+      cur_bytes_ -= l1_entry_bytes(jt->first, jt->second.count);
       jt = l1_cache_.erase(jt);
     }
     stats_evictions++;

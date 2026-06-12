@@ -444,6 +444,58 @@ private:
 
 	StopWatch stopwatch_;
 
+	// ----- -cachePurge TAINT tracking (Level-1 refinement) -----
+	// current_solve_tainted_: a non-local ("phantom") learned/redundant
+	// clause fired during the CURRENT component solve's subtree, or the
+	// solve consumed a tainted cache entry. Saved/reset/OR-restored around
+	// every solveComponentImpl call (solver_rec.cpp); tainted stores are
+	// journaled for purge-on-arm-failure, pure stores never need purging.
+	// last_solve_tainted_: the taint of the most recently RETURNED
+	// solveComponent (consumed by the post-recursion L1 store).
+	bool current_solve_tainted_ = false;
+	bool last_solve_tainted_ = false;
+	unsigned long stats_taint_fires_ = 0;
+
+	// A LEARNED long clause fired (propagated or conflicted) during a
+	// component solve. Pure iff EVERY variable lies inside the current
+	// sub-component mask: then the restriction of its resolution derivation
+	// lives entirely inside this component (derivations are connected
+	// through shared pivot vars; residual clauses live in one component),
+	// so the component itself entails the clause — the pruning is local.
+	// Any outside var (necessarily trail-assigned: active-outside is
+	// gate-blocked) makes it a phantom -> taint. Empty mask = scope
+	// unknown -> conservative taint.
+	void noteLearnedClauseFired(ClauseOfs ofs) {
+		if (current_solve_tainted_) return;
+		if (current_sub_varset_.empty()) {
+			current_solve_tainted_ = true;
+			stats_taint_fires_++;
+			return;
+		}
+		for (auto lt = literal_pool_.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
+			unsigned v = lt->var();
+			if (v == guard_var_) continue;
+			if (v >= current_sub_varset_.size() || !current_sub_varset_[v]) {
+				current_solve_tainted_ = true;
+				stats_taint_fires_++;
+				return;
+			}
+		}
+	}
+
+	// Same for a learned/redundant BINARY firing: the triggering endpoint
+	// is in-component by construction (it was just assigned during this
+	// solve); only the OTHER endpoint can sit outside the mask.
+	void noteLearnedBinaryFired(unsigned other_var) {
+		if (current_solve_tainted_) return;
+		if (current_sub_varset_.empty()
+		    || other_var >= current_sub_varset_.size()
+		    || !current_sub_varset_[other_var]) {
+			current_solve_tainted_ = true;
+			stats_taint_fires_++;
+		}
+	}
+
 	// OPEN_WORK snapshot — captured once on first time-bound break.
 	// Tracks the nested chain of in-progress sub-components: pushed at
 	// every solveComponentImpl entry, popped on exit (RAII guard inside

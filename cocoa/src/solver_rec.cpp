@@ -561,9 +561,11 @@ mpz_class Solver::solveComponent(Component &comp,
 		}
 		mpz_class hit;
 		bool l2_hit;
+		bool hit_tainted = false;
 		{
 			OpTimer _t(this, OP_L2_PEEK);
-			l2_hit = comp_manager_.contentCache().peek(cached_key, hit);
+			l2_hit = comp_manager_.contentCache().peek(cached_key, hit,
+			                                           &hit_tainted);
 		}
 		if (l2_hit) {
 			auto &cc = comp_manager_.contentCache();
@@ -574,6 +576,13 @@ mpz_class Solver::solveComponent(Component &comp,
 			cc.stats_hit_buckets[ContentCache::size_bucket(cached_key.num_vars)]++;
 			mpz_class scaled = hit;
 			for (unsigned i = 0; i < free_vars; ++i) scaled *= 2;
+			// -cachePurge taint inheritance: consuming a tainted entry makes
+			// THIS solve's result tainted — the enclosing (caller's) flag is
+			// live here (no save/reset boundary crossed yet), and the
+			// post-recursion L1 store reads last_solve_tainted_.
+			if (hit_tainted)
+				current_solve_tainted_ = true;
+			last_solve_tainted_ = hit_tainted;
 			// LEAF event: cache hit resolves this whole subtree without
 			// recursing. Credit the full abstract budget.
 			noteResolved(abstract_budget);
@@ -627,9 +636,18 @@ mpz_class Solver::solveComponent(Component &comp,
 	} _xor_restorer{&current_component_xor_, &deriv_cache_skip_xor_diff_,
 	                _xor_guard_saved, _xor_guard_saved_skip, _xor_guard_active};
 
+	// -cachePurge taint scope: this solve starts pure; firings during its
+	// subtree (and tainted cache hits it consumes) set the flag; on exit
+	// the child's taint ORs into the parent's (a parent multiplying in a
+	// context-dependent factor is itself context-dependent).
+	const bool saved_solve_taint_ = current_solve_tainted_;
+	current_solve_tainted_ = false;
+
 	mpz_class result = solveComponentImpl(
 	    comp, std::move(separator), separator_reset, depth, nd_node,
 	    reactive_metis_skip_until_depth, abstract_budget);
+
+	last_solve_tainted_ = current_solve_tainted_;
 
 	if (can_cache && key_built) {
 		mpz_class structural = result;
@@ -647,7 +665,8 @@ mpz_class Solver::solveComponent(Component &comp,
 		// timeout gate deliberately skips purging these).
 		if (!stopwatch_.timeBoundBrokenCached()) {
 			OpTimer _t(this, OP_L2_STORE);
-			comp_manager_.contentCache().store(cached_key, structural);
+			comp_manager_.contentCache().store(cached_key, structural,
+			                                   current_solve_tainted_);
 		}
 		// Record into the Bloom pre-filter only when XOR was actually
 		// maintained for this comp. Sub-threshold comps skip XOR
@@ -661,6 +680,8 @@ mpz_class Solver::solveComponent(Component &comp,
 		// subtree. Caching is a memoization detail orthogonal to
 		// progress accounting.
 	}
+	// -cachePurge taint scope exit: child taint flows up to the parent.
+	current_solve_tainted_ = saved_solve_taint_ || last_solve_tainted_;
 	return result;
 }
 
@@ -1290,9 +1311,11 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				id_key.hash_lo = sub->l1HashLo();
 				id_key.hash_hi = sub->l1HashHi();
 				bool l1_hit;
+				bool l1_hit_tainted = false;
 				{
 					OpTimer _t(this, OP_L1_PEEK);
-					l1_hit = comp_manager_.contentCache().l1_lookup(id_key, sub_count);
+					l1_hit = comp_manager_.contentCache().l1_lookup(id_key, sub_count,
+					                                                &l1_hit_tainted);
 				}
 				if (l1_hit) {
 					// Brute-force check at L1-hit time.
@@ -1320,6 +1343,9 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 							std::abort();
 						}
 					}
+					// -cachePurge taint inheritance: see the entry-path hit.
+					if (l1_hit_tainted)
+						current_solve_tainted_ = true;
 					// LEAF event: L1 hit resolves this sub-comp without
 					// recursing. Credit its full abstract budget.
 					noteResolved(sub_budget);
@@ -1359,11 +1385,13 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				learned_clause_scope_.size()
 			};
 			bool hit;
+			bool l2_hit_tainted = false;
 			if (l2_enabled) {
 				OpTimer _t(this, OP_L2_PEEK);
 				hit = (config_.perform_component_caching &&
 				       sub->num_variables() >= 3 &&
-				       comp_manager_.contentCache().peek(key, sub_count));
+				       comp_manager_.contentCache().peek(key, sub_count,
+				                                         &l2_hit_tainted));
 			} else {
 				hit = false;
 			}
@@ -1397,9 +1425,16 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 					}
 				}
 				comp_manager_.contentCache().stats_hits++;
+				// -cachePurge taint inheritance: the consumed value's taint
+				// flows into this (parent) solve, and the L1 copy inherits the
+				// SOURCE entry's taint (a pure-marked copy of a purgeable
+				// entry would survive its source's purge — a leak).
+				if (l2_hit_tainted)
+					current_solve_tainted_ = true;
 				if (sub->num_variables() >= 3) {
 					OpTimer _t(this, OP_L1_STORE);
-					comp_manager_.contentCache().l1_store(id_key, sub_count);
+					comp_manager_.contentCache().l1_store(id_key, sub_count,
+					                                      l2_hit_tainted);
 				}
 				// LEAF event: L2 hit resolves this sub-comp without
 				// recursing. Credit its full abstract budget.
@@ -1571,9 +1606,12 @@ mpz_class Solver::solveComponentImpl(Component &comp,
 				// the canonical build.
 				// Timeout gate: see the entry-path L2 store comment --
 				// sub_count is 0 on the timeout unwind, not a real count.
+				// Taint: the just-returned child solve's flag (the entry-path
+				// hit return and the impl path both set last_solve_tainted_).
 				if (!stopwatch_.timeBoundBrokenCached()) {
 					OpTimer _t(this, OP_L1_STORE);
-					comp_manager_.contentCache().l1_store(id_key, sub_count);
+					comp_manager_.contentCache().l1_store(id_key, sub_count,
+					                                      last_solve_tainted_);
 				}
 				// NOTE: this deriv_cache_record_store_ is NECESSARY for
 				// correctness despite appearing redundant with solveComponent's

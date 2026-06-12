@@ -822,6 +822,10 @@ void Solver::solve(const string &file_name) {
 		          << " dead_hits=" << cc.stats_dead_hits
 		          << " dead_hits_l1=" << cc.stats_dead_hits_l1
 		          << " dead_hit_vars_sum=" << cc.stats_dead_hit_vars_sum
+		          << " taint_fires=" << stats_taint_fires_
+		          << " tainted_stores=" << cc.stats_tainted_stores
+		          << " pure_stores=" << cc.stats_pure_stores
+		          << " promoted=" << cc.stats_promoted
 		          << std::endl;
 		// Balance check (works in Release where assert() is compiled out):
 		// a non-empty mark stack here means a BranchPurgeScope exit was
@@ -1046,6 +1050,11 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 					}
 				}
 				if (isResolved(*bt)) {
+					// -cachePurge taint: a LEARNED binary conflicting here is a
+					// firing; phantom iff the other endpoint is outside the mask
+					// (trail-assigned) or the mask is absent.
+					if (config_.cache_purge_mode != 0 && idx >= orig_count)
+						noteLearnedBinaryFired(bt->var());
 					if (config_.log_conflicts) {
 						std::cerr << "CONFLICT_BIN clause=[" << unLit.toInt()
 						          << "," << bt->toInt() << "] DL="
@@ -1057,7 +1066,13 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 					setConflictState(unLit, *bt);
 					return false;
 				}
-				setLiteralIfFree(*bt, Antecedent(unLit));
+				if (setLiteralIfFree(*bt, Antecedent(unLit))) {
+					// -cachePurge taint: learned-binary propagation. With a mask
+					// installed the filter above guarantees in-mask targets
+					// (no taint); with an empty mask -> conservative taint.
+					if (config_.cache_purge_mode != 0 && idx >= orig_count)
+						noteLearnedBinaryFired(bt->var());
+				}
 			}
 		}
 		//END Propagate Bin Clauses
@@ -1089,10 +1104,19 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 					}
 				}
 				if (isResolved(*bt)) {
+					// -cachePurge taint: redundant-lane lemmas are F-entailed,
+					// not component-entailed — same phantom analysis as learned
+					// binaries (the lane comment's "sound to propagate
+					// everywhere" holds for SAT, not for memoized counts).
+					if (config_.cache_purge_mode != 0)
+						noteLearnedBinaryFired(bt->var());
 					setConflictState(unLit, *bt);
 					return false;
 				}
-				setLiteralIfFree(*bt, Antecedent(unLit));
+				if (setLiteralIfFree(*bt, Antecedent(unLit))) {
+					if (config_.cache_purge_mode != 0)
+						noteLearnedBinaryFired(bt->var());
+				}
 			}
 		}
 		//END Propagate Redundant Binaries
@@ -1169,6 +1193,11 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 			} else {
 				if (setLiteralIfFree(*p_otherLit, Antecedent(itcl->ofs))) { // implication
 					bcp_path_F_propagate_++;
+					// -cachePurge taint: a LEARNED long clause propagated — a
+					// firing. Phantom iff any var lies outside the mask.
+					if (config_.cache_purge_mode != 0
+					    && itcl->ofs >= (ClauseOfs)original_lit_pool_size_)
+						noteLearnedClauseFired(itcl->ofs);
 					if (isLitA)
 						swap(*p_otherLit, *p_watchLit);
 					// *p_otherLit is now T_TRI; cache as blocker so a future
@@ -1176,6 +1205,11 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 					itcl->blocker = *p_otherLit;
 				} else {
 					bcp_path_G_conflict_++;
+					// -cachePurge taint: learned long clause CONFLICT — also a
+					// firing (prunes the branch).
+					if (config_.cache_purge_mode != 0
+					    && itcl->ofs >= (ClauseOfs)original_lit_pool_size_)
+						noteLearnedClauseFired(itcl->ofs);
 					if (config_.log_conflicts) {
 						std::cerr << "CONFLICT_CL ofs=" << itcl->ofs
 						          << " DL=" << stack_.get_decision_level()
