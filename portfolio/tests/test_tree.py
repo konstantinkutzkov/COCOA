@@ -77,10 +77,26 @@ def test_unknown_or_infinite_n_root_no_crash():
     assert predict_cb_tree(traj, math.inf, traj[-1][0], 3000.0)["verdict"] == "bail"
 
 
-# 8. Already complete (remaining <= 0) -> keep (nothing to hand off).
-def test_complete_keeps():
+# 8. remaining <= 0 but cb still CLIMBING past an underestimated n_root -> keep (the solver is
+#    resolving real count-mass the bound missed; it is progressing, not stuck).
+def test_complete_climbing_past_bound_keeps():
     traj = [(float(10 * i), 5.0 * i) for i in range(1, 21)]
-    assert verdict(traj, 10.0) == "keep"   # n_root below current cb
+    assert verdict(traj, 10.0) == "keep"   # n_root below current cb, cb climbing -> progressing
+
+
+# 8b. mc2026_175 REGRESSION: remaining <= 0 with cb PINNED FLAT at the (underestimated) bound and
+#     no return -> bail. The old unconditional 'keep (count complete)' defeated the handoff entirely
+#     (cb stuck at n_root=3973, decisions 9M->140M, rode to the wall -> timeout, ganak never ran).
+def test_complete_flat_at_bound_stuck_bails():
+    traj = [(float(t), 3973.0) for t in range(60, 481, 10)]   # flat at bound for >grace, no return
+    assert verdict(traj, 3973.0) == "bail"
+
+
+# 8c. remaining <= 0 but only BRIEFLY saturated (< COMPLETE_GRACE) -> keep: a genuine finisher gets
+#     its short window to assemble the final answer before any bail.
+def test_complete_flat_within_grace_keeps():
+    traj = [(float(t), 3973.0) for t in range(10, 41, 10)]    # flat at bound only ~30s (< 60s grace)
+    assert verdict(traj, 3973.0) == "keep"
 
 
 # 9. mc2026_027 REGRESSION: PROGRESSING (recent_rate>eps) but far from done AND too slow --

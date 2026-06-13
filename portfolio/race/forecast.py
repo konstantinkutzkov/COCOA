@@ -368,9 +368,32 @@ def predict_cb_tree(traj, n_root, t_active, t_remaining, *,
     finite_root = (n_root is not None) and math.isfinite(n_root)
     remaining = (n_root - cb_now) if finite_root else float('inf')
 
-    # ---- complete: nothing left to close ----
+    # ---- at/above the ESTIMATED root bound (remaining <= 0) ----
+    # cb >= n_root is NOT proof of completion: n_root is an estimate that can UNDERESTIMATE
+    # log2(count). The ONLY ground truth for "done" is the solver RETURNING a count -- which
+    # short-circuits the race, so we'd stop being called. Two sub-cases while we ARE still
+    # being called at rem<=0:
+    #   (a) cb still CLIMBING past the bound  -> the solver is resolving real count-mass the
+    #       bound underestimated -> keep (progressing, may finish).
+    #   (b) cb FLAT at the bound, no return   -> stuck brute-forcing a residual the bound
+    #       can't see -> bail -> handoff. mc2026_175: cb pinned at n_root=3973 for >10 min,
+    #       decisions 9M->140M, never returned; the old unconditional 'keep (count complete)'
+    #       defeated the handoff entirely and it rode to the wall (timeout), ganak never ran.
+    # A genuine finisher returns within seconds of saturating, so a short grace cleanly
+    # separates "assembling the final answer" from "stuck past an underestimated bound".
     if finite_root and remaining <= 0:
-        return {'verdict': 'keep', 'reason': 'remaining<=0 (count complete)'}
+        COMPLETE_GRACE = 60.0                      # >> a real finisher's final-assembly time
+        FLAT_EPS = 1e-6                            # cb movement below this == flat
+        k = len(traj) - 1
+        while k > 0 and (t_end - traj[k][0]) < COMPLETE_GRACE:
+            k -= 1
+        held = t_end - traj[k][0]                  # seconds of trailing window (~grace once saturated)
+        recent_climb = cb_now - traj[k][1]         # cb gained over that window
+        if recent_climb > FLAT_EPS or held < COMPLETE_GRACE:
+            kind = 'progressing past bound' if recent_climb > FLAT_EPS else 'assembling'
+            return {'verdict': 'keep', 'reason': f'remaining<=0 ({kind}, held={held:.0f}s)'}
+        return {'verdict': 'bail',
+                'reason': f'remaining<=0 but FLAT at bound {held:.0f}s w/o return -- n_root underestimate'}
 
     # ---- per-instance scale for a "meaningful jump" ----
     cb_first = traj[0][1]
