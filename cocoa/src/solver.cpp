@@ -617,6 +617,7 @@ void Solver::solve(const string &file_name) {
 		// Wire the -cachePurge mode (learned-clause pollution defense;
 		// see content_cache.h + docs/cache_soundness_fix_plan.md).
 		comp_manager_.contentCache().purge_mode_ = config_.cache_purge_mode;
+		prov_max_leaves_ = config_.prov_max_leaves;  // -provMaxLeaves cap
 
 		// Compute fixed branching order if requested. Must happen after
 		// comp_manager_.initialize() (so clauseIdToOfs is populated).
@@ -833,6 +834,8 @@ void Solver::solve(const string &file_name) {
 		          << " provfail_unrecorded=" << prov_fail_unrecorded_
 		          << " provfail_leaf_outside=" << prov_fail_leaf_outside_
 		          << " provfail_no_mask=" << prov_fail_no_mask_
+		          << " prov_max_leaves=" << prov_max_leaves_
+		          << " prov_max_leafset_seen=" << prov_max_leafset_seen_
 		          << std::endl;
 		// Balance check (works in Release where assert() is compiled out):
 		// a non-empty mark stack here means a BranchPurgeScope exit was

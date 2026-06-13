@@ -334,6 +334,9 @@ int main(int argc, char *argv[]) {
       theSolver.config().measure_prov_local = true;
     } else if (strcmp(argv[i], "-provLocalTaint") == 0) {
       theSolver.config().prov_local_taint = true;
+    } else if (strcmp(argv[i], "-provMaxLeaves") == 0) {
+      if (i + 1 >= argc) { cout << "-provMaxLeaves needs a count\n"; return -1; }
+      theSolver.config().prov_max_leaves = (unsigned)atoi(argv[i + 1]); i++;
     } else if (strcmp(argv[i], "-wlIter") == 0) {
       if (argc <= i + 1) { cout << "-wlIter needs an int\n"; return -1; }
       theSolver.config().wl_iterations = atoi(argv[i + 1]); i++;

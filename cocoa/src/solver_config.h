@@ -611,6 +611,13 @@ struct SolverConfiguration {
   // all established). Default off pending the 169 soundness+speed test.
   bool prov_local_taint = false;
 
+  // Cap on a learned clause's cached transitive original-leaf set
+  // (-provMaxLeaves). Above it, the clause is treated conservatively
+  // (non-local -> taints). Higher = rescues deeper derivations (fewer
+  // conservative taints) at more birth-time work + memory. Bounded by the
+  // formula's original-clause count. Default 1024.
+  unsigned prov_max_leaves = 1024;
+
   // ===============================================================
   // END diagnostic flags
   // ===============================================================

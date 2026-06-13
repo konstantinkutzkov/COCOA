@@ -663,19 +663,23 @@ protected:
   // learned clause, as the deduped union of its antecedents' leaves
   // (an original antecedent is its own leaf; a learned one contributes its
   // already-cached leaf set — antecedents are always created earlier).
-  // Capped at PROV_MAX_LEAVES; on overflow (or a missing antecedent set)
-  // we store nothing -> the validator treats the clause conservatively.
+  // Capped at prov_max_leaves_ (CLI -provMaxLeaves, default 1024); on
+  // overflow (or a missing antecedent set) we store nothing -> the
+  // validator treats the clause conservatively. Dedup via a reused hash
+  // set (O(1)/insert) so the cap can be raised without O(K^2) blowup.
   // O(antecedent leaves) once per clause; called from
   // recordLearnedClauseProvenance when the prov-local feature is enabled.
-  static constexpr size_t PROV_MAX_LEAVES = 64;
+  unsigned prov_max_leaves_ = 1024;
   void computeOrigLeaves(ClauseOfs learned_ofs) {
     auto pit = learned_clause_provenance_.find(learned_ofs);
     if (pit == learned_clause_provenance_.end()) return;
     std::vector<ClauseOfs> leaves;
+    prov_leaf_seen_.clear();
     bool overflow = false;
     auto add = [&](ClauseOfs lf) {
-      for (ClauseOfs e : leaves) if (e == lf) return;
-      if (leaves.size() >= PROV_MAX_LEAVES) { overflow = true; return; }
+      if (overflow) return;
+      if (!prov_leaf_seen_.insert(lf).second) return;  // already present
+      if (leaves.size() >= prov_max_leaves_) { overflow = true; return; }
       leaves.push_back(lf);
     };
     for (ClauseOfs ant : pit->second) {
@@ -688,7 +692,11 @@ protected:
         for (ClauseOfs lf : lit->second) { if (overflow) break; add(lf); }
       }
     }
-    if (!overflow) learned_clause_orig_leaves_[learned_ofs] = std::move(leaves);
+    if (!overflow) {
+      if (leaves.size() > prov_max_leafset_seen_)
+        prov_max_leafset_seen_ = leaves.size();
+      learned_clause_orig_leaves_[learned_ofs] = std::move(leaves);
+    }
   }
 
  private:
@@ -696,6 +704,10 @@ protected:
   // provenance for the σ-aware locality validator). Populated only when
   // -measureProvLocal / -provLocalTaint is on.
   std::unordered_map<ClauseOfs, std::vector<ClauseOfs>> learned_clause_orig_leaves_;
+  mutable std::unordered_set<ClauseOfs> prov_leaf_seen_;  // dedup scratch (reused)
+ public:
+  mutable size_t prov_max_leafset_seen_ = 0;  // largest leaf set actually stored
+ private:
   // One ORIGINAL leaf clause restricted under the trail: satisfied -> ok
   // (drops); else every surviving (X_TRI) literal's var must be in mask.
   bool originalLeafLocalUnderTrail(ClauseOfs ofs,
