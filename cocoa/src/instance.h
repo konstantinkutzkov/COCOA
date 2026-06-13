@@ -470,7 +470,8 @@ protected:
   // Non-learned clauses are always in-scope (caller filters by
   // ofs < original_lit_pool_size_ first).
   bool learnedClauseInComponent(ClauseOfs cl_ofs,
-                                const std::vector<char> &mask) const {
+                                const std::vector<char> &mask,
+                                bool strict = false) const {
     in_component_calls_++;
     if (mask.empty()) return true;  // no current sub set → no filtering
     auto lt0 = literal_pool_.begin() + cl_ofs;
@@ -480,9 +481,13 @@ protected:
       unsigned v = lt->var();
       if (v == guard_var_) continue;
       if (v < mask.size() && mask[v]) continue;  // in current sub
-      // Outside the current sub. Only block when still active
+      // Outside the current sub. Default: block only when still active
       // (X_TRI) — an active outside var means cross-sub hazard.
-      if (literal_values_[LiteralID(v, true)] == X_TRI) {
+      // STRICT mode (-learnedLocalOnly): block on ANY outside var —
+      // an assigned outside var makes the clause a trail-residual
+      // "phantom" whose pruning may not be entailed by this component
+      // (the mc2026_169 cache-pollution channel).
+      if (strict || literal_values_[LiteralID(v, true)] == X_TRI) {
         result = false;
         break;
       }

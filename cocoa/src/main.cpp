@@ -51,6 +51,7 @@ int main(int argc, char *argv[]) {
     cout << "\t -bruteForceCacheCheck N\t at every cache store/hit, if sub-component has <=N active vars, brute-force verify. Aborts on mismatch. Try N=18." << endl;
     cout << "\t -bruteForceCacheDumpDir DIR\t dump offending sub-components here when -bruteForceCacheCheck mismatches." << endl;
     cout << "\t -cachePurge n\t learned-clause cache-pollution defense: 0=off (default) 1=purge stores under failed branch arms 2=diagnostic count-only" << endl;
+    cout << "\t -learnedLocalOnly\t strict gate: learned/redundant clauses fire inside a component only if ALL their vars are in it (pure counts, full cache reuse; weaker CDCL pruning). Combine with -cachePurge 1." << endl;
     cout << "\t" << endl;
 
     return -1;
@@ -317,6 +318,8 @@ int main(int argc, char *argv[]) {
       int m = atoi(argv[i + 1]); i++;
       if (m < 0 || m > 2) { cout << "-cachePurge: mode must be 0, 1 or 2\n"; return -1; }
       theSolver.config().cache_purge_mode = m;
+    } else if (strcmp(argv[i], "-learnedLocalOnly") == 0) {
+      theSolver.config().learned_local_only = true;
     } else if (strcmp(argv[i], "-wlIter") == 0) {
       if (argc <= i + 1) { cout << "-wlIter needs an int\n"; return -1; }
       theSolver.config().wl_iterations = atoi(argv[i + 1]); i++;

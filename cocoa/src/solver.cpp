@@ -1043,8 +1043,11 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 					unsigned v = bt->var();
 					bool in_mask = (v < current_sub_varset_.size()
 					                && current_sub_varset_[v]);
+					// Strict gate (-learnedLocalOnly): block on ANY outside
+					// endpoint, assigned ones included (phantom channel).
 					if (!in_mask
-					    && literal_values_[LiteralID(v, true)] == X_TRI) {
+					    && (config_.learned_local_only
+					        || literal_values_[LiteralID(v, true)] == X_TRI)) {
 						statistics_.num_learned_binary_filtered_++;
 						continue;
 					}
@@ -1097,8 +1100,10 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 					unsigned v = bt->var();
 					bool in_mask = (v < current_sub_varset_.size()
 					                && current_sub_varset_[v]);
+					// Strict gate: see the learned-binary lane above.
 					if (!in_mask
-					    && literal_values_[LiteralID(v, true)] == X_TRI) {
+					    && (config_.learned_local_only
+					        || literal_values_[LiteralID(v, true)] == X_TRI)) {
 						statistics_.num_learned_binary_filtered_++;
 						continue;
 					}
@@ -1169,7 +1174,8 @@ bool Solver::BCP(unsigned start_at_stack_ofs) {
 					bcp_path_C1_sound_fail_++;
 					continue;
 				}
-				if (!learnedClauseInComponent(itcl->ofs, current_sub_varset_)) {
+				if (!learnedClauseInComponent(itcl->ofs, current_sub_varset_,
+				                              config_.learned_local_only)) {
 					bcp_path_C2_comp_fail_++;
 					continue;
 				}

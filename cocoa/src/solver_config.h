@@ -561,6 +561,18 @@ struct SolverConfiguration {
   //   2 = diagnostic: mark + count would-be-purged entries, change nothing
   int cache_purge_mode = 0;
 
+  // Strict learned-clause locality gate (-learnedLocalOnly): inside a
+  // component solve, a learned/redundant clause may fire ONLY if every
+  // variable lies inside the current sub-component mask — assigned outside
+  // vars included (they are exactly the trail-residual "phantom" channel
+  // of the mc2026_169 cache-pollution bug). Provably sound: a fully-local
+  // clause's restricted resolution derivation lives entirely inside the
+  // component (connectivity), so the component itself entails it. Trades
+  // trail-residual CDCL pruning power for PURE counts -> full canonical-
+  // cache reuse and a ~empty -cachePurge journal. Empty-mask scopes still
+  // fire (and still taint) -> run with -cachePurge 1 as the safety net.
+  bool learned_local_only = false;
+
   // ===============================================================
   // END diagnostic flags
   // ===============================================================
