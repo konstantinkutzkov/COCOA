@@ -752,6 +752,8 @@ void Solver::solve(const string &file_name) {
 	          << " learned_clauses=" << statistics_.num_clauses_learned_
 	          << " dedup_dropped=" << statistics_.num_learned_dedup_dropped_
 	          << " binary_filter_fires=" << statistics_.num_learned_binary_filtered_
+	          << " learned_pool_entries=" << literal_pool_.size()
+	          << " learn_capped_conflicts=" << stats_learn_capped_conflicts_
 	          << std::endl;
 	std::cerr << "SCC_UNSAT_STATS"
 	          << " enabled=" << (config_.use_scc_unsat_prune ? 1 : 0)
@@ -1448,7 +1450,7 @@ bool Solver::commitFailedLiteral() {
 	// Dedup: skip storing if we've likely seen this clause before.
 	// Bloom filter — false positives just skip a learn (sound).
 	Antecedent ante(NOT_A_CLAUSE);
-	const int L = config_.learn_level;
+	const int L = effectiveLearnLevel();  // 0 once the clause DB is capped
 	if (L < 1) {
 		// Learning disabled for diagnosis: skip storing, still force the
 		// asserting literal with NOT_A_CLAUSE antecedent (same

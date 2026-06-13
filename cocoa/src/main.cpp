@@ -52,6 +52,8 @@ int main(int argc, char *argv[]) {
     cout << "\t -bruteForceCacheDumpDir DIR\t dump offending sub-components here when -bruteForceCacheCheck mismatches." << endl;
     cout << "\t -cachePurge n\t learned-clause cache-pollution defense: 0=off (default) 1=purge stores under failed branch arms 2=diagnostic count-only" << endl;
     cout << "\t -learnedLocalOnly\t strict gate: learned/redundant clauses fire inside a component only if ALL their vars are in it (pure counts, full cache reuse; weaker CDCL pruning). Combine with -cachePurge 1." << endl;
+    cout << "\t -maxLearnedClauses n\t stop learning once n learned clauses exist (0=unlimited, default). Sound: caps RSS; existing clauses keep firing." << endl;
+    cout << "\t -maxLearnedPool n\t hard guard: stop learning once literal_pool_ reaches n entries (default 2^31; ClauseOfs is 32-bit). Overflow insurance." << endl;
     cout << "\t" << endl;
 
     return -1;
@@ -163,6 +165,12 @@ int main(int argc, char *argv[]) {
       if (lvl > 5) lvl = 5;
       theSolver.config().learn_level = lvl;
       i++;
+    } else if (strcmp(argv[i], "-maxLearnedClauses") == 0) {
+      if (i + 1 >= argc) { cout << "-maxLearnedClauses needs a count (0=unlimited)\n"; return -1; }
+      theSolver.config().max_learned_clauses = strtoul(argv[i + 1], nullptr, 10); i++;
+    } else if (strcmp(argv[i], "-maxLearnedPool") == 0) {
+      if (i + 1 >= argc) { cout << "-maxLearnedPool needs a literal-pool-entry cap\n"; return -1; }
+      theSolver.config().max_learned_pool_entries = strtoull(argv[i + 1], nullptr, 10); i++;
     } else if (strcmp(argv[i], "-verifyLearn") == 0) {
       theSolver.config().verify_learn = true;
     } else if (strcmp(argv[i], "-noSubsumption") == 0) {

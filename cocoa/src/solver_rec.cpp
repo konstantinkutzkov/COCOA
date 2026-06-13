@@ -2356,7 +2356,7 @@ mpz_class Solver::branchOnLiteral(LiteralID lit,
 		//   level 3 → + scope (no binary padding)
 		//   level 4 → + binary padding
 		//   level 5 → + minimization (handled in minimizeAndStoreUIPClause)
-		const int L = config_.learn_level;
+		const int L = effectiveLearnLevel();  // 0 once the clause DB is capped
 		// Suppression-gate. The legacy invariant was "do not learn during
 		// separator consumption" because a learned clause might bridge
 		// the hierarchy's children. With the per-sub-component membership

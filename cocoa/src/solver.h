@@ -444,6 +444,21 @@ private:
 
 	StopWatch stopwatch_;
 
+	// Learned-clause DB cap. Returns config_.learn_level normally, but 0
+	// once the clause DB hits a cap (so every learn-decision site falls
+	// into the commented-sound no-store path). Bounds RSS, the provenance
+	// map, AND the 32-bit ClauseOfs overflow exposure. Called once per
+	// conflict at the two decision sites (solver.cpp / solver_rec.cpp).
+	unsigned long stats_learn_capped_conflicts_ = 0;
+	int effectiveLearnLevel() {
+		bool capped =
+		    (config_.max_learned_clauses > 0
+		     && conflict_clauses_.size() >= config_.max_learned_clauses)
+		    || literal_pool_.size() >= config_.max_learned_pool_entries;
+		if (capped) { stats_learn_capped_conflicts_++; return 0; }
+		return config_.learn_level;
+	}
+
 	// ----- -cachePurge TAINT tracking (Level-1 refinement) -----
 	// current_solve_tainted_: a non-local ("phantom") learned/redundant
 	// clause fired during the CURRENT component solve's subtree, or the

@@ -46,6 +46,25 @@ struct SolverConfiguration {
   // explicitly via -learnLevel 5 once the rewrite is known good.
   int learn_level = 4;
 
+  // Learned-clause DB caps. COCOA never DELETES learned clauses (the
+  // delete/compact paths are dead code; compaction is preprocessing-only),
+  // so the clause DB and literal_pool_ grow MONOTONICALLY across a run.
+  // When a cap is hit, learning drops to effective level 0 — the
+  // commented-sound no-store path (existing clauses keep firing; not
+  // creating new ones only costs pruning, never correctness). See
+  // Solver::effectiveLearnLevel.
+  //   max_learned_pool_entries: HARD overflow guard on literal_pool_.size().
+  //     ClauseOfs is 32-bit `unsigned` (primitive_types.h), so pool offsets
+  //     must stay below 2^32 (≈4.29e9) or they silently alias. Default 2^31
+  //     leaves a full 2^31 headroom and never bites real instances
+  //     (mc2026_169's entire learned DB is ~low-millions of pool entries).
+  //     Default ON — pure overflow insurance.
+  //   max_learned_clauses: SOFT count cap (number of learned clauses) for
+  //     RSS control / experiments. 0 = unlimited (opt-in). Calibrate the
+  //     default later from the learned_pool_entries stat now logged.
+  uint64_t max_learned_pool_entries = 2147483648ULL;  // 2^31, < 2^32 ceiling
+  unsigned long max_learned_clauses = 0;              // 0 = unlimited
+
   // When true (default), allow conflict-clause learning during the
   // consumption of a precomputed separator (from_separator=true call
   // sites). Per-sub-component membership filter (binary lane filter +
