@@ -502,13 +502,20 @@ private:
 			}
 		}
 		if (!phantom) return;  // fully local by literal scope -> pure
-		// Diagnostic: does provenance certify this phantom as safe?
+		// σ-aware provenance-locality check (amortized leaves).
+		bool prov_local = false;
+		if (config_.measure_prov_local || config_.prov_local_taint)
+			prov_local = learnedClauseProvenanceLocal(ofs, current_sub_varset_);
+		// Diagnostic counters (measurement mode; behavior unchanged there).
 		if (config_.measure_prov_local) {
 			stats_phantom_long_firings_++;
-			if (learnedClauseProvenanceLocal(ofs, current_sub_varset_))
-				stats_phantom_long_provlocal_++;
+			if (prov_local) stats_phantom_long_provlocal_++;
 		}
-		// Taint (behavior unchanged): first phantom firing taints the solve.
+		// LEVEL-2 TAINT: a phantom whose firing is provably locally entailed
+		// (R |= L|σ) is SAFE -> it does NOT taint. Only genuinely-non-local
+		// (or root-scope / un-amortized) phantoms taint.
+		if (config_.prov_local_taint && prov_local) return;
+		// First non-safe phantom firing taints the solve.
 		if (!current_solve_tainted_) {
 			current_solve_tainted_ = true;
 			stats_taint_fires_++;
@@ -1431,6 +1438,11 @@ private:
 			prov.push_back(last_violated_clause_ofs_);
 		for (ClauseOfs c : last_analysis_chain_) prov.push_back(c);
 		learned_clause_provenance_[learned_ofs] = std::move(prov);
+		// Amortize the σ-independent provenance walk to clause birth (once),
+		// so the locality validator is a cheap per-firing σ-scan. Only when
+		// the prov-local feature is enabled (else zero cost / memory).
+		if (config_.measure_prov_local || config_.prov_local_taint)
+			computeOrigLeaves(learned_ofs);
 	}
 
 

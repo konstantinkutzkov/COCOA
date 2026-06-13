@@ -637,40 +637,65 @@ protected:
   // NB: a DIAGNOSTIC for now -- counts only; does NOT gate the taint
   // decision until the measured local-rate justifies wiring it in (with
   // adversarial review).
+  // AMORTIZED: the σ-INDEPENDENT transitive original-leaf set is computed
+  // ONCE at clause creation (computeOrigLeaves below). At firing we only do
+  // the per-firing σ-restriction scan over that small precomputed list —
+  // no graph walk, no dedup. This is the cheap version of the proven-96.8%
+  // validator (the BFS+dedup that cost +31% per-firing moves to birth,
+  // 30x fewer calls).
   bool learnedClauseProvenanceLocal(ClauseOfs cl_ofs,
                                     const std::vector<char> &mask) const {
     if (mask.empty()) { prov_fail_no_mask_++; return false; }
-    prov_local_stack_.clear();
-    prov_local_visited_.clear();
-    prov_local_stack_.push_back(cl_ofs);
-    prov_local_visited_.push_back(cl_ofs);
-    while (!prov_local_stack_.empty()) {
-      ClauseOfs cur = prov_local_stack_.back();
-      prov_local_stack_.pop_back();
-      if (cur < (ClauseOfs)original_lit_pool_size_) {
-        if (!originalLeafLocalUnderTrail(cur, mask)) {
-          prov_fail_leaf_outside_++; return false;
-        }
-        continue;
-      }
-      auto pit = learned_clause_provenance_.find(cur);
-      if (pit == learned_clause_provenance_.end()) {
-        prov_fail_unrecorded_++; return false;  // conservative
-      }
-      for (ClauseOfs ant : pit->second) {
-        bool seen = false;
-        for (ClauseOfs v : prov_local_visited_)
-          if (v == ant) { seen = true; break; }
-        if (!seen) {
-          prov_local_visited_.push_back(ant);
-          prov_local_stack_.push_back(ant);
-        }
-      }
+    auto it = learned_clause_orig_leaves_.find(cl_ofs);
+    if (it == learned_clause_orig_leaves_.end()) {
+      // No precomputed leaves: clause born before the feature was on, or
+      // its derivation overflowed PROV_MAX_LEAVES -> conservative non-local.
+      prov_fail_unrecorded_++; return false;
     }
+    for (ClauseOfs leaf : it->second)
+      if (!originalLeafLocalUnderTrail(leaf, mask)) {
+        prov_fail_leaf_outside_++; return false;
+      }
     return true;
   }
 
+  // Compute & cache the transitive original-clause leaves of a freshly
+  // learned clause, as the deduped union of its antecedents' leaves
+  // (an original antecedent is its own leaf; a learned one contributes its
+  // already-cached leaf set — antecedents are always created earlier).
+  // Capped at PROV_MAX_LEAVES; on overflow (or a missing antecedent set)
+  // we store nothing -> the validator treats the clause conservatively.
+  // O(antecedent leaves) once per clause; called from
+  // recordLearnedClauseProvenance when the prov-local feature is enabled.
+  static constexpr size_t PROV_MAX_LEAVES = 64;
+  void computeOrigLeaves(ClauseOfs learned_ofs) {
+    auto pit = learned_clause_provenance_.find(learned_ofs);
+    if (pit == learned_clause_provenance_.end()) return;
+    std::vector<ClauseOfs> leaves;
+    bool overflow = false;
+    auto add = [&](ClauseOfs lf) {
+      for (ClauseOfs e : leaves) if (e == lf) return;
+      if (leaves.size() >= PROV_MAX_LEAVES) { overflow = true; return; }
+      leaves.push_back(lf);
+    };
+    for (ClauseOfs ant : pit->second) {
+      if (overflow) break;
+      if (ant < (ClauseOfs)original_lit_pool_size_) {
+        add(ant);
+      } else {
+        auto lit = learned_clause_orig_leaves_.find(ant);
+        if (lit == learned_clause_orig_leaves_.end()) { overflow = true; break; }
+        for (ClauseOfs lf : lit->second) { if (overflow) break; add(lf); }
+      }
+    }
+    if (!overflow) learned_clause_orig_leaves_[learned_ofs] = std::move(leaves);
+  }
+
  private:
+  // Per-learned-clause cached transitive original-clause leaves (amortized
+  // provenance for the σ-aware locality validator). Populated only when
+  // -measureProvLocal / -provLocalTaint is on.
+  std::unordered_map<ClauseOfs, std::vector<ClauseOfs>> learned_clause_orig_leaves_;
   // One ORIGINAL leaf clause restricted under the trail: satisfied -> ok
   // (drops); else every surviving (X_TRI) literal's var must be in mask.
   bool originalLeafLocalUnderTrail(ClauseOfs ofs,
@@ -685,13 +710,11 @@ protected:
     }
     return true;
   }
-  mutable std::vector<ClauseOfs> prov_local_stack_;
-  mutable std::vector<ClauseOfs> prov_local_visited_;
  public:
-  // Failure-reason breakdown for the provenance-locality validator
-  // (-measureProvLocal). Distinguishes "fixable" (unrecorded provenance in
-  // the BFS) from "genuine" (an original leaf has a surviving literal
-  // outside the component) — decides whether the route is worth wiring in.
+  // Failure-reason breakdown for the provenance-locality validator.
+  // Distinguishes "unrecorded" (no precomputed leaves: pre-feature birth or
+  // PROV_MAX_LEAVES overflow) from "genuine" (a σ-surviving leaf literal
+  // outside the component) and "no_mask" (root-scope, no component).
   mutable unsigned long prov_fail_no_mask_ = 0;
   mutable unsigned long prov_fail_unrecorded_ = 0;
   mutable unsigned long prov_fail_leaf_outside_ = 0;

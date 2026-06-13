@@ -601,6 +601,16 @@ struct SolverConfiguration {
   // behavior (counts only). Off by default.
   bool measure_prov_local = false;
 
+  // -provLocalTaint: LEVEL-2 taint refinement. A phantom learned-clause
+  // firing that the σ-aware provenance validator certifies as locally
+  // entailed (R |= L|σ) does NOT taint its component's count — only
+  // genuinely non-local (or root-scope) phantoms do. Combine with
+  // -cachePurge 1: shrinks the purge set toward only the truly-poisoned
+  // stores, recovering cache power the blunt purge discards. Sound iff the
+  // validator is sound (provenance one-trace + offset stability + σ-aware,
+  // all established). Default off pending the 169 soundness+speed test.
+  bool prov_local_taint = false;
+
   // ===============================================================
   // END diagnostic flags
   // ===============================================================
