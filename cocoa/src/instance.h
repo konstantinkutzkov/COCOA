@@ -620,6 +620,82 @@ protected:
                      : learnedClauseInScope(cl_ofs);
   }
 
+  // PROVENANCE-LOCALITY validator (σ-aware). Returns true iff the learned
+  // clause cl_ofs is entailed by the CURRENT component (mask) under the
+  // current trail — i.e. its firing is pure, NOT a context-poisoning
+  // phantom. Method: BFS the transitive resolution provenance to its
+  // original-clause leaves; restrict each leaf under σ (literal_values_):
+  //   - a leaf with a T_TRI literal is satisfied -> drops out (no constraint)
+  //   - otherwise every SURVIVING (non-F_TRI, i.e. X_TRI) literal's var
+  //     must be in `mask`.
+  // If all leaves pass, the σ-restricted derivation is a resolution proof
+  // of L|σ from R's residual clauses (each surviving restricted leaf IS an
+  // active clause over R's vars), so R ⊨ L|σ. SOUND UNDER-APPROXIMATION:
+  // returns false (caller stays conservative) on missing provenance or any
+  // surviving literal outside the mask. Read-only.
+  //
+  // NB: a DIAGNOSTIC for now -- counts only; does NOT gate the taint
+  // decision until the measured local-rate justifies wiring it in (with
+  // adversarial review).
+  bool learnedClauseProvenanceLocal(ClauseOfs cl_ofs,
+                                    const std::vector<char> &mask) const {
+    if (mask.empty()) { prov_fail_no_mask_++; return false; }
+    prov_local_stack_.clear();
+    prov_local_visited_.clear();
+    prov_local_stack_.push_back(cl_ofs);
+    prov_local_visited_.push_back(cl_ofs);
+    while (!prov_local_stack_.empty()) {
+      ClauseOfs cur = prov_local_stack_.back();
+      prov_local_stack_.pop_back();
+      if (cur < (ClauseOfs)original_lit_pool_size_) {
+        if (!originalLeafLocalUnderTrail(cur, mask)) {
+          prov_fail_leaf_outside_++; return false;
+        }
+        continue;
+      }
+      auto pit = learned_clause_provenance_.find(cur);
+      if (pit == learned_clause_provenance_.end()) {
+        prov_fail_unrecorded_++; return false;  // conservative
+      }
+      for (ClauseOfs ant : pit->second) {
+        bool seen = false;
+        for (ClauseOfs v : prov_local_visited_)
+          if (v == ant) { seen = true; break; }
+        if (!seen) {
+          prov_local_visited_.push_back(ant);
+          prov_local_stack_.push_back(ant);
+        }
+      }
+    }
+    return true;
+  }
+
+ private:
+  // One ORIGINAL leaf clause restricted under the trail: satisfied -> ok
+  // (drops); else every surviving (X_TRI) literal's var must be in mask.
+  bool originalLeafLocalUnderTrail(ClauseOfs ofs,
+                                   const std::vector<char> &mask) const {
+    for (auto lt = literal_pool_.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
+      unsigned v = lt->var();
+      if (v == guard_var_) continue;
+      TriValue val = literal_values_[*lt];
+      if (val == T_TRI) return true;       // clause satisfied -> drops out
+      if (val == F_TRI) continue;          // literal removed under σ
+      if (v >= mask.size() || !mask[v]) return false;  // surviving, outside R
+    }
+    return true;
+  }
+  mutable std::vector<ClauseOfs> prov_local_stack_;
+  mutable std::vector<ClauseOfs> prov_local_visited_;
+ public:
+  // Failure-reason breakdown for the provenance-locality validator
+  // (-measureProvLocal). Distinguishes "fixable" (unrecorded provenance in
+  // the BFS) from "genuine" (an original leaf has a surviving literal
+  // outside the component) — decides whether the route is worth wiring in.
+  mutable unsigned long prov_fail_no_mask_ = 0;
+  mutable unsigned long prov_fail_unrecorded_ = 0;
+  mutable unsigned long prov_fail_leaf_outside_ = 0;
+
   void decayActivities() {
     for (auto l_it = literals_.begin(); l_it != literals_.end(); l_it++)
       l_it->activity_score_ *= 0.5;

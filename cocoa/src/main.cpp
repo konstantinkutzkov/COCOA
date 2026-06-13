@@ -54,6 +54,7 @@ int main(int argc, char *argv[]) {
     cout << "\t -learnedLocalOnly\t strict gate: learned/redundant clauses fire inside a component only if ALL their vars are in it (pure counts, full cache reuse; weaker CDCL pruning). Combine with -cachePurge 1." << endl;
     cout << "\t -maxLearnedClauses n\t stop learning once n learned clauses exist (0=unlimited, default). Sound: caps RSS; existing clauses keep firing." << endl;
     cout << "\t -maxLearnedPool n\t hard guard: stop learning once literal_pool_ reaches n entries (default 2^31; ClauseOfs is 32-bit). Overflow insurance." << endl;
+    cout << "\t -measureProvLocal\t diagnostic: count phantom learned-clause firings the provenance validator certifies as locally entailed (no behavior change)." << endl;
     cout << "\t" << endl;
 
     return -1;
@@ -328,6 +329,8 @@ int main(int argc, char *argv[]) {
       theSolver.config().cache_purge_mode = m;
     } else if (strcmp(argv[i], "-learnedLocalOnly") == 0) {
       theSolver.config().learned_local_only = true;
+    } else if (strcmp(argv[i], "-measureProvLocal") == 0) {
+      theSolver.config().measure_prov_local = true;
     } else if (strcmp(argv[i], "-wlIter") == 0) {
       if (argc <= i + 1) { cout << "-wlIter needs an int\n"; return -1; }
       theSolver.config().wl_iterations = atoi(argv[i + 1]); i++;

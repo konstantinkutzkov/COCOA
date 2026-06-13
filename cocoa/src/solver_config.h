@@ -594,6 +594,13 @@ struct SolverConfiguration {
   // fire (and still taint) -> run with -cachePurge 1 as the safety net.
   bool learned_local_only = false;
 
+  // Diagnostic (-measureProvLocal): at each phantom learned-clause firing,
+  // also run the σ-aware provenance-locality validator and count how many
+  // phantoms it certifies as safe (locally entailed). Measures the rescue
+  // potential of a provenance-gated taint refinement WITHOUT changing
+  // behavior (counts only). Off by default.
+  bool measure_prov_local = false;
+
   // ===============================================================
   // END diagnostic flags
   // ===============================================================

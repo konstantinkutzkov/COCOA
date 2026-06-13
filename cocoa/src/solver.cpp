@@ -828,6 +828,11 @@ void Solver::solve(const string &file_name) {
 		          << " tainted_stores=" << cc.stats_tainted_stores
 		          << " pure_stores=" << cc.stats_pure_stores
 		          << " promoted=" << cc.stats_promoted
+		          << " phantom_long_firings=" << stats_phantom_long_firings_
+		          << " phantom_long_provlocal=" << stats_phantom_long_provlocal_
+		          << " provfail_unrecorded=" << prov_fail_unrecorded_
+		          << " provfail_leaf_outside=" << prov_fail_leaf_outside_
+		          << " provfail_no_mask=" << prov_fail_no_mask_
 		          << std::endl;
 		// Balance check (works in Release where assert() is compiled out):
 		// a non-empty mark stack here means a BranchPurgeScope exit was

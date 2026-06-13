@@ -470,6 +470,11 @@ private:
 	bool current_solve_tainted_ = false;
 	bool last_solve_tainted_ = false;
 	unsigned long stats_taint_fires_ = 0;
+	// -measureProvLocal diagnostic: phantom long-clause firings, and how
+	// many the σ-aware provenance validator certifies as locally entailed
+	// (= would-be rescued from tainting). Counts only; behavior unchanged.
+	unsigned long stats_phantom_long_firings_ = 0;
+	unsigned long stats_phantom_long_provlocal_ = 0;
 
 	// A LEARNED long clause fired (propagated or conflicted) during a
 	// component solve. Pure iff EVERY variable lies inside the current
@@ -481,20 +486,32 @@ private:
 	// gate-blocked) makes it a phantom -> taint. Empty mask = scope
 	// unknown -> conservative taint.
 	void noteLearnedClauseFired(ClauseOfs ofs) {
-		if (current_solve_tainted_) return;
-		if (current_sub_varset_.empty()) {
+		// Fast path once tainted: nothing more to flip UNLESS we're
+		// measuring (then we still want to count every phantom firing).
+		if (current_solve_tainted_ && !config_.measure_prov_local) return;
+		// Phantom? = any var outside the mask (or no mask installed).
+		bool phantom = current_sub_varset_.empty();
+		if (!phantom) {
+			for (auto lt = literal_pool_.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
+				unsigned v = lt->var();
+				if (v == guard_var_) continue;
+				if (v >= current_sub_varset_.size() || !current_sub_varset_[v]) {
+					phantom = true;
+					break;
+				}
+			}
+		}
+		if (!phantom) return;  // fully local by literal scope -> pure
+		// Diagnostic: does provenance certify this phantom as safe?
+		if (config_.measure_prov_local) {
+			stats_phantom_long_firings_++;
+			if (learnedClauseProvenanceLocal(ofs, current_sub_varset_))
+				stats_phantom_long_provlocal_++;
+		}
+		// Taint (behavior unchanged): first phantom firing taints the solve.
+		if (!current_solve_tainted_) {
 			current_solve_tainted_ = true;
 			stats_taint_fires_++;
-			return;
-		}
-		for (auto lt = literal_pool_.begin() + ofs; *lt != SENTINEL_LIT; lt++) {
-			unsigned v = lt->var();
-			if (v == guard_var_) continue;
-			if (v >= current_sub_varset_.size() || !current_sub_varset_[v]) {
-				current_solve_tainted_ = true;
-				stats_taint_fires_++;
-				return;
-			}
 		}
 	}
 
