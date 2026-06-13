@@ -179,3 +179,19 @@ All numbers grounded in the existing portfolio/runlogs/probe169_1_verbatim.log (
 2. **Q2 refinement (tripwire permanence).** The doc's own Optimization 7 — store the normalized clause multiset alongside the count (possibly only for components above a size threshold) — is the *principled* resolution of Q2: it makes P2 absolute (exact compare on hash match) instead of probabilistic, with the 16-byte tripwire as the cheap fallback for small entries. Consider a hybrid: full normalized form above N vars, tripwire below.
 
 3. **Divisibility assert scope (B5/fix 5 caveat).** `mpz_divisible_2exp_p` at the store is a TRIPWIRE, not a guarantee: a contaminated count can coincidentally remain divisible by 2^free_vars (pruning may remove a multiple of 2^k models). The purge is the guarantee; the assert is the cheap witness. Free-var quotient soundness layering: P1 (purity, via purge) is load-bearing; given purity, P3 reduces to three mechanical checks — zero-sig classification guard, store-side divisibility tripwire, rescale at every hit site (store-side errors poison ALL future hits; probe-side errors only one).
+
+---
+
+## DECISION (2026-06-13): ship the purge, shelve the validator, resume the sweep
+
+After building the full fix family and measuring on 169 (the worst-case instance):
+- **FIX = `-cachePurge 1`** (journal + purge-on-failed-arm). Sound, snap-test-validated (169 → ganak's exact count), mode-0 control bit-identical. Cost: ~0 on typical instances, 1.56× on rare heavy-reuse ones. **This is the sound standalone setting.**
+- **TAINT (Level-1)** and **strict GATE** (`-learnedLocalOnly`) built; gate REFUTED on 169 (phantoms load-bearing); taint ~no help on phantom-saturated 169.
+- **PROVENANCE VALIDATOR** (`-measureProvLocal`): proven sound + 96.8% effective in principle, **but SHELVED** — efficient detection is the blocker: the σ-restriction tracks the live trail (not memoizable like `learnedClauseSound`), so per-firing validation cost (+31% measured) likely outweighs the cache it recovers, and it only helps rare standalone heavy instances. Code stays in-tree (`learnedClauseProvenanceLocal` + `-measureProvLocal`) as documented future work; not wired into behavior.
+- **DB CAP** (`-maxLearnedClauses 10M` default + 2^31 pool guard): shipped, sound, orthogonal.
+
+**Two-deployment soundness posture:**
+1. **Sweep** (has ganak oracle, which caught 169): run on defaults (purge OFF) — zero tax, soundness via verify-every-count. RESUME at mc2026_track1_171.
+2. **Standalone/competition** (no oracle): enable `-cachePurge 1` — intrinsic soundness; flip the default at submission time, ideally with portfolio-cost data.
+
+No further worst-case (169) optimization runs. Validator reopen criterion: only if a portfolio A/B shows the purge's aggregate cost is actually material (rarity argument predicts it is not).
