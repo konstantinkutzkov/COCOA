@@ -59,11 +59,13 @@ struct SolverConfiguration {
   //     leaves a full 2^31 headroom and never bites real instances
   //     (mc2026_169's entire learned DB is ~low-millions of pool entries).
   //     Default ON — pure overflow insurance.
-  //   max_learned_clauses: SOFT count cap (number of learned clauses) for
-  //     RSS control / experiments. 0 = unlimited (opt-in). Calibrate the
-  //     default later from the learned_pool_entries stat now logged.
+  //   max_learned_clauses: SOFT count cap (number of learned clauses).
+  //     Default 10M — generous (no instance has come close; mc2026_169 hit
+  //     ~618k in 24 min) and memory-safe (~10M clauses ≈ few-hundred MB of
+  //     pool, well under the 2^31 hard guard). 0 = unlimited. Calibrate
+  //     from the learned_pool_entries stat as sweep data accumulates.
   uint64_t max_learned_pool_entries = 2147483648ULL;  // 2^31, < 2^32 ceiling
-  unsigned long max_learned_clauses = 0;              // 0 = unlimited
+  unsigned long max_learned_clauses = 10000000UL;     // 10M; 0 = unlimited
 
   // When true (default), allow conflict-clause learning during the
   // consumption of a precomputed separator (from_separator=true call
