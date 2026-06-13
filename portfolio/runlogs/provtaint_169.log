@@ -1,0 +1,343 @@
+Solving /Users/konstantin.kutzkov/Desktop/Code/SharpSAT/temp_cnf/mc2026_public/mc2026_track1_169.cnf
+variables (all/used/free): 	636/636/0
+clauses (all/long/binary/unit): 1816/1039/776/1
+
+Preprocessing ..preprocess: 1786 -> 1786 clauses (subsumed=0 pure_dup=0 ssr=0 forced=0 passes=1 elapsed_ms=0)
+ DONE
+variables (all/used/free): 	625/625/0
+clauses (all/long/binary/unit): 1786/1028/758/0
+NDHierarchy: 651 tree nodes, 256 internal (sep), 69 passthrough, 326 leaves, 471 total sep elements (vars=435 clauses=36), max_sep=17 (vars=17 clauses=0), sep_buckets=[1-2:224, 3-4:21, 5-7:6, 8-15:3, 16-31:2, 32-63:0, 64+:0], sep_clause_len=[3:36, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10-15:0, 16+:0]
+NDCentrality: root_sep_vars=17 scored=17 max_deg=14.0
+ROOT_DECOMP: root_active=625 subcomps=1 trivial_factor=1 sub0=625
+PROGRESS t=0.011087 pct_log=0 pct_lin=7.18212e-187 progress_bits=0 closed_bits=0 open=1 bound_log2=625 decisions=0 l2_hits=0 scc_fires_lit=0 scc_fires_clause=0
+calls=100000 depth=43 decisions=142289 conflicts=25453 stores=94255 hits=32070 l1_hits=44537
+OP_STATS calls=100000 ANALYZE:c=40162:ms=124.808:avg=3107.62ns CANONICAL:c=128270:ms=1431.41:avg=11159.3ns L1_PEEK:c=57868:ms=7.42273:avg=128.27ns L2_PEEK:c=128270:ms=35.127:avg=273.852ns PICK:c=0:ms=0:avg=0ns BCP:c=143540:ms=1099.03:avg=7656.61ns L1_STORE:c=13329:ms=1.08878:avg=81.6853ns L2_STORE:c=94255:ms=7.78516:avg=82.5968ns
+PROGRESS t=10.0111 pct_log=98.2489 pct_lin=0.0507508 progress_bits=0.000732366 closed_bits=614.056 open=38 bound_log2=624.999 decisions=155419 l2_hits=36524 scc_fires_lit=0 scc_fires_clause=0
+calls=200000 depth=36 decisions=292608 conflicts=35858 stores=192318 hits=82487 l1_hits=102403
+OP_STATS calls=200000 ANALYZE:c=67265:ms=237.933:avg=3537.24ns CANONICAL:c=277391:ms=3331.1:avg=12008.7ns L1_PEEK:c=125589:ms=16.4966:avg=131.354ns L2_PEEK:c=277391:ms=79.349:avg=286.055ns PICK:c=0:ms=0:avg=0ns BCP:c=293859:ms=1971.08:avg=6707.58ns L1_STORE:c=23184:ms=1.85127:avg=79.8513ns L2_STORE:c=192318:ms=15.9594:avg=82.9843ns
+PROGRESS t=20.0113 pct_log=98.3426 pct_lin=0.0761508 progress_bits=0.00109904 closed_bits=614.641 open=24 bound_log2=624.999 decisions=305440 l2_hits=86572 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=30.0115 pct_log=98.6408 pct_lin=0.277126 progress_bits=0.00400363 closed_bits=616.505 open=24 bound_log2=624.996 decisions=400409 l2_hits=108990 scc_fires_lit=0 scc_fires_clause=0
+calls=300000 depth=27 decisions=435932 conflicts=61028 stores=279526 hits=115347 l1_hits=137719
+OP_STATS calls=300000 ANALYZE:c=103583:ms=380.505:avg=3673.43ns CANONICAL:c=401717:ms=5134.84:avg=12782.2ns L1_PEEK:c=171344:ms=26.0426:avg=151.99ns L2_PEEK:c=401717:ms=125.076:avg=311.354ns PICK:c=0:ms=0:avg=0ns BCP:c=437183:ms=6056.05:avg=13852.4ns L1_STORE:c=33624:ms=2.97753:avg=88.5536ns L2_STORE:c=279526:ms=24.6439:avg=88.163ns
+PROGRESS t=40.0115 pct_log=98.8184 pct_lin=0.598176 progress_bits=0.00865578 closed_bits=617.615 open=35 bound_log2=624.991 decisions=515434 l2_hits=131916 scc_fires_lit=0 scc_fires_clause=0
+calls=400000 depth=34 decisions=576805 conflicts=82115 stores=371782 hits=148357 l1_hits=184243
+OP_STATS calls=400000 ANALYZE:c=149663:ms=523.904:avg=3500.56ns CANONICAL:c=529569:ms=6864.06:avg=12961.6ns L1_PEEK:c=228512:ms=35.208:avg=154.075ns L2_PEEK:c=529569:ms=167.985:avg=317.21ns PICK:c=0:ms=0:avg=0ns BCP:c=578056:ms=9075.52:avg=15700.1ns L1_STORE:c=44267:ms=3.79344:avg=85.6946ns L2_STORE:c=371782:ms=33.8061:avg=90.9299ns
+PROGRESS t=50.0117 pct_log=98.8651 pct_lin=0.732413 progress_bits=0.0106054 closed_bits=617.907 open=26 bound_log2=624.989 decisions=612681 l2_hits=156314 scc_fires_lit=0 scc_fires_clause=0
+calls=500000 depth=27 decisions=720256 conflicts=93021 stores=460956 hits=194394 l1_hits=222335
+OP_STATS calls=500000 ANALYZE:c=215542:ms=715.77:avg=3320.79ns CANONICAL:c=668384:ms=8440.23:avg=12627.8ns L1_PEEK:c=276485:ms=44.8153:avg=162.089ns L2_PEEK:c=668384:ms=218.99:avg=327.641ns PICK:c=0:ms=0:avg=0ns BCP:c=721507:ms=12097.5:avg=16767ns L1_STORE:c=54149:ms=4.78096:avg=88.2927ns L2_STORE:c=460956:ms=41.4019:avg=89.8174ns
+PROGRESS t=60.012 pct_log=98.9188 pct_lin=0.924205 progress_bits=0.0133955 closed_bits=618.242 open=24 bound_log2=624.987 decisions=744708 l2_hits=199862 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=70.0122 pct_log=98.9846 pct_lin=1.22898 progress_bits=0.0178402 closed_bits=618.654 open=23 bound_log2=624.982 decisions=818767 l2_hits=218683 scc_fires_lit=0 scc_fires_clause=0
+calls=600000 depth=26 decisions=867447 conflicts=118011 stores=548861 hits=230080 l1_hits=259154
+OP_STATS calls=600000 ANALYZE:c=244673:ms=840.052:avg=3433.37ns CANONICAL:c=796004:ms=10577.9:avg=13288.8ns L1_PEEK:c=322755:ms=55.1615:avg=170.908ns L2_PEEK:c=796004:ms=265.643:avg=333.721ns PICK:c=0:ms=0:avg=0ns BCP:c=868698:ms=20683.4:avg=23809.7ns L1_STORE:c=63600:ms=5.70696:avg=89.732ns L2_STORE:c=548861:ms=49.8632:avg=90.8485ns
+PROGRESS t=80.0124 pct_log=99.0409 pct_lin=1.56868 progress_bits=0.0228106 closed_bits=619.006 open=33 bound_log2=624.977 decisions=891426 l2_hits=234718 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=90.0128 pct_log=99.05 pct_lin=1.63154 progress_bits=0.0237323 closed_bits=619.062 open=19 bound_log2=624.976 decisions=956232 l2_hits=247346 scc_fires_lit=0 scc_fires_clause=0
+calls=700000 depth=46 decisions=1000764 conflicts=138899 stores=635008 hits=257634 l1_hits=303367
+OP_STATS calls=700000 ANALYZE:c=285873:ms=994.162:avg=3477.64ns CANONICAL:c=914336:ms=12504.5:avg=13676.1ns L1_PEEK:c=377482:ms=68.3631:avg=181.103ns L2_PEEK:c=914336:ms=304.963:avg=333.535ns PICK:c=0:ms=0:avg=0ns BCP:c=1002015:ms=29127:avg=29068.4ns L1_STORE:c=74113:ms=7.24581:avg=97.767ns L2_STORE:c=635008:ms=66.3727:avg=104.523ns
+PROGRESS t=100.013 pct_log=99.0624 pct_lin=1.72191 progress_bits=0.0250582 closed_bits=619.14 open=25 bound_log2=624.975 decisions=1035622 l2_hits=267228 scc_fires_lit=0 scc_fires_clause=0
+calls=800000 depth=43 decisions=1132210 conflicts=147840 stores=720554 hits=296591 l1_hits=345548
+OP_STATS calls=800000 ANALYZE:c=347650:ms=1192.35:avg=3429.75ns CANONICAL:c=1043655:ms=14162.2:avg=13569.8ns L1_PEEK:c=431296:ms=81.1447:avg=188.142ns L2_PEEK:c=1043655:ms=346.706:avg=332.203ns PICK:c=0:ms=0:avg=0ns BCP:c=1133461:ms=33395.5:avg=29463.3ns L1_STORE:c=85747:ms=8.31503:avg=96.9717ns L2_STORE:c=720554:ms=74.4998:avg=103.392ns
+PROGRESS t=110.013 pct_log=99.0808 pct_lin=1.86462 progress_bits=0.0271547 closed_bits=619.255 open=36 bound_log2=624.973 decisions=1160025 l2_hits=307872 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=120.013 pct_log=99.0951 pct_lin=1.98364 progress_bits=0.0289055 closed_bits=619.344 open=38 bound_log2=624.971 decisions=1247649 l2_hits=331703 scc_fires_lit=0 scc_fires_clause=0
+calls=900000 depth=27 decisions=1275092 conflicts=159434 stores=810556 hits=340495 l1_hits=385143
+OP_STATS calls=900000 ANALYZE:c=413376:ms=1400.41:avg=3387.74ns CANONICAL:c=1180882:ms=16029.2:avg=13573.9ns L1_PEEK:c=480168:ms=93.2525:avg=194.208ns L2_PEEK:c=1180882:ms=394.056:avg=333.696ns PICK:c=0:ms=0:avg=0ns BCP:c=1276343:ms=39453.2:avg=30911.1ns L1_STORE:c=95024:ms=9.31971:avg=98.0774ns L2_STORE:c=810556:ms=84.1589:avg=103.829ns
+PROGRESS t=130.013 pct_log=99.1166 pct_lin=2.17756 progress_bits=0.0317626 closed_bits=619.479 open=24 bound_log2=624.968 decisions=1327398 l2_hits=354223 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=140.013 pct_log=99.1252 pct_lin=2.26043 progress_bits=0.0329853 closed_bits=619.533 open=32 bound_log2=624.967 decisions=1395896 l2_hits=373101 scc_fires_lit=0 scc_fires_clause=0
+calls=1000000 depth=29 decisions=1408752 conflicts=173909 stores=895665 hits=376517 l1_hits=424162
+OP_STATS calls=1000000 ANALYZE:c=457215:ms=1571.43:avg=3436.97ns CANONICAL:c=1306978:ms=18070:avg=13825.8ns L1_PEEK:c=531061:ms=108.157:avg=203.661ns L2_PEEK:c=1306978:ms=442.189:avg=338.33ns PICK:c=0:ms=0:avg=0ns BCP:c=1410003:ms=47490.2:avg=33680.9ns L1_STORE:c=106897:ms=10.6383:avg=99.519ns L2_STORE:c=895665:ms=94.6876:avg=105.718ns
+PROGRESS t=150.014 pct_log=99.1316 pct_lin=2.32384 progress_bits=0.0339216 closed_bits=619.573 open=26 bound_log2=624.966 decisions=1458996 l2_hits=389609 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=160.014 pct_log=99.1422 pct_lin=2.43279 progress_bits=0.0355317 closed_bits=619.639 open=36 bound_log2=624.964 decisions=1510150 l2_hits=401303 scc_fires_lit=0 scc_fires_clause=0
+calls=1100000 depth=30 decisions=1546821 conflicts=191988 stores=982989 hits=412094 l1_hits=461864
+OP_STATS calls=1100000 ANALYZE:c=496000:ms=1744.77:avg=3517.68ns CANONICAL:c=1434105:ms=20287:avg=14146.1ns L1_PEEK:c=580125:ms=123.32:avg=212.575ns L2_PEEK:c=1434105:ms=492.318:avg=343.293ns PICK:c=0:ms=0:avg=0ns BCP:c=1548072:ms=59225.6:avg=38257.6ns L1_STORE:c=118260:ms=12.8648:avg=108.784ns L2_STORE:c=982989:ms=106.296:avg=108.135ns
+PROGRESS t=170.015 pct_log=99.1545 pct_lin=2.56567 progress_bits=0.0374978 closed_bits=619.715 open=21 bound_log2=624.963 decisions=1575176 l2_hits=420460 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=180.015 pct_log=99.1687 pct_lin=2.72918 progress_bits=0.0399211 closed_bits=619.805 open=24 bound_log2=624.96 decisions=1625147 l2_hits=431630 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=190.016 pct_log=99.1797 pct_lin=2.86238 progress_bits=0.0418979 closed_bits=619.873 open=24 bound_log2=624.958 decisions=1679924 l2_hits=444712 scc_fires_lit=0 scc_fires_clause=0
+calls=1200000 depth=28 decisions=1686800 conflicts=213057 stores=1068426 hits=446894 l1_hits=495584
+OP_STATS calls=1200000 ANALYZE:c=533956:ms=1895.38:avg=3549.69ns CANONICAL:c=1559195:ms=22463.3:avg=14407ns L1_PEEK:c=624880:ms=135.562:avg=216.94ns L2_PEEK:c=1559195:ms=537.136:avg=344.496ns PICK:c=0:ms=0:avg=0ns BCP:c=1688051:ms=72346.2:avg=42857.8ns L1_STORE:c=129295:ms=13.9194:avg=107.656ns L2_STORE:c=1068426:ms=136.741:avg=127.983ns
+PROGRESS t=200.016 pct_log=99.195 pct_lin=3.0584 progress_bits=0.0448121 closed_bits=619.969 open=19 bound_log2=624.955 decisions=1734760 l2_hits=458374 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=210.016 pct_log=99.2109 pct_lin=3.27591 progress_bits=0.0480528 closed_bits=620.068 open=23 bound_log2=624.952 decisions=1791305 l2_hits=471706 scc_fires_lit=0 scc_fires_clause=0
+calls=1300000 depth=25 decisions=1818369 conflicts=229268 stores=1151728 hits=477814 l1_hits=538383
+OP_STATS calls=1300000 ANALYZE:c=571218:ms=2046:avg=3581.82ns CANONICAL:c=1678981:ms=24619.8:avg=14663.5ns L1_PEEK:c=677674:ms=150.056:avg=221.428ns L2_PEEK:c=1678981:ms=575.981:avg=343.054ns PICK:c=0:ms=0:avg=0ns BCP:c=1819620:ms=86482.1:avg=47527.5ns L1_STORE:c=139290:ms=14.9261:avg=107.159ns L2_STORE:c=1151728:ms=146.28:avg=127.009ns
+PROGRESS t=220.017 pct_log=99.223 pct_lin=3.45234 progress_bits=0.0506869 closed_bits=620.144 open=22 bound_log2=624.949 decisions=1829557 l2_hits=480064 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=230.018 pct_log=99.2499 pct_lin=3.8784 progress_bits=0.0570674 closed_bits=620.312 open=19 bound_log2=624.943 decisions=1870720 l2_hits=488599 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=240.02 pct_log=99.2716 pct_lin=4.26129 progress_bits=0.0628257 closed_bits=620.447 open=24 bound_log2=624.937 decisions=1903736 l2_hits=497293 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=250.022 pct_log=99.3137 pct_lin=5.1136 progress_bits=0.0757267 closed_bits=620.71 open=19 bound_log2=624.924 decisions=1942994 l2_hits=507962 scc_fires_lit=0 scc_fires_clause=0
+calls=1400000 depth=32 decisions=1957527 conflicts=247273 stores=1237455 hits=511881 l1_hits=578647
+OP_STATS calls=1400000 ANALYZE:c=604371:ms=2193.91:avg=3630.06ns CANONICAL:c=1803536:ms=27131:avg=15043.2ns L1_PEEK:c=726096:ms=165.114:avg=227.4ns L2_PEEK:c=1803536:ms=623.022:avg=345.445ns PICK:c=0:ms=0:avg=0ns BCP:c=1958778:ms=110874:avg=56603.5ns L1_STORE:c=147448:ms=15.9944:avg=108.475ns L2_STORE:c=1237455:ms=159.072:avg=128.548ns
+PROGRESS t=260.022 pct_log=99.3373 pct_lin=5.66415 progress_bits=0.0841219 closed_bits=620.858 open=30 bound_log2=624.916 decisions=1977127 l2_hits=516748 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=270.022 pct_log=99.347 pct_lin=5.90836 progress_bits=0.0878615 closed_bits=620.919 open=31 bound_log2=624.912 decisions=2006975 l2_hits=522946 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=280.022 pct_log=99.3585 pct_lin=6.20923 progress_bits=0.0924821 closed_bits=620.991 open=22 bound_log2=624.908 decisions=2035616 l2_hits=529131 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=290.023 pct_log=99.3676 pct_lin=6.45847 progress_bits=0.096321 closed_bits=621.047 open=28 bound_log2=624.904 decisions=2076378 l2_hits=538927 scc_fires_lit=0 scc_fires_clause=0
+calls=1500000 depth=40 decisions=2097067 conflicts=267971 stores=1321440 hits=543534 l1_hits=618272
+OP_STATS calls=1500000 ANALYZE:c=638000:ms=2343.62:avg=3673.39ns CANONICAL:c=1924519:ms=29578.5:avg=15369.3ns L1_PEEK:c=773197:ms=179.632:avg=232.324ns L2_PEEK:c=1924519:ms=669.216:avg=347.731ns PICK:c=0:ms=0:avg=0ns BCP:c=2098318:ms=138453:avg=65983ns L1_STORE:c=154924:ms=17.0457:avg=110.026ns L2_STORE:c=1321440:ms=172.856:avg=130.809ns
+PROGRESS t=300.023 pct_log=99.3722 pct_lin=6.59027 progress_bits=0.0983552 closed_bits=621.076 open=39 bound_log2=624.902 decisions=2129972 l2_hits=552126 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=310.024 pct_log=99.393 pct_lin=7.21168 progress_bits=0.107985 closed_bits=621.206 open=22 bound_log2=624.892 decisions=2177337 l2_hits=562830 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=320.027 pct_log=99.4126 pct_lin=7.85064 progress_bits=0.117954 closed_bits=621.329 open=19 bound_log2=624.882 decisions=2211795 l2_hits=568289 scc_fires_lit=0 scc_fires_clause=0
+calls=1600000 depth=30 decisions=2227147 conflicts=285023 stores=1398686 hits=572108 l1_hits=656042
+OP_STATS calls=1600000 ANALYZE:c=685545:ms=2515.8:avg=3669.78ns CANONICAL:c=2037917:ms=31575:avg=15493.7ns L1_PEEK:c=818924:ms=193.547:avg=236.343ns L2_PEEK:c=2037917:ms=715.295:avg=350.993ns PICK:c=0:ms=0:avg=0ns BCP:c=2228398:ms=155605:avg=69828.2ns L1_STORE:c=162881:ms=18.2309:avg=111.928ns L2_STORE:c=1398686:ms=185.239:avg=132.438ns
+PROGRESS t=330.028 pct_log=99.4349 pct_lin=8.64534 progress_bits=0.13045 closed_bits=621.468 open=21 bound_log2=624.87 decisions=2257844 l2_hits=579177 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=340.029 pct_log=99.4393 pct_lin=8.8118 progress_bits=0.133081 closed_bits=621.496 open=22 bound_log2=624.867 decisions=2292444 l2_hits=587616 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=350.029 pct_log=99.4447 pct_lin=9.02157 progress_bits=0.136404 closed_bits=621.53 open=22 bound_log2=624.864 decisions=2333763 l2_hits=599432 scc_fires_lit=0 scc_fires_clause=0
+calls=1700000 depth=20 decisions=2366337 conflicts=301031 stores=1482220 hits=608595 l1_hits=693394
+OP_STATS calls=1700000 ANALYZE:c=723476:ms=2673.26:avg=3695.02ns CANONICAL:c=2163420:ms=34051.6:avg=15739.7ns L1_PEEK:c=864090:ms=207.929:avg=240.634ns L2_PEEK:c=2163420:ms=770.169:avg=355.996ns PICK:c=0:ms=0:avg=0ns BCP:c=2367588:ms=179095:avg=75644.5ns L1_STORE:c=170695:ms=19.2919:avg=113.02ns L2_STORE:c=1482220:ms=197.936:avg=133.54ns
+PROGRESS t=360.029 pct_log=99.4542 pct_lin=9.39941 progress_bits=0.142408 closed_bits=621.589 open=22 bound_log2=624.858 decisions=2370746 l2_hits=609509 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=370.03 pct_log=99.4587 pct_lin=9.58424 progress_bits=0.145354 closed_bits=621.617 open=21 bound_log2=624.855 decisions=2416694 l2_hits=619903 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=380.03 pct_log=99.4795 pct_lin=10.4863 progress_bits=0.15982 closed_bits=621.747 open=21 bound_log2=624.84 decisions=2457035 l2_hits=628626 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=390.031 pct_log=99.4858 pct_lin=10.7809 progress_bits=0.164576 closed_bits=621.787 open=21 bound_log2=624.835 decisions=2494096 l2_hits=637938 scc_fires_lit=0 scc_fires_clause=0
+calls=1800000 depth=25 decisions=2501631 conflicts=319461 stores=1561560 hits=638847 l1_hits=729934
+OP_STATS calls=1800000 ANALYZE:c=761207:ms=2825.12:avg=3711.38ns CANONICAL:c=2279902:ms=36386.2:avg=15959.6ns L1_PEEK:c=907133:ms=221.767:avg=244.47ns L2_PEEK:c=2279902:ms=824.119:avg=361.471ns PICK:c=0:ms=0:avg=0ns BCP:c=2502882:ms=200695:avg=80185.6ns L1_STORE:c=177198:ms=20.153:avg=113.732ns L2_STORE:c=1561560:ms=210.033:avg=134.502ns
+PROGRESS t=400.031 pct_log=99.5079 pct_lin=11.8622 progress_bits=0.182167 closed_bits=621.924 open=21 bound_log2=624.818 decisions=2531884 l2_hits=645431 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=410.031 pct_log=99.5146 pct_lin=12.2086 progress_bits=0.187848 closed_bits=621.966 open=26 bound_log2=624.812 decisions=2576725 l2_hits=654754 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=420.031 pct_log=99.5184 pct_lin=12.415 progress_bits=0.191245 closed_bits=621.99 open=22 bound_log2=624.809 decisions=2609127 l2_hits=662150 scc_fires_lit=0 scc_fires_clause=0
+calls=1900000 depth=32 decisions=2629554 conflicts=334667 stores=1638336 hits=666756 l1_hits=772117
+OP_STATS calls=1900000 ANALYZE:c=799563:ms=2976.02:avg=3722.06ns CANONICAL:c=2392333:ms=38535.6:avg=16107.9ns L1_PEEK:c=956769:ms=237.264:avg=247.985ns L2_PEEK:c=2392333:ms=876.25:avg=366.274ns PICK:c=0:ms=0:avg=0ns BCP:c=2630805:ms=220134:avg=83675.4ns L1_STORE:c=184650:ms=21.1151:avg=114.352ns L2_STORE:c=1638336:ms=221.697:avg=135.319ns
+PROGRESS t=430.031 pct_log=99.5215 pct_lin=12.5792 progress_bits=0.193952 closed_bits=622.009 open=26 bound_log2=624.806 decisions=2671135 l2_hits=675870 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=440.031 pct_log=99.5226 pct_lin=12.6428 progress_bits=0.195001 closed_bits=622.016 open=28 bound_log2=624.805 decisions=2746601 l2_hits=695430 scc_fires_lit=0 scc_fires_clause=0
+calls=2000000 depth=24 decisions=2756463 conflicts=344638 stores=1725855 hits=698780 l1_hits=824275
+OP_STATS calls=2000000 ANALYZE:c=838008:ms=3138.42:avg=3745.1ns CANONICAL:c=2516031:ms=40611.2:avg=16141ns L1_PEEK:c=1019850:ms=256.047:avg=251.064ns L2_PEEK:c=2516031:ms=935.911:avg=371.979ns PICK:c=0:ms=0:avg=0ns BCP:c=2757714:ms=226438:avg=82110.6ns L1_STORE:c=195574:ms=22.2271:avg=113.651ns L2_STORE:c=1725855:ms=232.023:avg=134.439ns
+PROGRESS t=450.031 pct_log=99.5265 pct_lin=12.857 progress_bits=0.198544 closed_bits=622.041 open=28 bound_log2=624.801 decisions=2826850 l2_hits=714633 scc_fires_lit=0 scc_fires_clause=0
+calls=2100000 depth=29 decisions=2879957 conflicts=353980 stores=1811714 hits=727992 l1_hits=878694
+OP_STATS calls=2100000 ANALYZE:c=885367:ms=3319.6:avg=3749.41ns CANONICAL:c=2635819:ms=42503.7:avg=16125.4ns L1_PEEK:c=1084617:ms=274.005:avg=252.629ns L2_PEEK:c=2635819:ms=989.429:avg=375.378ns PICK:c=0:ms=0:avg=0ns BCP:c=2881208:ms=232767:avg=80788ns L1_STORE:c=205921:ms=25.866:avg=125.611ns L2_STORE:c=1811714:ms=287.08:avg=158.457ns
+PROGRESS t=460.032 pct_log=99.5286 pct_lin=12.9772 progress_bits=0.200535 closed_bits=622.054 open=23 bound_log2=624.799 decisions=2901399 l2_hits=732789 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=470.032 pct_log=99.5331 pct_lin=13.2301 progress_bits=0.204733 closed_bits=622.082 open=27 bound_log2=624.795 decisions=2970285 l2_hits=747046 scc_fires_lit=0 scc_fires_clause=0
+calls=2200000 depth=27 decisions=3006136 conflicts=369490 stores=1898603 hits=754366 l1_hits=929705
+OP_STATS calls=2200000 ANALYZE:c=924097:ms=3495.28:avg=3782.38ns CANONICAL:c=2753451:ms=44648.5:avg=16215.5ns L1_PEEK:c=1146962:ms=291.5:avg=254.15ns L2_PEEK:c=2753451:ms=1036.68:avg=376.501ns PICK:c=0:ms=0:avg=0ns BCP:c=3007387:ms=243284:avg=80895.6ns L1_STORE:c=217256:ms=27.0613:avg=124.559ns L2_STORE:c=1898603:ms=297.002:avg=156.432ns
+PROGRESS t=480.04 pct_log=99.5356 pct_lin=13.3758 progress_bits=0.207157 closed_bits=622.098 open=24 bound_log2=624.793 decisions=3009969 l2_hits=755468 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=490.04 pct_log=99.5375 pct_lin=13.4872 progress_bits=0.209015 closed_bits=622.11 open=26 bound_log2=624.791 decisions=3058779 l2_hits=767482 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=500.041 pct_log=99.5391 pct_lin=13.5793 progress_bits=0.210551 closed_bits=622.119 open=23 bound_log2=624.789 decisions=3104381 l2_hits=779287 scc_fires_lit=0 scc_fires_clause=0
+calls=2300000 depth=27 decisions=3138985 conflicts=383173 stores=1989171 hits=788409 l1_hits=976038
+OP_STATS calls=2300000 ANALYZE:c=962704:ms=3676.36:avg=3818.79ns CANONICAL:c=2881206:ms=46802.1:avg=16243.9ns L1_PEEK:c=1205028:ms=309.264:avg=256.645ns L2_PEEK:c=2881206:ms=1090.68:avg=378.549ns PICK:c=0:ms=0:avg=0ns BCP:c=3140236:ms=259602:avg=82669.5ns L1_STORE:c=228988:ms=28.264:avg=123.43ns L2_STORE:c=1989171:ms=307.456:avg=154.565ns
+PROGRESS t=510.042 pct_log=99.5412 pct_lin=13.7016 progress_bits=0.212595 closed_bits=622.132 open=20 bound_log2=624.787 decisions=3150456 l2_hits=791815 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=520.042 pct_log=99.543 pct_lin=13.8087 progress_bits=0.214386 closed_bits=622.144 open=29 bound_log2=624.786 decisions=3196045 l2_hits=803199 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=530.045 pct_log=99.5447 pct_lin=13.9145 progress_bits=0.216157 closed_bits=622.155 open=21 bound_log2=624.784 decisions=3245751 l2_hits=816591 scc_fires_lit=0 scc_fires_clause=0
+calls=2400000 depth=25 decisions=3268269 conflicts=393375 stores=2079663 hits=822567 l1_hits=1027403
+OP_STATS calls=2400000 ANALYZE:c=1001802:ms=3865:avg=3858.05ns CANONICAL:c=3009024:ms=49045.6:avg=16299.5ns L1_PEEK:c=1268299:ms=328.658:avg=259.133ns L2_PEEK:c=3009024:ms=1145.59:avg=380.719ns PICK:c=0:ms=0:avg=0ns BCP:c=3269520:ms=274675:avg=84010.9ns L1_STORE:c=240895:ms=29.5218:avg=122.55ns L2_STORE:c=2079663:ms=319.102:avg=153.439ns
+PROGRESS t=540.047 pct_log=99.5468 pct_lin=14.0411 progress_bits=0.218281 closed_bits=622.168 open=25 bound_log2=624.782 decisions=3294501 l2_hits=829666 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=550.047 pct_log=99.5505 pct_lin=14.2667 progress_bits=0.222072 closed_bits=622.191 open=27 bound_log2=624.778 decisions=3350603 l2_hits=843413 scc_fires_lit=0 scc_fires_clause=0
+calls=2500000 depth=27 decisions=3393565 conflicts=404329 stores=2161643 hits=853846 l1_hits=1072852
+OP_STATS calls=2500000 ANALYZE:c=1042409:ms=4038.39:avg=3874.1ns CANONICAL:c=3128291:ms=51168.9:avg=16356.8ns L1_PEEK:c=1324678:ms=345.355:avg=260.709ns L2_PEEK:c=3128291:ms=1197.48:avg=382.79ns PICK:c=0:ms=0:avg=0ns BCP:c=3394816:ms=285583:avg=84123.2ns L1_STORE:c=251825:ms=30.6077:avg=121.543ns L2_STORE:c=2161643:ms=328.948:avg=152.175ns
+PROGRESS t=560.047 pct_log=99.5565 pct_lin=14.6436 progress_bits=0.228429 closed_bits=622.228 open=25 bound_log2=624.772 decisions=3418105 l2_hits=860516 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=570.047 pct_log=99.5602 pct_lin=14.8781 progress_bits=0.232397 closed_bits=622.251 open=26 bound_log2=624.768 decisions=3477120 l2_hits=876595 scc_fires_lit=0 scc_fires_clause=0
+calls=2600000 depth=27 decisions=3520233 conflicts=413454 stores=2246502 hits=888035 l1_hits=1120214
+OP_STATS calls=2600000 ANALYZE:c=1082408:ms=4216.02:avg=3895.03ns CANONICAL:c=3252386:ms=53362:avg=16407ns L1_PEEK:c=1383640:ms=363.286:avg=262.558ns L2_PEEK:c=3252386:ms=1251.43:avg=384.772ns PICK:c=0:ms=0:avg=0ns BCP:c=3521484:ms=296820:avg=84288.4ns L1_STORE:c=263425:ms=31.7545:avg=120.545ns L2_STORE:c=2246502:ms=338.792:avg=150.809ns
+PROGRESS t=580.047 pct_log=99.5617 pct_lin=14.975 progress_bits=0.234041 closed_bits=622.261 open=28 bound_log2=624.766 decisions=3526512 l2_hits=889904 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=590.048 pct_log=99.564 pct_lin=15.1231 progress_bits=0.236556 closed_bits=622.275 open=28 bound_log2=624.763 decisions=3570973 l2_hits=901957 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=600.051 pct_log=99.566 pct_lin=15.2563 progress_bits=0.238822 closed_bits=622.287 open=20 bound_log2=624.761 decisions=3617556 l2_hits=915152 scc_fires_lit=0 scc_fires_clause=0
+calls=2700000 depth=20 decisions=3650338 conflicts=423993 stores=2334920 hits=923761 l1_hits=1167466
+OP_STATS calls=2700000 ANALYZE:c=1122381:ms=4403.28:avg=3923.16ns CANONICAL:c=3380386:ms=55662.6:avg=16466.3ns L1_PEEK:c=1443189:ms=382.422:avg=264.984ns L2_PEEK:c=3380386:ms=1310.28:avg=387.614ns PICK:c=0:ms=0:avg=0ns BCP:c=3651589:ms=312495:avg=85577.9ns L1_STORE:c=275722:ms=33.0167:avg=119.746ns L2_STORE:c=2334920:ms=349.084:avg=149.506ns
+PROGRESS t=610.054 pct_log=99.5688 pct_lin=15.4442 progress_bits=0.242025 closed_bits=622.305 open=22 bound_log2=624.758 decisions=3663770 l2_hits=926902 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=620.057 pct_log=99.5705 pct_lin=15.5598 progress_bits=0.243997 closed_bits=622.316 open=20 bound_log2=624.756 decisions=3707647 l2_hits=939030 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=630.061 pct_log=99.5804 pct_lin=16.2384 progress_bits=0.255639 closed_bits=622.377 open=23 bound_log2=624.744 decisions=3764234 l2_hits=955429 scc_fires_lit=0 scc_fires_clause=0
+calls=2800000 depth=28 decisions=3781085 conflicts=434748 stores=2419528 hits=959653 l1_hits=1209879
+OP_STATS calls=2800000 ANALYZE:c=1170842:ms=4597.26:avg=3926.45ns CANONICAL:c=3506022:ms=57810.2:avg=16488.8ns L1_PEEK:c=1496374:ms=399.546:avg=267.009ns L2_PEEK:c=3506022:ms=1366.53:avg=389.765ns PICK:c=0:ms=0:avg=0ns BCP:c=3782336:ms=329091:avg=87007.3ns L1_STORE:c=286493:ms=34.3359:avg=119.849ns L2_STORE:c=2419528:ms=360.387:avg=148.95ns
+PROGRESS t=640.061 pct_log=99.5852 pct_lin=16.5792 progress_bits=0.26152 closed_bits=622.407 open=22 bound_log2=624.738 decisions=3805150 l2_hits=966164 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=650.062 pct_log=99.5925 pct_lin=17.115 progress_bits=0.270816 closed_bits=622.453 open=22 bound_log2=624.729 decisions=3856664 l2_hits=981330 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=660.062 pct_log=99.6143 pct_lin=18.807 progress_bits=0.300573 closed_bits=622.589 open=21 bound_log2=624.699 decisions=3881991 l2_hits=986415 scc_fires_lit=0 scc_fires_clause=0
+calls=2900000 depth=25 decisions=3916567 conflicts=450530 stores=2504216 hits=993366 l1_hits=1251181
+OP_STATS calls=2900000 ANALYZE:c=1213406:ms=4780.65:avg=3939.86ns CANONICAL:c=3629525:ms=60150.7:avg=16572.6ns L1_PEEK:c=1546584:ms=415.998:avg=268.979ns L2_PEEK:c=3629525:ms=1417.01:avg=390.413ns PICK:c=0:ms=0:avg=0ns BCP:c=3917818:ms=352378:avg=89942.5ns L1_STORE:c=295402:ms=35.5167:avg=120.232ns L2_STORE:c=2504216:ms=372.934:avg=148.922ns
+PROGRESS t=670.063 pct_log=99.6187 pct_lin=19.1689 progress_bits=0.307018 closed_bits=622.617 open=22 bound_log2=624.693 decisions=3919608 l2_hits=994115 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=680.063 pct_log=99.6208 pct_lin=19.3429 progress_bits=0.310127 closed_bits=622.63 open=27 bound_log2=624.69 decisions=3954345 l2_hits=1000892 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=690.068 pct_log=99.6221 pct_lin=19.4526 progress_bits=0.312091 closed_bits=622.638 open=18 bound_log2=624.688 decisions=3995007 l2_hits=1011150 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=700.069 pct_log=99.6256 pct_lin=19.7472 progress_bits=0.317377 closed_bits=622.66 open=21 bound_log2=624.683 decisions=4038563 l2_hits=1020827 scc_fires_lit=0 scc_fires_clause=0
+calls=3000000 depth=29 decisions=4050022 conflicts=466214 stores=2589016 hits=1023251 l1_hits=1297360
+OP_STATS calls=3000000 ANALYZE:c=1252384:ms=4959.29:avg=3959.88ns CANONICAL:c=3749278:ms=62555:avg=16684.6ns L1_PEEK:c=1599811:ms=434.457:avg=271.568ns L2_PEEK:c=3749278:ms=1466.84:avg=391.232ns PICK:c=0:ms=0:avg=0ns BCP:c=4051273:ms=373809:avg=92269.6ns L1_STORE:c=302450:ms=36.55:avg=120.846ns L2_STORE:c=2589016:ms=385.032:avg=148.718ns
+PROGRESS t=710.069 pct_log=99.6272 pct_lin=19.8926 progress_bits=0.319993 closed_bits=622.67 open=22 bound_log2=624.68 decisions=4085993 l2_hits=1033498 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=720.069 pct_log=99.6319 pct_lin=20.2996 progress_bits=0.327341 closed_bits=622.7 open=25 bound_log2=624.673 decisions=4124293 l2_hits=1042656 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=730.069 pct_log=99.6493 pct_lin=21.8825 progress_bits=0.356283 closed_bits=622.808 open=26 bound_log2=624.644 decisions=4165701 l2_hits=1050648 scc_fires_lit=0 scc_fires_clause=0
+calls=3100000 depth=31 decisions=4179512 conflicts=478541 stores=2669515 hits=1054610 l1_hits=1340565
+OP_STATS calls=3100000 ANALYZE:c=1291297:ms=5131.59:avg=3973.98ns CANONICAL:c=3867639:ms=64849.2:avg=16767.1ns L1_PEEK:c=1650712:ms=452.281:avg=273.991ns L2_PEEK:c=3867639:ms=1517.07:avg=392.248ns PICK:c=0:ms=0:avg=0ns BCP:c=4180763:ms=392382:avg=93854.2ns L1_STORE:c=310146:ms=37.5807:avg=121.171ns L2_STORE:c=2669515:ms=397.126:avg=148.764ns
+PROGRESS t=740.069 pct_log=99.6499 pct_lin=21.9469 progress_bits=0.357471 closed_bits=622.812 open=31 bound_log2=624.643 decisions=4192570 l2_hits=1056811 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=750.075 pct_log=99.6517 pct_lin=22.1194 progress_bits=0.360664 closed_bits=622.823 open=21 bound_log2=624.639 decisions=4216093 l2_hits=1060987 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=760.075 pct_log=99.6529 pct_lin=22.2351 progress_bits=0.36281 closed_bits=622.831 open=31 bound_log2=624.637 decisions=4250083 l2_hits=1068734 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=770.075 pct_log=99.6568 pct_lin=22.6047 progress_bits=0.369683 closed_bits=622.855 open=27 bound_log2=624.63 decisions=4281618 l2_hits=1075707 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=780.075 pct_log=99.666 pct_lin=23.5283 progress_bits=0.387002 closed_bits=622.912 open=18 bound_log2=624.613 decisions=4310323 l2_hits=1082644 scc_fires_lit=0 scc_fires_clause=0
+calls=3200000 depth=27 decisions=4318748 conflicts=502472 stores=2755527 hits=1084856 l1_hits=1376061
+OP_STATS calls=3200000 ANALYZE:c=1328035:ms=5308.22:avg=3997.05ns CANONICAL:c=3988557:ms=67300.2:avg=16873.3ns L1_PEEK:c=1696486:ms=468.104:avg=275.926ns L2_PEEK:c=3988557:ms=1566.93:avg=392.857ns PICK:c=0:ms=0:avg=0ns BCP:c=4319999:ms=428066:avg=99089.3ns L1_STORE:c=320423:ms=38.9187:avg=121.46ns L2_STORE:c=2755527:ms=410.13:avg=148.839ns
+PROGRESS t=790.075 pct_log=99.6679 pct_lin=23.7187 progress_bits=0.390598 closed_bits=622.924 open=26 bound_log2=624.609 decisions=4355747 l2_hits=1095365 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=800.076 pct_log=99.6689 pct_lin=23.8231 progress_bits=0.392574 closed_bits=622.93 open=23 bound_log2=624.607 decisions=4409594 l2_hits=1110493 scc_fires_lit=0 scc_fires_clause=0
+calls=3300000 depth=28 decisions=4451215 conflicts=512331 stores=2845083 hits=1122014 l1_hits=1423209
+OP_STATS calls=3300000 ANALYZE:c=1367032:ms=5487.59:avg=4014.24ns CANONICAL:c=4118753:ms=69586.2:avg=16895ns L1_PEEK:c=1754702:ms=487.456:avg=277.8ns L2_PEEK:c=4118753:ms=1623.63:avg=394.205ns PICK:c=0:ms=0:avg=0ns BCP:c=4452466:ms=442341:avg=99347.4ns L1_STORE:c=331492:ms=40.3221:avg=121.638ns L2_STORE:c=2845083:ms=421.818:avg=148.262ns
+PROGRESS t=810.076 pct_log=99.6705 pct_lin=23.9914 progress_bits=0.395766 closed_bits=622.941 open=25 bound_log2=624.604 decisions=4458082 l2_hits=1123812 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=820.077 pct_log=99.6719 pct_lin=24.1367 progress_bits=0.398526 closed_bits=622.949 open=19 bound_log2=624.601 decisions=4509844 l2_hits=1138395 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=830.077 pct_log=99.6741 pct_lin=24.3724 progress_bits=0.403015 closed_bits=622.963 open=21 bound_log2=624.597 decisions=4550576 l2_hits=1150011 scc_fires_lit=0 scc_fires_clause=0
+calls=3400000 depth=23 decisions=4580048 conflicts=522306 stores=2930037 hits=1157036 l1_hits=1469341
+OP_STATS calls=3400000 ANALYZE:c=1405729:ms=5663.92:avg=4029.17ns CANONICAL:c=4243741:ms=71960.4:avg=16956.8ns L1_PEEK:c=1811982:ms=506.709:avg=279.644ns L2_PEEK:c=4243741:ms=1677.81:avg=395.361ns PICK:c=0:ms=0:avg=0ns BCP:c=4581299:ms=457929:avg=99956.2ns L1_STORE:c=342640:ms=41.6499:avg=121.556ns L2_STORE:c=2930037:ms=433.929:avg=148.097ns
+PROGRESS t=840.077 pct_log=99.6765 pct_lin=24.627 progress_bits=0.40788 closed_bits=622.978 open=26 bound_log2=624.592 decisions=4593749 l2_hits=1161001 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=850.078 pct_log=99.6775 pct_lin=24.7272 progress_bits=0.4098 closed_bits=622.984 open=20 bound_log2=624.59 decisions=4646112 l2_hits=1176889 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=860.078 pct_log=99.6788 pct_lin=24.8688 progress_bits=0.412515 closed_bits=622.992 open=27 bound_log2=624.587 decisions=4695468 l2_hits=1190944 scc_fires_lit=0 scc_fires_clause=0
+calls=3500000 depth=29 decisions=4710674 conflicts=531704 stores=3017974 hits=1195258 l1_hits=1514722
+OP_STATS calls=3500000 ANALYZE:c=1442465:ms=5844.3:avg=4051.61ns CANONICAL:c=4373925:ms=74430.1:avg=17016.8ns L1_PEEK:c=1870337:ms=527.344:avg=281.951ns L2_PEEK:c=4373925:ms=1736.47:avg=397.004ns PICK:c=0:ms=0:avg=0ns BCP:c=4711925:ms=470256:avg=99801.3ns L1_STORE:c=355614:ms=43.1212:avg=121.258ns L2_STORE:c=3017974:ms=445.819:avg=147.721ns
+PROGRESS t=870.078 pct_log=99.6798 pct_lin=24.9801 progress_bits=0.414656 closed_bits=622.999 open=17 bound_log2=624.585 decisions=4745288 l2_hits=1206284 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=880.078 pct_log=99.6805 pct_lin=25.0522 progress_bits=0.416043 closed_bits=623.003 open=19 bound_log2=624.584 decisions=4789854 l2_hits=1217984 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=890.085 pct_log=99.6813 pct_lin=25.1358 progress_bits=0.417652 closed_bits=623.008 open=17 bound_log2=624.582 decisions=4833745 l2_hits=1229793 scc_fires_lit=0 scc_fires_clause=0
+calls=3600000 depth=22 decisions=4838797 conflicts=540751 stores=3106527 hits=1230850 l1_hits=1563286
+OP_STATS calls=3600000 ANALYZE:c=1481276:ms=6025.23:avg=4067.59ns CANONICAL:c=4501881:ms=76648.8:avg=17025.9ns L1_PEEK:c=1931600:ms=548.61:avg=284.018ns L2_PEEK:c=4501881:ms=1793.55:avg=398.399ns PICK:c=0:ms=0:avg=0ns BCP:c=4840048:ms=487303:avg=100681ns L1_STORE:c=368313:ms=44.5702:avg=121.012ns L2_STORE:c=3106527:ms=457.664:avg=147.323ns
+PROGRESS t=900.085 pct_log=99.6827 pct_lin=25.2945 progress_bits=0.420713 closed_bits=623.017 open=24 bound_log2=624.579 decisions=4865090 l2_hits=1236034 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=910.085 pct_log=99.6854 pct_lin=25.5871 progress_bits=0.426375 closed_bits=623.033 open=23 bound_log2=624.574 decisions=4906803 l2_hits=1245428 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=920.087 pct_log=99.6874 pct_lin=25.8194 progress_bits=0.430886 closed_bits=623.047 open=21 bound_log2=624.569 decisions=4951553 l2_hits=1255922 scc_fires_lit=0 scc_fires_clause=0
+calls=3700000 depth=30 decisions=4958096 conflicts=549999 stores=3185066 hits=1257358 l1_hits=1614562
+OP_STATS calls=3700000 ANALYZE:c=1523216:ms=6202.63:avg=4072.06ns CANONICAL:c=4614086:ms=78708:avg=17058.2ns L1_PEEK:c=1992181:ms=569.208:avg=285.721ns L2_PEEK:c=4614086:ms=1844.39:avg=399.73ns PICK:c=0:ms=0:avg=0ns BCP:c=4959347:ms=506017:avg=102033ns L1_STORE:c=377618:ms=45.7757:avg=121.222ns L2_STORE:c=3185066:ms=469.95:avg=147.548ns
+PROGRESS t=930.087 pct_log=99.688 pct_lin=25.8853 progress_bits=0.432169 closed_bits=623.05 open=25 bound_log2=624.568 decisions=4996635 l2_hits=1267524 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=940.087 pct_log=99.6887 pct_lin=25.959 progress_bits=0.433604 closed_bits=623.054 open=27 bound_log2=624.566 decisions=5032020 l2_hits=1277408 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=950.088 pct_log=99.6905 pct_lin=26.1689 progress_bits=0.437698 closed_bits=623.066 open=22 bound_log2=624.562 decisions=5056427 l2_hits=1283863 scc_fires_lit=0 scc_fires_clause=0
+calls=3800000 depth=25 decisions=5086318 conflicts=560776 stores=3271727 hits=1290867 l1_hits=1662559
+OP_STATS calls=3800000 ANALYZE:c=1561520:ms=6382.63:avg=4087.45ns CANONICAL:c=4738700:ms=80922.8:avg=17077ns L1_PEEK:c=2051795:ms=589.628:avg=287.372ns L2_PEEK:c=4738700:ms=1901.3:avg=401.229ns PICK:c=0:ms=0:avg=0ns BCP:c=5087569:ms=528077:avg=103797ns L1_STORE:c=389235:ms=53.9202:avg=138.529ns L2_STORE:c=3271727:ms=598.115:avg=182.813ns
+PROGRESS t=960.088 pct_log=99.6925 pct_lin=26.3925 progress_bits=0.442075 closed_bits=623.078 open=22 bound_log2=624.558 decisions=5109145 l2_hits=1296901 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=970.088 pct_log=99.6954 pct_lin=26.7305 progress_bits=0.448715 closed_bits=623.097 open=22 bound_log2=624.551 decisions=5153484 l2_hits=1307926 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=980.088 pct_log=99.6982 pct_lin=27.0511 progress_bits=0.455043 closed_bits=623.114 open=22 bound_log2=624.545 decisions=5191193 l2_hits=1316989 scc_fires_lit=0 scc_fires_clause=0
+calls=3900000 depth=25 decisions=5207268 conflicts=568103 stores=3352854 hits=1321253 l1_hits=1714444
+OP_STATS calls=3900000 ANALYZE:c=1603003:ms=6558.23:avg=4091.22ns CANONICAL:c=4856504:ms=83030.3:avg=17096.7ns L1_PEEK:c=2114152:ms=609.148:avg=288.129ns L2_PEEK:c=4856504:ms=1949.03:avg=401.325ns PICK:c=0:ms=0:avg=0ns BCP:c=5208519:ms=544597:avg=104559ns L1_STORE:c=399707:ms=55.0608:avg=137.753ns L2_STORE:c=3352854:ms=608.218:avg=181.403ns
+PROGRESS t=990.094 pct_log=99.7004 pct_lin=27.3063 progress_bits=0.460099 closed_bits=623.127 open=18 bound_log2=624.54 decisions=5234419 l2_hits=1328832 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1000.1 pct_log=99.7038 pct_lin=27.7132 progress_bits=0.468196 closed_bits=623.149 open=20 bound_log2=624.532 decisions=5271208 l2_hits=1337344 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1010.1 pct_log=99.7064 pct_lin=28.0315 progress_bits=0.474563 closed_bits=623.165 open=20 bound_log2=624.525 decisions=5308266 l2_hits=1347029 scc_fires_lit=0 scc_fires_clause=0
+calls=4000000 depth=27 decisions=5329039 conflicts=575102 stores=3433994 hits=1352441 l1_hits=1765302
+OP_STATS calls=4000000 ANALYZE:c=1643740:ms=6725.96:avg=4091.86ns CANONICAL:c=4975120:ms=85159.5:avg=17117.1ns L1_PEEK:c=2175139:ms=628.559:avg=288.974ns L2_PEEK:c=4975120:ms=1996.39:avg=401.274ns PICK:c=0:ms=0:avg=0ns BCP:c=5330290:ms=564443:avg=105894ns L1_STORE:c=409836:ms=56.2168:avg=137.169ns L2_STORE:c=3433994:ms=618.092:avg=179.992ns
+PROGRESS t=1020.1 pct_log=99.7079 pct_lin=28.2172 progress_bits=0.478291 closed_bits=623.175 open=28 bound_log2=624.522 decisions=5353024 l2_hits=1358863 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1030.1 pct_log=99.7112 pct_lin=28.614 progress_bits=0.486288 closed_bits=623.195 open=22 bound_log2=624.514 decisions=5387008 l2_hits=1368585 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1040.1 pct_log=99.7246 pct_lin=30.3292 progress_bits=0.521374 closed_bits=623.279 open=21 bound_log2=624.479 decisions=5410801 l2_hits=1375427 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1050.1 pct_log=99.7323 pct_lin=31.3629 progress_bits=0.542939 closed_bits=623.327 open=26 bound_log2=624.457 decisions=5446202 l2_hits=1383877 scc_fires_lit=0 scc_fires_clause=0
+calls=4100000 depth=19 decisions=5462348 conflicts=588384 stores=3520520 hits=1387240 l1_hits=1811685
+OP_STATS calls=4100000 ANALYZE:c=1679984:ms=6901.03:avg=4107.8ns CANONICAL:c=5100931:ms=87629.1:avg=17179ns L1_PEEK:c=2231801:ms=646.71:avg=289.771ns L2_PEEK:c=5100931:ms=2048.56:avg=401.605ns PICK:c=0:ms=0:avg=0ns BCP:c=5463599:ms=590060:avg=107998ns L1_STORE:c=420115:ms=57.4779:avg=136.815ns L2_STORE:c=3520520:ms=630.215:avg=179.012ns
+PROGRESS t=1060.1 pct_log=99.7349 pct_lin=31.7086 progress_bits=0.550224 closed_bits=623.343 open=24 bound_log2=624.45 decisions=5488996 l2_hits=1394561 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1070.11 pct_log=99.7356 pct_lin=31.8115 progress_bits=0.5524 closed_bits=623.348 open=22 bound_log2=624.448 decisions=5531211 l2_hits=1407490 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1080.11 pct_log=99.7366 pct_lin=31.9469 progress_bits=0.555268 closed_bits=623.354 open=23 bound_log2=624.445 decisions=5567418 l2_hits=1418964 scc_fires_lit=0 scc_fires_clause=0
+calls=4200000 depth=22 decisions=5591523 conflicts=597824 stores=3605820 hits=1424465 l1_hits=1857750
+OP_STATS calls=4200000 ANALYZE:c=1718810:ms=7090.61:avg=4125.3ns CANONICAL:c=5228358:ms=90023:avg=17218.2ns L1_PEEK:c=2290457:ms=666.423:avg=290.956ns L2_PEEK:c=5228358:ms=2101.79:avg=401.999ns PICK:c=0:ms=0:avg=0ns BCP:c=5592774:ms=611504:avg=109338ns L1_STORE:c=432706:ms=58.8467:avg=135.997ns L2_STORE:c=3605820:ms=643.537:avg=178.472ns
+PROGRESS t=1090.11 pct_log=99.7403 pct_lin=32.4615 progress_bits=0.566219 closed_bits=623.377 open=18 bound_log2=624.434 decisions=5601949 l2_hits=1427021 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1100.11 pct_log=99.7412 pct_lin=32.5887 progress_bits=0.568937 closed_bits=623.382 open=24 bound_log2=624.431 decisions=5641716 l2_hits=1438320 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1110.11 pct_log=99.7426 pct_lin=32.7945 progress_bits=0.573348 closed_bits=623.392 open=26 bound_log2=624.427 decisions=5681171 l2_hits=1448911 scc_fires_lit=0 scc_fires_clause=0
+calls=4300000 depth=23 decisions=5713085 conflicts=603974 stores=3684102 hits=1456722 l1_hits=1906041
+OP_STATS calls=4300000 ANALYZE:c=1759603:ms=7268.88:avg=4130.98ns CANONICAL:c=5346137:ms=92305.3:avg=17265.8ns L1_PEEK:c=2348354:ms=685.658:avg=291.974ns L2_PEEK:c=5346137:ms=2150.83:avg=402.315ns PICK:c=0:ms=0:avg=0ns BCP:c=5714336:ms=629199:avg=110109ns L1_STORE:c=442312:ms=59.9417:avg=135.519ns L2_STORE:c=3684102:ms=654.11:avg=177.549ns
+PROGRESS t=1120.12 pct_log=99.7462 pct_lin=33.3107 progress_bits=0.584472 closed_bits=623.414 open=19 bound_log2=624.416 decisions=5721140 l2_hits=1458951 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1130.12 pct_log=99.7475 pct_lin=33.4945 progress_bits=0.588455 closed_bits=623.422 open=21 bound_log2=624.412 decisions=5754164 l2_hits=1467894 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1140.12 pct_log=99.7515 pct_lin=34.0797 progress_bits=0.601206 closed_bits=623.447 open=18 bound_log2=624.399 decisions=5790220 l2_hits=1476302 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1150.12 pct_log=99.753 pct_lin=34.3035 progress_bits=0.606111 closed_bits=623.456 open=20 bound_log2=624.394 decisions=5818345 l2_hits=1483836 scc_fires_lit=0 scc_fires_clause=0
+calls=4400000 depth=24 decisions=5835127 conflicts=609869 stores=3762921 hits=1488535 l1_hits=1957096
+OP_STATS calls=4400000 ANALYZE:c=1800798:ms=7444.18:avg=4133.82ns CANONICAL:c=5463830:ms=94507.8:avg=17297ns L1_PEEK:c=2408015:ms=705.759:avg=293.088ns L2_PEEK:c=5463830:ms=2200.6:avg=402.757ns PICK:c=0:ms=0:avg=0ns BCP:c=5836378:ms=655997:avg=112398ns L1_STORE:c=450918:ms=61.0584:avg=135.409ns L2_STORE:c=3762921:ms=665.418:avg=176.835ns
+PROGRESS t=1160.12 pct_log=99.7557 pct_lin=34.7046 progress_bits=0.614946 closed_bits=623.473 open=24 bound_log2=624.385 decisions=5852719 l2_hits=1493821 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1170.12 pct_log=99.7649 pct_lin=36.1105 progress_bits=0.646349 closed_bits=623.53 open=26 bound_log2=624.354 decisions=5879907 l2_hits=1501100 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1180.12 pct_log=99.7686 pct_lin=36.7024 progress_bits=0.659776 closed_bits=623.554 open=19 bound_log2=624.34 decisions=5909562 l2_hits=1509250 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1190.13 pct_log=99.7713 pct_lin=37.1309 progress_bits=0.669577 closed_bits=623.571 open=20 bound_log2=624.33 decisions=5941035 l2_hits=1518527 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1200.13 pct_log=99.7726 pct_lin=37.3468 progress_bits=0.67454 closed_bits=623.579 open=20 bound_log2=624.325 decisions=5968796 l2_hits=1525815 scc_fires_lit=0 scc_fires_clause=0
+calls=4500000 depth=21 decisions=5975097 conflicts=624698 stores=3850711 hits=1527643 l1_hits=1997590
+OP_STATS calls=4500000 ANALYZE:c=1836823:ms=7618.19:avg=4147.48ns CANONICAL:c=5594796:ms=97144.2:avg=17363.3ns L1_PEEK:c=2458405:ms=723.277:avg=294.206ns L2_PEEK:c=5594796:ms=2259.09:avg=403.784ns PICK:c=0:ms=0:avg=0ns BCP:c=5976348:ms=689453:avg=115364ns L1_STORE:c=460814:ms=62.4347:avg=135.488ns L2_STORE:c=3850711:ms=679.049:avg=176.344ns
+PROGRESS t=1210.13 pct_log=99.7741 pct_lin=37.5904 progress_bits=0.68016 closed_bits=623.588 open=19 bound_log2=624.32 decisions=6004824 l2_hits=1535861 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1220.13 pct_log=99.7781 pct_lin=38.2475 progress_bits=0.69543 closed_bits=623.613 open=24 bound_log2=624.305 decisions=6043043 l2_hits=1543687 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1230.13 pct_log=99.784 pct_lin=39.2257 progress_bits=0.718466 closed_bits=623.65 open=21 bound_log2=624.282 decisions=6070669 l2_hits=1547871 scc_fires_lit=0 scc_fires_clause=0
+calls=4600000 depth=29 decisions=6095038 conflicts=632680 stores=3923319 hits=1555072 l1_hits=2045575
+OP_STATS calls=4600000 ANALYZE:c=1878779:ms=7782.01:avg=4142.06ns CANONICAL:c=5703968:ms=99268.3:avg=17403.4ns L1_PEEK:c=2512731:ms=741.548:avg=295.116ns L2_PEEK:c=5703968:ms=2304.94:avg=404.094ns PICK:c=0:ms=0:avg=0ns BCP:c=6096289:ms=715338:avg=117340ns L1_STORE:c=467155:ms=63.2995:avg=135.5ns L2_STORE:c=3923319:ms=690.582:avg=176.02ns
+PROGRESS t=1240.13 pct_log=99.7862 pct_lin=39.6002 progress_bits=0.727383 closed_bits=623.664 open=24 bound_log2=624.273 decisions=6099040 l2_hits=1555833 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1250.13 pct_log=99.7872 pct_lin=39.7846 progress_bits=0.731796 closed_bits=623.67 open=19 bound_log2=624.268 decisions=6136548 l2_hits=1566655 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1260.13 pct_log=99.7903 pct_lin=40.3171 progress_bits=0.744611 closed_bits=623.689 open=19 bound_log2=624.255 decisions=6167108 l2_hits=1575248 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1270.14 pct_log=99.7984 pct_lin=41.7486 progress_bits=0.779635 closed_bits=623.74 open=20 bound_log2=624.22 decisions=6195756 l2_hits=1582495 scc_fires_lit=0 scc_fires_clause=0
+calls=4700000 depth=31 decisions=6219826 conflicts=640699 stores=4000385 hits=1587097 l1_hits=2092639
+OP_STATS calls=4700000 ANALYZE:c=1919969:ms=7953.33:avg=4142.43ns CANONICAL:c=5820705:ms=101539:avg=17444.4ns L1_PEEK:c=2567407:ms=760.222:avg=296.105ns L2_PEEK:c=5820705:ms=2354.82:avg=404.559ns PICK:c=0:ms=0:avg=0ns BCP:c=6221077:ms=742511:avg=119354ns L1_STORE:c=474767:ms=64.3291:avg=135.496ns L2_STORE:c=4000385:ms=702.384:avg=175.579ns
+PROGRESS t=1280.14 pct_log=99.8018 pct_lin=42.3736 progress_bits=0.795199 closed_bits=623.761 open=27 bound_log2=624.205 decisions=6226942 l2_hits=1588557 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1290.14 pct_log=99.8037 pct_lin=42.7181 progress_bits=0.803849 closed_bits=623.773 open=19 bound_log2=624.196 decisions=6265196 l2_hits=1597730 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1300.14 pct_log=99.8047 pct_lin=42.9004 progress_bits=0.808449 closed_bits=623.779 open=19 bound_log2=624.192 decisions=6304001 l2_hits=1608281 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1310.15 pct_log=99.8063 pct_lin=43.2007 progress_bits=0.816054 closed_bits=623.789 open=15 bound_log2=624.184 decisions=6336876 l2_hits=1616922 scc_fires_lit=0 scc_fires_clause=0
+calls=4800000 depth=26 decisions=6341229 conflicts=647404 stores=4074455 hits=1618242 l1_hits=2137499
+OP_STATS calls=4800000 ANALYZE:c=1961407:ms=8119.83:avg=4139.8ns CANONICAL:c=5934561:ms=103728:avg=17478.6ns L1_PEEK:c=2620070:ms=778.804:avg=297.245ns L2_PEEK:c=5934561:ms=2404.91:avg=405.239ns PICK:c=0:ms=0:avg=0ns BCP:c=6342480:ms=764861:avg=120593ns L1_STORE:c=482570:ms=65.3813:avg=135.486ns L2_STORE:c=4074455:ms=713.986:avg=175.235ns
+PROGRESS t=1320.15 pct_log=99.8091 pct_lin=43.7415 progress_bits=0.829856 closed_bits=623.807 open=22 bound_log2=624.17 decisions=6361712 l2_hits=1623533 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1330.15 pct_log=99.8224 pct_lin=46.3239 progress_bits=0.897648 closed_bits=623.89 open=19 bound_log2=624.102 decisions=6394968 l2_hits=1629999 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1340.15 pct_log=99.824 pct_lin=46.6569 progress_bits=0.906626 closed_bits=623.9 open=23 bound_log2=624.093 decisions=6429385 l2_hits=1638563 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1350.15 pct_log=99.8252 pct_lin=46.904 progress_bits=0.913324 closed_bits=623.908 open=23 bound_log2=624.087 decisions=6462338 l2_hits=1646551 scc_fires_lit=0 scc_fires_clause=0
+calls=4900000 depth=30 decisions=6466863 conflicts=658413 stores=4154222 hits=1647675 l1_hits=2186062
+OP_STATS calls=4900000 ANALYZE:c=2002932:ms=8312.46:avg=4150.15ns CANONICAL:c=6050508:ms=106081:avg=17532.5ns L1_PEEK:c=2676698:ms=798.892:avg=298.462ns L2_PEEK:c=6050508:ms=2456.33:avg=405.971ns PICK:c=0:ms=0:avg=0ns BCP:c=6468114:ms=791924:avg=122435ns L1_STORE:c=490635:ms=66.496:avg=135.53ns L2_STORE:c=4154222:ms=727.19:avg=175.048ns
+PROGRESS t=1360.15 pct_log=99.8258 pct_lin=47.0109 progress_bits=0.916232 closed_bits=623.911 open=21 bound_log2=624.084 decisions=6501243 l2_hits=1657125 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1370.15 pct_log=99.8266 pct_lin=47.1771 progress_bits=0.920765 closed_bits=623.916 open=30 bound_log2=624.079 decisions=6541829 l2_hits=1668130 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1380.15 pct_log=99.8277 pct_lin=47.4069 progress_bits=0.927056 closed_bits=623.923 open=21 bound_log2=624.073 decisions=6582131 l2_hits=1678552 scc_fires_lit=0 scc_fires_clause=0
+calls=5000000 depth=23 decisions=6593233 conflicts=667804 stores=4237882 hits=1681182 l1_hits=2232987
+OP_STATS calls=5000000 ANALYZE:c=2041514:ms=8501.56:avg=4164.34ns CANONICAL:c=6173117:ms=108398:avg=17559.7ns L1_PEEK:c=2734702:ms=819.503:avg=299.668ns L2_PEEK:c=6173117:ms=2513.35:avg=407.144ns PICK:c=0:ms=0:avg=0ns BCP:c=6594484:ms=810740:avg=122942ns L1_STORE:c=501714:ms=67.8616:avg=135.26ns L2_STORE:c=4237882:ms=739.939:avg=174.601ns
+PROGRESS t=1390.16 pct_log=99.8285 pct_lin=47.5784 progress_bits=0.931766 closed_bits=623.928 open=21 bound_log2=624.068 decisions=6619715 l2_hits=1688805 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1400.16 pct_log=99.8296 pct_lin=47.8056 progress_bits=0.938032 closed_bits=623.935 open=22 bound_log2=624.062 decisions=6655260 l2_hits=1697541 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1410.16 pct_log=99.8302 pct_lin=47.9309 progress_bits=0.9415 closed_bits=623.939 open=22 bound_log2=624.058 decisions=6707292 l2_hits=1712874 scc_fires_lit=0 scc_fires_clause=0
+calls=5100000 depth=31 decisions=6722522 conflicts=676867 stores=4323603 hits=1717860 l1_hits=2278343
+OP_STATS calls=5100000 ANALYZE:c=2078161:ms=8679.97:avg=4176.75ns CANONICAL:c=6300280:ms=110772:avg=17582ns L1_PEEK:c=2791752:ms=839.369:avg=300.66ns L2_PEEK:c=6300280:ms=2579.68:avg=409.455ns PICK:c=0:ms=0:avg=0ns BCP:c=6723773:ms=827111:avg=123013ns L1_STORE:c=513408:ms=69.1764:avg=134.74ns L2_STORE:c=4323603:ms=751.287:avg=173.764ns
+PROGRESS t=1420.16 pct_log=99.8309 pct_lin=48.0671 progress_bits=0.945279 closed_bits=623.943 open=19 bound_log2=624.055 decisions=6757844 l2_hits=1726921 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1430.16 pct_log=99.8324 pct_lin=48.3827 progress_bits=0.954072 closed_bits=623.953 open=23 bound_log2=624.046 decisions=6788049 l2_hits=1733832 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1440.16 pct_log=99.8337 pct_lin=48.6492 progress_bits=0.961543 closed_bits=623.96 open=23 bound_log2=624.038 decisions=6823545 l2_hits=1741949 scc_fires_lit=0 scc_fires_clause=0
+calls=5200000 depth=27 decisions=6848648 conflicts=687625 stores=4405244 hits=1750190 l1_hits=2323494
+OP_STATS calls=5200000 ANALYZE:c=2116341:ms=8851.37:avg=4182.39ns CANONICAL:c=6420369:ms=113069:avg=17610.9ns L1_PEEK:c=2847745:ms=858.373:avg=301.422ns L2_PEEK:c=6420369:ms=2641.71:avg=411.457ns PICK:c=0:ms=0:avg=0ns BCP:c=6849899:ms=847033:avg=123656ns L1_STORE:c=524249:ms=70.3703:avg=134.231ns L2_STORE:c=4405244:ms=762.255:avg=173.034ns
+PROGRESS t=1450.16 pct_log=99.8342 pct_lin=48.764 progress_bits=0.964771 closed_bits=623.964 open=23 bound_log2=624.035 decisions=6868063 l2_hits=1755297 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1460.16 pct_log=99.8352 pct_lin=48.961 progress_bits=0.970328 closed_bits=623.97 open=25 bound_log2=624.03 decisions=6915453 l2_hits=1769589 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1470.16 pct_log=99.836 pct_lin=49.1379 progress_bits=0.975336 closed_bits=623.975 open=18 bound_log2=624.025 decisions=6958608 l2_hits=1782988 scc_fires_lit=0 scc_fires_clause=0
+calls=5300000 depth=24 decisions=6979157 conflicts=696110 stores=4493157 hits=1789192 l1_hits=2369465
+OP_STATS calls=5300000 ANALYZE:c=2152118:ms=9035.45:avg=4198.4ns CANONICAL:c=6551311:ms=115656:avg=17653.9ns L1_PEEK:c=2906664:ms=879.859:avg=302.704ns L2_PEEK:c=6551311:ms=2712.18:avg=413.99ns PICK:c=0:ms=0:avg=0ns BCP:c=6980408:ms=862889:avg=123616ns L1_STORE:c=537198:ms=71.908:avg=133.858ns L2_STORE:c=4493157:ms=773.694:avg=172.194ns
+PROGRESS t=1480.16 pct_log=99.8369 pct_lin=49.3339 progress_bits=0.980907 closed_bits=623.981 open=32 bound_log2=624.019 decisions=6996768 l2_hits=1794298 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1490.17 pct_log=99.8385 pct_lin=49.6826 progress_bits=0.990871 closed_bits=623.991 open=14 bound_log2=624.009 decisions=7021404 l2_hits=1800660 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1500.17 pct_log=99.8394 pct_lin=49.8688 progress_bits=0.996218 closed_bits=623.996 open=23 bound_log2=624.004 decisions=7056045 l2_hits=1811587 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1510.17 pct_log=99.8475 pct_lin=51.6596 progress_bits=1.0487 closed_bits=624.047 open=21 bound_log2=623.951 decisions=7100140 l2_hits=1820877 scc_fires_lit=0 scc_fires_clause=0
+calls=5400000 depth=29 decisions=7107048 conflicts=708596 stores=4570427 hits=1822392 l1_hits=2406330
+OP_STATS calls=5400000 ANALYZE:c=2193104:ms=9206.31:avg=4197.85ns CANONICAL:c=6669360:ms=117841:avg=17669.1ns L1_PEEK:c=2953748:ms=895.93:avg=303.32ns L2_PEEK:c=6669360:ms=2771.43:avg=415.547ns PICK:c=0:ms=0:avg=0ns BCP:c=7108299:ms=886884:avg=124767ns L1_STORE:c=547417:ms=73.1112:avg=133.557ns L2_STORE:c=4570427:ms=784.551:avg=171.658ns
+PROGRESS t=1520.17 pct_log=99.8589 pct_lin=54.2582 progress_bits=1.12842 closed_bits=624.118 open=21 bound_log2=623.872 decisions=7158093 l2_hits=1833564 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1530.17 pct_log=99.8661 pct_lin=55.981 progress_bits=1.1838 closed_bits=624.163 open=22 bound_log2=623.816 decisions=7211017 l2_hits=1844758 scc_fires_lit=0 scc_fires_clause=0
+calls=5500000 depth=24 decisions=7220758 conflicts=716851 stores=4631621 hits=1847295 l1_hits=2440656
+OP_STATS calls=5500000 ANALYZE:c=2236989:ms=9339.85:avg=4175.19ns CANONICAL:c=6768390:ms=119576:avg=17666.9ns L1_PEEK:c=2994586:ms=908.526:avg=303.389ns L2_PEEK:c=6768390:ms=2816.99:avg=416.197ns PICK:c=0:ms=0:avg=0ns BCP:c=7222009:ms=897959:avg=124336ns L1_STORE:c=553929:ms=73.8779:avg=133.371ns L2_STORE:c=4631621:ms=794.186:avg=171.47ns
+PROGRESS t=1540.17 pct_log=99.8688 pct_lin=56.6337 progress_bits=1.20535 closed_bits=624.18 open=19 bound_log2=623.795 decisions=7248324 l2_hits=1854138 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1550.17 pct_log=99.8723 pct_lin=57.5012 progress_bits=1.23451 closed_bits=624.202 open=16 bound_log2=623.765 decisions=7275790 l2_hits=1861244 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1560.17 pct_log=99.8734 pct_lin=57.7789 progress_bits=1.24396 closed_bits=624.209 open=25 bound_log2=623.756 decisions=7305976 l2_hits=1870823 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1570.18 pct_log=99.8753 pct_lin=58.2718 progress_bits=1.2609 closed_bits=624.221 open=18 bound_log2=623.739 decisions=7340965 l2_hits=1880253 scc_fires_lit=0 scc_fires_clause=0
+calls=5600000 depth=23 decisions=7349466 conflicts=727209 stores=4707154 hits=1882144 l1_hits=2477030
+OP_STATS calls=5600000 ANALYZE:c=2278124:ms=9505.02:avg=4172.3ns CANONICAL:c=6886927:ms=121698:avg=17670.9ns L1_PEEK:c=3039303:ms=923.72:avg=303.925ns L2_PEEK:c=6886927:ms=2874.54:avg=417.39ns PICK:c=0:ms=0:avg=0ns BCP:c=7350717:ms=927405:avg=126165ns L1_STORE:c=562271:ms=75.008:avg=133.402ns L2_STORE:c=4707154:ms=806.668:avg=171.371ns
+PROGRESS t=1580.18 pct_log=99.8787 pct_lin=59.1209 progress_bits=1.29057 closed_bits=624.242 open=18 bound_log2=623.709 decisions=7370499 l2_hits=1887580 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1590.19 pct_log=99.8816 pct_lin=59.8682 progress_bits=1.31718 closed_bits=624.26 open=19 bound_log2=623.683 decisions=7400094 l2_hits=1895707 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1600.19 pct_log=99.8844 pct_lin=60.608 progress_bits=1.34402 closed_bits=624.278 open=26 bound_log2=623.656 decisions=7427584 l2_hits=1904257 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1610.19 pct_log=99.8878 pct_lin=61.4976 progress_bits=1.37698 closed_bits=624.299 open=21 bound_log2=623.623 decisions=7460364 l2_hits=1913561 scc_fires_lit=0 scc_fires_clause=0
+calls=5700000 depth=25 decisions=7482649 conflicts=739612 stores=4786650 hits=1919651 l1_hits=2509454
+OP_STATS calls=5700000 ANALYZE:c=2314080:ms=9661.56:avg=4175.12ns CANONICAL:c=7010766:ms=123873:avg=17669ns L1_PEEK:c=3081620:ms=939.49:avg=304.869ns L2_PEEK:c=7010766:ms=2932.56:avg=418.294ns PICK:c=0:ms=0:avg=0ns BCP:c=7483900:ms=959970:avg=128271ns L1_STORE:c=572164:ms=76.2704:avg=133.302ns L2_STORE:c=4786650:ms=818.978:avg=171.096ns
+PROGRESS t=1620.19 pct_log=99.8915 pct_lin=62.5091 progress_bits=1.41539 closed_bits=624.322 open=18 bound_log2=623.585 decisions=7486125 l2_hits=1920715 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1630.19 pct_log=99.8983 pct_lin=64.3604 progress_bits=1.48845 closed_bits=624.364 open=20 bound_log2=623.512 decisions=7515931 l2_hits=1929253 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1640.19 pct_log=99.9121 pct_lin=68.3304 progress_bits=1.65883 closed_bits=624.451 open=17 bound_log2=623.341 decisions=7539919 l2_hits=1936103 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1650.19 pct_log=99.9344 pct_lin=75.2507 progress_bits=2.01454 closed_bits=624.59 open=21 bound_log2=622.985 decisions=7567309 l2_hits=1942516 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1660.19 pct_log=99.9375 pct_lin=76.2923 progress_bits=2.07657 closed_bits=624.61 open=21 bound_log2=622.923 decisions=7603782 l2_hits=1950563 scc_fires_lit=0 scc_fires_clause=0
+calls=5800000 depth=27 decisions=7617147 conflicts=756340 stores=4861481 hits=1952474 l1_hits=2538739
+OP_STATS calls=5800000 ANALYZE:c=2355850:ms=9818.71:avg=4167.8ns CANONICAL:c=7126811:ms=126099:avg=17693.6ns L1_PEEK:c=3117569:ms=951.654:avg=305.255ns L2_PEEK:c=7126811:ms=2989.44:avg=419.463ns PICK:c=0:ms=0:avg=0ns BCP:c=7618398:ms=992913:avg=130331ns L1_STORE:c=578829:ms=77.3604:avg=133.65ns L2_STORE:c=4861481:ms=832.37:avg=171.217ns
+PROGRESS t=1670.19 pct_log=99.9521 pct_lin=81.2652 progress_bits=2.41621 closed_bits=624.701 open=32 bound_log2=622.584 decisions=7640241 l2_hits=1957849 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1680.19 pct_log=99.9542 pct_lin=81.9946 progress_bits=2.4735 closed_bits=624.714 open=22 bound_log2=622.527 decisions=7674036 l2_hits=1965418 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1690.19 pct_log=99.9574 pct_lin=83.1487 progress_bits=2.56907 closed_bits=624.734 open=20 bound_log2=622.431 decisions=7703848 l2_hits=1973644 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1700.2 pct_log=99.9601 pct_lin=84.1278 progress_bits=2.65542 closed_bits=624.751 open=15 bound_log2=622.345 decisions=7737354 l2_hits=1983401 scc_fires_lit=0 scc_fires_clause=0
+calls=5900000 depth=26 decisions=7746823 conflicts=769552 stores=4936234 hits=1986353 l1_hits=2571361
+OP_STATS calls=5900000 ANALYZE:c=2394427:ms=9970.98:avg=4164.24ns CANONICAL:c=7243858:ms=128178:avg=17694.7ns L1_PEEK:c=3159190:ms=965.772:avg=305.703ns L2_PEEK:c=7243858:ms=3045.41:avg=420.413ns PICK:c=0:ms=0:avg=0ns BCP:c=7748074:ms=1.02092e+06:avg=131765ns L1_STORE:c=587827:ms=78.5611:avg=133.647ns L2_STORE:c=4936234:ms=845.253:avg=171.234ns
+PROGRESS t=1710.2 pct_log=99.9634 pct_lin=85.3546 progress_bits=2.77148 closed_bits=624.772 open=20 bound_log2=622.229 decisions=7760290 l2_hits=1990554 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1720.2 pct_log=99.9742 pct_lin=89.4172 progress_bits=3.24021 closed_bits=624.839 open=19 bound_log2=621.76 decisions=7788361 l2_hits=1997550 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1730.2 pct_log=99.9857 pct_lin=93.9808 progress_bits=4.05428 closed_bits=624.91 open=19 bound_log2=620.946 decisions=7819904 l2_hits=2004054 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1740.2 pct_log=99.9889 pct_lin=95.3155 progress_bits=4.41597 closed_bits=624.931 open=16 bound_log2=620.584 decisions=7861351 l2_hits=2012782 scc_fires_lit=0 scc_fires_clause=0
+calls=6000000 depth=21 decisions=7869083 conflicts=780762 stores=5004469 hits=2014659 l1_hits=2605486
+OP_STATS calls=6000000 ANALYZE:c=2434817:ms=10118.6:avg=4155.81ns CANONICAL:c=7350984:ms=130242:avg=17717.6ns L1_PEEK:c=3199981:ms=980.243:avg=306.328ns L2_PEEK:c=7350984:ms=3099.94:avg=421.705ns PICK:c=0:ms=0:avg=0ns BCP:c=7870334:ms=1.04765e+06:avg=133114ns L1_STORE:c=594494:ms=79.5491:avg=133.81ns L2_STORE:c=5004469:ms=857.494:avg=171.346ns
+PROGRESS t=1750.2 pct_log=99.9919 pct_lin=96.5639 progress_bits=4.86308 closed_bits=624.95 open=22 bound_log2=620.137 decisions=7898862 l2_hits=2022702 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1760.2 pct_log=99.9944 pct_lin=97.6216 progress_bits=5.39384 closed_bits=624.965 open=22 bound_log2=619.606 decisions=7925706 l2_hits=2029036 scc_fires_lit=0 scc_fires_clause=0
+PROGRESS t=1770.21 pct_log=99.9975 pct_lin=98.9074 progress_bits=6.51615 closed_bits=624.984 open=16 bound_log2=618.484 decisions=7949711 l2_hits=2035014 scc_fires_lit=0 scc_fires_clause=0
+
+
+variables (total / active / free)	625/625/0
+clauses (removed) 			1816 (30)
+decisions 				7954058
+conflicts 				789400
+conflict clauses (all/bin/unit) 	728289/0/0
+
+failed literals found by implicit BCP 	 0
+implicit BCP miss rate 	 0%
+bytes cache size (live)	313865984	(299.326 MB), evictions 0
+cache (stores / hits) 			2736496/2035781
+cache miss rate 71.2841%
+ avg. variable count (stores / hits) 	0/0
+
+
+# solutions 
+2337406655942795198464
+# END
+
+time: 1773.3s
+
+OP_STATS FINAL ANALYZE:c=2460791:ms=10224.3:avg=4154.9ns CANONICAL:c=7426949:ms=131684:avg=17730.6ns L1_PEEK:c=3227538:ms=990.317:avg=306.834ns L2_PEEK:c=7426949:ms=3136.61:avg=422.328ns PICK:c=0:ms=0:avg=0ns BCP:c=7955309:ms=1.06999e+06:avg=134500ns L1_STORE:c=599853:ms=80.2995:avg=133.865ns L2_STORE:c=5053603:ms=865.977:avg=171.358ns
+BCP_PATHS FINAL visits=58972044714 A_removed=0(0%) B_sat=53120959170(90.0782%) C1_sound=0(0%) C2_comp=54861962(0.0930305%) D_early=2195407488(3.72279%) E_late=3511890354(5.95518%) F_prop=88246634(0.149641%) G_confl=679106(0.00115157%) scan_avg_lits=2.62875
+PATHC_DETAIL FINAL sound_calls=5751142795 memo_hit%=99.9873 avg_bfs_per_miss=759.527 in_component_calls=5751142795 in_component_avg_walk=27.1245
+OPEN_WORK n_root=625 n_open_comps=0 bound_log2=0 progress_bits=625 sizes=262,624,608,606,605,603,599,596,595,591,589,583,573,564,278,266
+MIDSEP_STATS decomp_attempts=4 decomp_splits=3
+LEARN_FILTER_STATS learned_clauses=728289 dedup_dropped=61111 binary_filter_fires=0 learned_pool_entries=26466937 learn_capped_conflicts=0
+SCC_UNSAT_STATS enabled=0 pruned_lit=0 pruned_clause=0 total=0
+DIAG_STATS num_decisions=7954058 avg_bcp/dec=18.3434 avg_comp_at_entry=183.566 avg_L2_hit_size=87.6125 max_L2_hit_size=351 avg_L2_store_size=177.628 max_L2_store_size=625
+L2_HIT_HIST [0-25)=297811 [25-50)=427693 [50-100)=580143 [100-200)=569837 [200-400)=131170 [400+)=0
+L2_STORE_HIST [0-25)=10307 [25-50)=143634 [50-100)=900248 [100-200)=1610823 [200-400)=2344507 [400+)=44084
+FULL_CACHE_STATS l2_stores=5053603 l2_hits=2035781 l1_stores=599853 l1_hits=2627685 l1_misses=599853 total_lookups=3227538 total_hits=4663466
+CACHE_PURGE_STATS purge_mode=1 purges=1382263 purged_l2=2317106 purged_l1=263360 journal_peak=49660864 journal_overflows=0 dead_marked=0 dead_distinct_l2=0 dead_distinct_l1=0 dead_hits=0 dead_hits_l1=0 dead_hit_vars_sum=0 taint_fires=905702 tainted_stores=4453817 pure_stores=1199638 promoted=1873351 phantom_long_firings=0 phantom_long_provlocal=0 provfail_unrecorded=688580 provfail_leaf_outside=199037 provfail_no_mask=18084
