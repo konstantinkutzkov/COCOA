@@ -45,11 +45,22 @@ class Archetype:
     flags: tuple = ()            # solver flags, placed before the cnf
     mock_argv: tuple | None = None   # if set, used verbatim (dry-run only); cnf ignored
 
+    # Sound-config flags injected for EVERY COCOA archetype (single point so
+    # no config is missed, current or future). The cache-pollution fix
+    # (mc2026_169): -cachePurge 1 purges learned-clause-poisoned cache
+    # entries on branch-arm failure; -provLocalTaint spares the ~97% of
+    # phantom firings that are provably locally entailed (Level-2), so the
+    # purge cost stays ~1.19x worst-case / ~0 typical. Makes COCOA sound
+    # standalone — the sweep is then sound by construction, with ganak-verify
+    # as the belt-and-suspenders net. See cocoa/docs/cache_soundness_fix_plan.md.
+    COCOA_SOUND_FLAGS = ("-cachePurge", "1", "-provLocalTaint")
+
     def argv(self, cnf: str) -> list:
         if self.mock_argv is not None:
             return list(self.mock_argv)
-        binp = cocoa_bin() if self.engine == "cocoa" else ganak_bin()
-        return [binp, *self.flags, cnf]
+        if self.engine == "cocoa":
+            return [cocoa_bin(), *self.flags, *self.COCOA_SOUND_FLAGS, cnf]
+        return [ganak_bin(), *self.flags, cnf]
 
     def env(self, progress_interval: float) -> dict:
         e = dict(os.environ)
