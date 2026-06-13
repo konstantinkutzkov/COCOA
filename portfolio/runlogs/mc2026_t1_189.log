@@ -1,0 +1,147 @@
+[step1] mc2026_track1_189.cnf — structural analysis (what METIS produced):
+    metis root cut : sep_ratio=0.082362 balance=0.078677 sepsize=551 n_vars=6690
+    nd_cost (tree) : band=high log2_cost=1267.251711 root_sep=551 max_path=1265.0 worst_leaf=3 n_leaves=6749
+    arjun signal   : substantial=False
+[step2] band=high -> PHASE-2 SOLVERS SELECTED (8): ['cocoa-plain', 'cocoa-cache-max', 'cocoa-nosep-cascade', 'cocoa-sep-cascade', 'cocoa-adaptive', 'cocoa-reactive', 'cocoa-unified-sep', 'cocoa-adaptive-nosep']  (+Ganak handoff on sustained overshoot)
+[step2] forecast trace -> /Users/konstantin.kutzkov/Desktop/Code/COCOA/portfolio/runlogs/forecast_mc2026_track1_189.jsonl
+  [r1] cocoa-plain running (window 60s)...
+    [r1~live] cocoa-plain: pct_lin=0 closed_bits=0 decisions=0 (active 10s)
+    [r1~live] cocoa-plain: pct_lin=3.93642e-139 closed_bits=6216.59 decisions=49552 (active 20s)
+    [r1~live] cocoa-plain: pct_lin=3.93672e-139 closed_bits=6216.59 decisions=106574 (active 30s)
+    [r1~live] cocoa-plain: pct_lin=3.9369e-139 closed_bits=6216.59 decisions=153188 (active 40s)
+    [r1~live] cocoa-plain: pct_lin=4.01179e-139 closed_bits=6216.61 decisions=190438 (active 50s)
+[r1] cocoa-plain: pct_lin=1.43805e-136 closed_bits=6225.1 decisions=218378 closed_bits=6225.1 vel=0.425 (active 60s)
+  [r1] cocoa-cache-max running (window 60s)...
+    [r1~live] cocoa-cache-max: pct_lin=0 closed_bits=0 decisions=0 (active 10s)
+    [r1~live] cocoa-cache-max: pct_lin=3.93633e-139 closed_bits=6216.58 decisions=36566 (active 20s)
+    [r1~live] cocoa-cache-max: pct_lin=3.93661e-139 closed_bits=6216.59 decisions=78610 (active 30s)
+    [r1~live] cocoa-cache-max: pct_lin=3.93673e-139 closed_bits=6216.59 decisions=121406 (active 40s)
+    [r1~live] cocoa-cache-max: pct_lin=3.96488e-139 closed_bits=6216.6 decisions=157124 (active 50s)
+[r1] cocoa-cache-max: pct_lin=4.00609e-139 closed_bits=6216.61 decisions=187663 closed_bits=6216.6 vel=0.001 (active 60s)
+  [r1] cocoa-nosep-cascade running (window 60s)...
+    [r1~live] cocoa-nosep-cascade: pct_lin=0 closed_bits=0 decisions=0 (active 10s)
+    [r1~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=362 (active 20s)
+    [r1~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=641 (active 30s)
+    [r1~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=1115 (active 40s)
+    [r1~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=1923 (active 50s)
+[r1] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=2672 closed_bits=6682.1 vel=0.000 (active 60s)
+  [r1] cocoa-sep-cascade running (window 60s)...
+    [r1~live] cocoa-sep-cascade: pct_lin=0 closed_bits=0 decisions=0 (active 10s)
+    [r1~live] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=355 (active 20s)
+    [r1~live] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=628 (active 30s)
+    [r1~live] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=1055 (active 40s)
+    [r1~live] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=1862 (active 50s)
+[r1] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=2586 closed_bits=6682.1 vel=0.000 (active 60s)
+  [r1] cocoa-adaptive running (window 60s)...
+    [r1~live] cocoa-adaptive: pct_lin=0 closed_bits=0 decisions=0 (active 10s)
+    [r1~live] cocoa-adaptive: pct_lin=0 closed_bits=0 decisions=318 (active 20s)
+    [r1~live] cocoa-adaptive: pct_lin=8.59888e-135 closed_bits=6231 decisions=674 (active 30s)
+    [r1~live] cocoa-adaptive: pct_lin=2.20135e-132 closed_bits=6239 decisions=1034 (active 40s)
+    [r1~live] cocoa-adaptive: pct_lin=8.80525e-132 closed_bits=6241 decisions=1394 (active 50s)
+[r1] cocoa-adaptive: pct_lin=1.76108e-131 closed_bits=6242 decisions=1754 closed_bits=6242.0 vel=0.150 (active 60s)
+  [r1] cocoa-reactive running (window 60s)...
+    [r1~live] cocoa-reactive: pct_lin=0 closed_bits=0 decisions=0 (active 10s)
+    [r1~live] cocoa-reactive: pct_lin=1.85726e-136 closed_bits=6225.47 decisions=10926 (active 20s)
+    [r1~live] cocoa-reactive: pct_lin=1.14151e-135 closed_bits=6228.09 decisions=24213 (active 30s)
+    [r1~live] cocoa-reactive: pct_lin=1.2742e-135 closed_bits=6228.25 decisions=38272 (active 40s)
+    [r1~live] cocoa-reactive: pct_lin=1.3399e-135 closed_bits=6228.32 decisions=52097 (active 50s)
+[r1] cocoa-reactive: pct_lin=1.50532e-135 closed_bits=6228.49 decisions=66442 closed_bits=6228.5 vel=0.012 (active 60s)
+  [r1] cocoa-unified-sep running (window 60s)...
+    [r1~live] cocoa-unified-sep: pct_lin=0 closed_bits=0 decisions=0 (active 10s)
+    [r1~live] cocoa-unified-sep: pct_lin=3.93639e-139 closed_bits=6216.59 decisions=47020 (active 20s)
+    [r1~live] cocoa-unified-sep: pct_lin=3.93669e-139 closed_bits=6216.59 decisions=102219 (active 30s)
+    [r1~live] cocoa-unified-sep: pct_lin=3.93689e-139 closed_bits=6216.59 decisions=148441 (active 40s)
+    [r1~live] cocoa-unified-sep: pct_lin=3.99776e-139 closed_bits=6216.61 decisions=185384 (active 50s)
+[r1] cocoa-unified-sep: pct_lin=4.2412e-139 closed_bits=6216.69 decisions=213622 closed_bits=6216.7 vel=0.005 (active 60s)
+  [r1] cocoa-adaptive-nosep running (window 60s)...
+    [r1~live] cocoa-adaptive-nosep: pct_lin=0 closed_bits=0 decisions=0 (active 10s)
+    [r1~live] cocoa-adaptive-nosep: pct_lin=0 closed_bits=0 decisions=317 (active 20s)
+    [r1~live] cocoa-adaptive-nosep: pct_lin=8.59888e-135 closed_bits=6231 decisions=673 (active 30s)
+    [r1~live] cocoa-adaptive-nosep: pct_lin=2.20135e-132 closed_bits=6239 decisions=1032 (active 40s)
+    [r1~live] cocoa-adaptive-nosep: pct_lin=8.80525e-132 closed_bits=6241 decisions=1391 (active 50s)
+[r1] cocoa-adaptive-nosep: pct_lin=1.76108e-131 closed_bits=6242 decisions=1751 closed_bits=6242.0 vel=0.150 (active 60s)
+    [mem~after-r1] total RSS 1.6 GB across 8 live: cocoa-plain=0.3G, cocoa-cache-max=0.3G, cocoa-nosep-cascade=0.1G, cocoa-sep-cascade=0.1G, cocoa-adaptive=0.1G, cocoa-reactive=0.2G, cocoa-unified-sep=0.3G, cocoa-adaptive-nosep=0.1G
+[select] keep 4/8 by closed_bits LEVEL -> ['cocoa-nosep-cascade', 'cocoa-sep-cascade', 'cocoa-adaptive', 'cocoa-adaptive-nosep']
+  [r2] cocoa-nosep-cascade resumed (window 60s)...
+    [r2~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=4227 (active 70s)
+    [r2~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=4728 (active 80s)
+    [r2~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=5477 (active 90s)
+    [r2~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=6256 (active 100s)
+    [r2~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=7022 (active 110s)
+[r2] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=7022 closed_bits=6682.1 (active 120s)
+  [r2] cocoa-sep-cascade resumed (window 60s)...
+    [r2~live] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=3205 (active 70s)
+    [r2~live] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=4589 (active 80s)
+    [r2~live] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=5297 (active 90s)
+    [r2~live] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=6020 (active 100s)
+    [r2~live] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=6774 (active 110s)
+[r2] cocoa-sep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=6774 closed_bits=6682.1 (active 120s)
+  [r2] cocoa-adaptive resumed (window 60s)...
+    [r2~live] cocoa-adaptive: pct_lin=3.54983e-131 closed_bits=6243.01 decisions=2419 (active 70s)
+    [r2~live] cocoa-adaptive: pct_lin=7.04436e-131 closed_bits=6244 decisions=2778 (active 80s)
+    [r2~live] cocoa-adaptive: pct_lin=7.27465e-131 closed_bits=6244.05 decisions=3138 (active 90s)
+    [r2~live] cocoa-adaptive: pct_lin=1.40886e-130 closed_bits=6245 decisions=3498 (active 100s)
+    [r2~live] cocoa-adaptive: pct_lin=1.41437e-130 closed_bits=6245.01 decisions=3858 (active 110s)
+[r2] cocoa-adaptive: pct_lin=1.41437e-130 closed_bits=6245.01 decisions=3858 closed_bits=6245.0 (active 120s)
+  [r2] cocoa-adaptive-nosep resumed (window 60s)...
+    [r2~live] cocoa-adaptive-nosep: pct_lin=3.5221e-131 closed_bits=6243 decisions=2085 (active 70s)
+    [r2~live] cocoa-adaptive-nosep: pct_lin=7.04447e-131 closed_bits=6244 decisions=2803 (active 80s)
+    [r2~live] cocoa-adaptive-nosep: pct_lin=7.49479e-131 closed_bits=6244.09 decisions=3162 (active 90s)
+    [r2~live] cocoa-adaptive-nosep: pct_lin=1.40888e-130 closed_bits=6245 decisions=3521 (active 100s)
+    [r2~live] cocoa-adaptive-nosep: pct_lin=1.41445e-130 closed_bits=6245.01 decisions=3878 (active 110s)
+[r2] cocoa-adaptive-nosep: pct_lin=1.41445e-130 closed_bits=6245.01 decisions=3878 closed_bits=6245.0 (active 120s)
+    [mem~after-r2] total RSS 0.4 GB across 4 live: cocoa-nosep-cascade=0.1G, cocoa-sep-cascade=0.1G, cocoa-adaptive=0.1G, cocoa-adaptive-nosep=0.1G
+[select] keep 2/4 by hedge {top-cb, min-eta} -> ['cocoa-nosep-cascade', 'cocoa-adaptive']
+  [r3] cocoa-nosep-cascade resumed (window 60s)...
+    [r3~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=8549 (active 130s)
+    [r3~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=9252 (active 140s)
+    [r3~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=9992 (active 150s)
+    [r3~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=10767 (active 160s)
+    [r3~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=11484 (active 170s)
+[r3] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=11484 closed_bits=6682.1 (active 180s)
+  [r3] cocoa-adaptive resumed (window 60s)...
+    [r3~live] cocoa-adaptive: pct_lin=2.81769e-130 closed_bits=6246 decisions=4572 (active 130s)
+    [r3~live] cocoa-adaptive: pct_lin=2.82185e-130 closed_bits=6246 decisions=4929 (active 140s)
+    [r3~live] cocoa-adaptive: pct_lin=2.92775e-130 closed_bits=6246.06 decisions=5287 (active 150s)
+    [r3~live] cocoa-adaptive: pct_lin=4.22704e-130 closed_bits=6246.59 decisions=5643 (active 160s)
+    [r3~live] cocoa-adaptive: pct_lin=5.63558e-130 closed_bits=6247 decisions=5999 (active 170s)
+[r3] cocoa-adaptive: pct_lin=5.63558e-130 closed_bits=6247 decisions=5999 closed_bits=6247.0 (active 180s)
+    [mem~after-r3] total RSS 0.2 GB across 2 live: cocoa-nosep-cascade=0.1G, cocoa-adaptive=0.1G
+[select] keep 1/2 by banded |dcb|>=1.5b -> max cb -> cocoa-nosep-cascade
+[leader] cocoa-nosep-cascade
+  [monitor] cocoa-nosep-cascade resumed to completion (2759s left)...
+    [mem~monitor] total RSS 0.1 GB across 1 live: cocoa-nosep-cascade=0.1G
+    [monitor~live] cocoa-nosep-cascade: pct_lin=53.125 closed_bits=6682.09 decisions=15653 (active 240s)
+[handoff] monitor: 10 consecutive 'bail' verdicts from the escape-history tree (leader walled)
+  -> killing COCOA (free RAM), switching to battle-tested ganak-native.
+  [ganak] ganak-native to completion (2648s left, 26 GB)...
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 60s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 120s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 180s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 240s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 300s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 360s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 420s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 480s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 540s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 600s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 661s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 721s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 781s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 841s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 901s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 961s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1021s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1081s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1141s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1201s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1261s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1321s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1381s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1441s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1501s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1561s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1621s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1681s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1741s)
+    [ganak~live] ganak-native: cache_K=- cubes=- confl/s=- (active 1801s)
