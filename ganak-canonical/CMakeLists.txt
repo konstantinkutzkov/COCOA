@@ -320,7 +320,7 @@ endif()
 # On macOS, Homebrew always builds static libs with PIC so the .a works fine, and
 # using the .dylib would drag in a macOS-version-specific deployment target that
 # breaks the wheel's declared minimum OS version.
-if(BUILD_PYTHON_EXTENSION AND UNIX AND NOT APPLE)
+if((BUILD_PYTHON_EXTENSION OR NOT STATIC_BINARY) AND UNIX AND NOT APPLE)
     set(_saved_find_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
     unset(CMAKE_FIND_LIBRARY_SUFFIXES)
 endif()
@@ -332,7 +332,7 @@ if(GMPXX_LIBRARY)
 endif()
 pkg_check_modules(MPFR REQUIRED IMPORTED_TARGET mpfr)
 pkg_check_modules(flint REQUIRED IMPORTED_TARGET flint)
-if(BUILD_PYTHON_EXTENSION AND UNIX AND NOT APPLE)
+if((BUILD_PYTHON_EXTENSION OR NOT STATIC_BINARY) AND UNIX AND NOT APPLE)
     set(CMAKE_FIND_LIBRARY_SUFFIXES "${_saved_find_suffixes}")
 endif()
 
@@ -354,6 +354,35 @@ if(POLICY CMP0169)
     cmake_policy(SET CMP0169 OLD)
 endif()
 
+
+# ============================================================================
+# PINNED dependency revisions — reproducible builds (MC2026 submission).
+#
+# FetchContent uses the FIRST declaration of each named dependency, so declaring
+# every SAT-stack dep here with an exact commit overrides BOTH the floating
+# `GIT_TAG master/main` used in the blocks below AND the floating declarations
+# made transitively inside cryptominisat5/arjun (which themselves fetch
+# cadical/cadiback/sbva at master).  Without this, a fresh build pulls upstream
+# HEAD and breaks — e.g. Arjun removed `ElimToFileConf::do_bce`, which fails the
+# compile of src/main.cpp.  These SHAs are the last known-good, mutually
+# consistent set.  (No GIT_SHALLOW: shallow clones cannot target an arbitrary
+# commit on all git versions.)
+# ============================================================================
+include(FetchContent)
+FetchContent_Declare(cryptominisat5 GIT_REPOSITORY https://github.com/msoos/cryptominisat
+                     GIT_TAG a0466954fd8dc14c5ac68053ce00ecdcfa399a68)
+FetchContent_Declare(arjun          GIT_REPOSITORY https://github.com/meelgroup/arjun.git
+                     GIT_TAG 24f769b0d374fc4f112e2df3e83cfc5e0f03dc22)
+FetchContent_Declare(approxmc       GIT_REPOSITORY https://github.com/meelgroup/ApproxMC.git
+                     GIT_TAG d8f24bb7968e2051ecb33b47d781660eb438cdf5)
+FetchContent_Declare(treedecomp     GIT_REPOSITORY https://github.com/meelgroup/treedecomp.git
+                     GIT_TAG 6f6e3702635560ccc19002b8a38387a29ffa46fd)
+FetchContent_Declare(cadical        GIT_REPOSITORY https://github.com/meelgroup/cadical
+                     GIT_TAG ade472d3dba145fd53c19d486f5916b6259449c6)
+FetchContent_Declare(cadiback       GIT_REPOSITORY https://github.com/meelgroup/cadiback
+                     GIT_TAG 35f027383abf3b4b52bbc8af789c8f1aa3d84ad2)
+FetchContent_Declare(sbva           GIT_REPOSITORY https://github.com/meelgroup/SBVA.git
+                     GIT_TAG f1021c17dddee4fcd5d552969f459482907f9f84)
 
 # ---- CryptoMiniSat5 ----
 set(cryptominisat5_DIR "" CACHE PATH "cryptominisat5 install/build prefix (contains lib/cmake/cryptominisat5/). Auto-resolved if empty.")

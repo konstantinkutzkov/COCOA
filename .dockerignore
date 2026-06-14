@@ -1,0 +1,15 @@
+# Keep the Docker build context small AND clean — exclude macOS build artifacts
+# (they would poison the fresh Linux build), VCS history, logs, caches.
+.git
+.claude
+**/build/
+**/_deps/
+cocoa/binaries/
+portfolio/runlogs/
+portfolio/__pycache__/
+**/__pycache__/
+*.out
+**/*.cnf.xz
+**/*.o
+**/*.a
+.DS_Store
