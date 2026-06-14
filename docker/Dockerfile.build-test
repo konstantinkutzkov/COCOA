@@ -1,0 +1,15 @@
+# Reproducible build + smoke-test of the COCOA MC2026 submission on the official
+# competition base image. NOT part of the submission itself (the competition
+# uses its own image and invokes ./build.sh and ./run.sh directly); this is a
+# local verification harness:
+#
+#   docker build -f docker/Dockerfile.build-test -t cocoa-mc2026 .
+#   docker run --rm -m 32g cocoa-mc2026 ./run.sh test/tiny.cnf
+#
+# Expected stdout of the run:
+#   s SATISFIABLE / c s type mc / c s log10-estimate ... / c s exact arb int 7
+FROM registry.gitlab.com/sosy-lab/benchmarking/competition-scripts/user:latest
+USER root
+WORKDIR /work
+COPY . /work
+RUN ./build.sh

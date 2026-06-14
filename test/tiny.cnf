@@ -1,0 +1,4 @@
+c c tiny smoke-test instance for the MC2026 Track-1 (mc) submission
+c t mc
+p cnf 3 1
+1 2 3 0

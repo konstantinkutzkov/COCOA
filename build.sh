@@ -22,6 +22,25 @@ if [ "${1:-}" = "-j" ]; then JOBS="$2"; fi
 
 say() { printf '\n=== %s ===\n' "$*"; }
 
+# ---- 0) Build dependencies (best-effort) -----------------------------------
+# COCOA builds entirely from source, but needs a C/C++ toolchain plus a few
+# -dev libraries.  Required packages (Ubuntu names):
+#     build-essential cmake make git python3 libgmp-dev zlib1g-dev
+# On the MC competition image these are normally preinstalled.  If apt-get is
+# available AND we are root, we install them; guarded so a missing apt / no
+# network / non-root never aborts the build (we then assume they are present).
+# NOTE: step 3 (ganak) uses CMake FetchContent to download its SAT deps on the
+# FIRST build, so build.sh needs network access during that step.
+ensure_deps() {
+  command -v apt-get >/dev/null 2>&1 || return 0
+  [ "$(id -u 2>/dev/null)" = "0" ] || return 0
+  say "0/4 ensuring build dependencies (best-effort apt-get)"
+  apt-get update -y || return 0
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential cmake make git python3 libgmp-dev zlib1g-dev || true
+}
+ensure_deps
+
 # 1) GKlib — build only the library target (its example apps/ use x86 asm).
 say "1/4 GKlib"
 cmake -S "$ROOT/third_party/GKlib" -B "$ROOT/third_party/GKlib/build" \
