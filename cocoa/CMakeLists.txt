@@ -39,6 +39,16 @@ ENDIF(UNIX)
 find_library(GMP_LIB gmp)
 find_library(GMPXX_LIB gmpxx)
 
+# Fully-static linking on Linux: the GMP/GMPXX/CryptoMiniSat static archives have
+# circular symbol dependencies (libgmpxx.a needs libgmp's __gmp_doprnt_*/
+# __gmp_asprintf_*; cryptominisat needs gmp+gmpxx) which a single left-to-right
+# pass cannot resolve.  Wrap them in a linker group so ld re-scans until all
+# symbols are satisfied.  GNU-ld only (macOS ld64 has no --start-group).
+if(UNIX AND NOT APPLE)
+    set(COCOA_GROUP_START "-Wl,--start-group")
+    set(COCOA_GROUP_END   "-Wl,--end-group")
+endif()
+
 # METIS graph partitioning library (for separator finding).
 # Vendored under the package's third_party/ so a source checkout is self-contained.
 set(METIS_DIR "${CMAKE_SOURCE_DIR}/../third_party/METIS" CACHE PATH "Path to METIS source")
@@ -72,10 +82,13 @@ set(CMS5_DEPS ${CMS5_LIB} ${CADIBACK_LIB} ${CADICAL_LIB} ${SBVA_LIB})
 add_subdirectory(src)
 
 add_executable (sharpSAT src/main.cpp)
-target_link_libraries (sharpSAT libsharpSAT ${GMP_LIB} ${GMPXX_LIB}
+target_link_libraries (sharpSAT libsharpSAT
+    ${COCOA_GROUP_START}
+    ${GMP_LIB} ${GMPXX_LIB}
     ${METIS_DIR}/build/libmetis/libmetis.a
     ${GKLIB_DIR}/build/libGKlib.a
-    ${CMS5_DEPS})
+    ${CMS5_DEPS}
+    ${COCOA_GROUP_END})
 
 add_executable (test_probe tests/test_probe.cpp)
 target_include_directories (test_probe PRIVATE src)

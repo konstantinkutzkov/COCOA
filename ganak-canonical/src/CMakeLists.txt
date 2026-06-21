@@ -101,11 +101,13 @@ target_link_libraries(ganak-bin
     PRIVATE
       ganak
       arjun
-      PkgConfig::flint
       PkgConfig::MPFR
       PkgConfig::GMP
       approxmc
 )
+if(GANAK_WITH_FLINT)
+    target_link_libraries(ganak-bin PRIVATE PkgConfig::flint)
+endif()
 target_link_libraries(example-bin
     PRIVATE
       ganak

@@ -331,7 +331,14 @@ if(GMPXX_LIBRARY)
     set_property(TARGET PkgConfig::GMP PROPERTY INTERFACE_LINK_LIBRARIES "${GMPXX_LIBRARY}" ${_gmp_iface_libs})
 endif()
 pkg_check_modules(MPFR REQUIRED IMPORTED_TARGET mpfr)
-pkg_check_modules(flint REQUIRED IMPORTED_TARGET flint)
+# FLINT is only used by the polynomial field (mode 3).  Make it optional so a
+# fully-static binary can be built on systems that ship libflint.so but no
+# libflint.a (e.g. Ubuntu).  -DGANAK_WITH_FLINT=OFF compiles mode 3 out.
+option(GANAK_WITH_FLINT "Build the FLINT polynomial field (mode 3); needs libflint" ON)
+if(GANAK_WITH_FLINT)
+    pkg_check_modules(flint REQUIRED IMPORTED_TARGET flint)
+    add_compile_definitions(GANAK_WITH_FLINT)
+endif()
 if((BUILD_PYTHON_EXTENSION OR NOT STATIC_BINARY) AND UNIX AND NOT APPLE)
     set(CMAKE_FIND_LIBRARY_SUFFIXES "${_saved_find_suffixes}")
 endif()

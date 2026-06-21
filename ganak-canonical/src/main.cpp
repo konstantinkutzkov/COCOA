@@ -41,7 +41,9 @@ THE SOFTWARE.
 /* #include <breakid/breakid.hpp> */
 #include <arjun/arjun.h>
 #include "src/argparse.hpp"
-#include "mpoly.hpp"
+#ifdef GANAK_WITH_FLINT
+#include "mpoly.hpp"   // FGenPoly (mode 3) — needs FLINT; optional
+#endif
 #include "mparity.hpp"
 #include "mcomplex.hpp"
 #include "mcomplex-mpfr.hpp"
@@ -651,11 +653,16 @@ int main(int argc, char *argv[]) {
         fg = std::make_unique<FGenMPFComplex>(mpfr_precision);
         break;
     case 3:
+#ifdef GANAK_WITH_FLINT
         if (poly_nvars == -1) {
           cout << "c o [arjun] ERROR: Must provide number of polynomial vars for mode 3 via --npolyvars" << endl;
           exit(EXIT_FAILURE);
         }
         fg = std::make_unique<FGenPoly>(poly_nvars);
+#else
+        cout << "c o ERROR: mode 3 (polynomial) not supported in this build (compiled without FLINT)" << endl;
+        exit(EXIT_FAILURE);
+#endif
         break;
     case 4:
         fg = std::make_unique<FGenParity>();

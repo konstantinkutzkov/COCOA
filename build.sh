@@ -58,29 +58,33 @@ say "2/4 METIS"
   cmake "$ROOT/third_party/METIS/build" -DSHARED=OFF -DCMAKE_BUILD_TYPE=Release >/dev/null
   cmake --build "$ROOT/third_party/METIS/build" --target metis -j"$JOBS" )
 
-# Work around a known Ubuntu (24.04) libflint-dev packaging bug: its flint.pc
-# lists "Libs: -lgmp -lmpfr" but OMITS -lflint, so PkgConfig::flint fails to put
-# -lflint on ganak's link line (undefined fmpz_*/fmpq_* references). Append
-# -lflint to the Libs: line if it is missing and the file is writable (root).
-fix_flint_pc() {
-  command -v pkg-config >/dev/null 2>&1 || return 0
-  pkg-config --exists flint 2>/dev/null || return 0
-  case " $(pkg-config --libs flint 2>/dev/null) " in *" -lflint "*) return 0 ;; esac
-  local pc
-  pc="$(find /usr/lib /usr/lib64 /usr/local/lib /usr/share -name flint.pc 2>/dev/null | head -1)"
-  [ -n "$pc" ] && [ -w "$pc" ] || return 0
-  say "patching $pc (Ubuntu libflint-dev omits -lflint)"
-  sed -i 's/^\(Libs:.*\)$/\1 -lflint/' "$pc" || true
-}
-fix_flint_pc
+# ---- Fully static binaries on Linux ----------------------------------------
+# HPC/competition machines often lack the shared GMP/MPFR/etc. at runtime
+# (e.g. "libgmpxx.so.4: cannot open shared object file"), so on Linux we link
+# the math + C++ runtime STATICALLY.
+#   ganak: -DSTATIC_BINARY=ON  (its CMakeLists adds -static on Linux only) and
+#          -DGANAK_WITH_FLINT=OFF (FLINT is used only by the unused polynomial
+#          mode 3, and Ubuntu ships no libflint.a — dropping it makes the binary
+#          fully static; gmp/gmpxx/mpfr all have .a).
+#   cocoa: link static libgmp/libgmpxx + -static.
+# On macOS, -static is unsupported, so the cocoa flags stay empty and ganak's
+# -static is already gated to Linux inside its own CMakeLists.
+GANAK_STATIC_FLAGS="-DSTATIC_BINARY=ON -DGANAK_WITH_FLINT=OFF"
+COCOA_STATIC_FLAGS=""
+if [ "$(uname -s)" = "Linux" ]; then
+  GMP_A="$(cc -print-file-name=libgmp.a 2>/dev/null)";    case "$GMP_A"   in /*) ;; *) GMP_A="$(find /usr/lib /usr/lib64 -name libgmp.a   2>/dev/null | head -1)";;   esac
+  GMPXX_A="$(cc -print-file-name=libgmpxx.a 2>/dev/null)"; case "$GMPXX_A" in /*) ;; *) GMPXX_A="$(find /usr/lib /usr/lib64 -name libgmpxx.a 2>/dev/null | head -1)";; esac
+  COCOA_STATIC_FLAGS="-DCMAKE_EXE_LINKER_FLAGS=-static"
+  [ -n "$GMP_A" ]   && COCOA_STATIC_FLAGS="$COCOA_STATIC_FLAGS -DGMP_LIB=$GMP_A"
+  [ -n "$GMPXX_A" ] && COCOA_STATIC_FLAGS="$COCOA_STATIC_FLAGS -DGMPXX_LIB=$GMPXX_A"
+fi
 
-# 3) ganak-canonical — STATIC libraries (so cocoa can link cryptominisat5/sbva),
-#    but a DYNAMICALLY-linked ganak executable (-DSTATIC_BINARY=OFF): a fully
-#    static binary needs libflint.a, which Ubuntu ships only as libflint.so.
-#    First build downloads SAT deps via FetchContent (needs network).
+# 3) ganak-canonical — STATIC libraries (so cocoa can link cryptominisat5/sbva)
+#    AND a fully-static ganak binary (no runtime .so deps).  First build
+#    downloads SAT deps via FetchContent (needs network).
 say "3/4 ganak-canonical (first build fetches SAT deps — needs network)"
 cmake -S "$ROOT/ganak-canonical" -B "$ROOT/ganak-canonical/build" \
-      -DBUILD_SHARED_LIBS=OFF -DSTATIC_BINARY=OFF -DCMAKE_BUILD_TYPE=Release
+      -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release $GANAK_STATIC_FLAGS
 cmake --build "$ROOT/ganak-canonical/build" -j"$JOBS"
 
 # 4) cocoa — links METIS/GKlib (third_party) + ganak-canonical's static CMS deps.
@@ -92,7 +96,7 @@ say "4/4 cocoa (sharpSAT + metis_features)"
 # for every cocoa TU so the build is portable across toolchains.
 COCOA_PORTABILITY_FLAGS="-include cstddef -include cstdint -include cstring -include string"
 cmake -S "$ROOT/cocoa" -B "$ROOT/cocoa/build" -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_CXX_FLAGS="$COCOA_PORTABILITY_FLAGS"
+      -DCMAKE_CXX_FLAGS="$COCOA_PORTABILITY_FLAGS" $COCOA_STATIC_FLAGS
 cmake --build "$ROOT/cocoa/build" --target sharpSAT metis_features -j"$JOBS"
 
 say "Build complete"
